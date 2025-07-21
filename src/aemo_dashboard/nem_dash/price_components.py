@@ -217,7 +217,7 @@ def create_price_chart(prices):
 
 def create_price_section():
     """
-    Create the complete price section with table and chart using defer_load
+    Create the complete price section with table and chart
     """
     def update_price_components():
         prices = load_price_data()
@@ -232,8 +232,7 @@ def create_price_section():
             margin=(5, 5)
         )
     
-    # Use pn.panel with defer_load=True to defer the heavy computation
-    return pn.panel(update_price_components, defer_load=True, loading_indicator=True)
+    return pn.pane.panel(update_price_components)
 
 
 if __name__ == "__main__":

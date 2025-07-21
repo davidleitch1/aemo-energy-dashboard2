@@ -490,8 +490,7 @@ def create_generation_overview_component(dashboard_instance=None):
                 width=1000, height=400
             )
     
-    # Use pn.panel with defer_load=True to defer the heavy computation
-    return pn.panel(update_generation_overview, defer_load=True, loading_indicator=True)
+    return pn.pane.panel(update_generation_overview)
 
 
 if __name__ == "__main__":

@@ -448,8 +448,7 @@ def create_renewable_gauge_component(dashboard_instance=None):
                 width=400, height=350
             )
     
-    # Use pn.panel with defer_load=True to defer the heavy computation
-    return pn.panel(update_gauge, defer_load=True, loading_indicator=True)
+    return pn.pane.panel(update_gauge)
 
 
 if __name__ == "__main__":

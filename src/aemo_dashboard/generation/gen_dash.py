@@ -36,7 +36,7 @@ logger = get_logger(__name__)
 
 # Configure Panel and HoloViews BEFORE extension loading
 pn.config.theme = 'dark'
-pn.extension('tabulator', 'plotly', template='material', defer_load=True, loading_indicator=True)
+pn.extension('tabulator', 'plotly', template='material')
 
 # =============================================================================
 # Cache Configuration
