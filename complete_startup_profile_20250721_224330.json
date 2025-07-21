@@ -1,0 +1,76 @@
+{
+  "total_time": 8.073751211166382,
+  "timings": [
+    {
+      "phase": "Environment and config setup",
+      "duration": 0.0012819766998291016,
+      "elapsed": 0.0012860298156738281,
+      "details": null,
+      "timestamp": "2025-07-21T22:43:22.461470"
+    },
+    {
+      "phase": "Core Python imports",
+      "duration": 0.24725985527038574,
+      "elapsed": 0.24855995178222656,
+      "details": "pandas, numpy, asyncio",
+      "timestamp": "2025-07-21T22:43:22.708744"
+    },
+    {
+      "phase": "Panel initialization",
+      "duration": 0.013962030410766602,
+      "elapsed": 0.2625410556793213,
+      "details": "dark theme, tabulator extension",
+      "timestamp": "2025-07-21T22:43:22.722724"
+    },
+    {
+      "phase": "Visualization library imports",
+      "duration": 0.2911808490753174,
+      "elapsed": 0.5537328720092773,
+      "details": "hvplot, holoviews, bokeh",
+      "timestamp": "2025-07-21T22:43:23.013917"
+    },
+    {
+      "phase": "Dashboard module imports",
+      "duration": 1.264089822769165,
+      "elapsed": 1.8178398609161377,
+      "details": "Includes DuckDB view creation",
+      "timestamp": "2025-07-21T22:43:24.278023"
+    },
+    {
+      "phase": "App factory creation",
+      "duration": 1.1920928955078125e-06,
+      "elapsed": 1.8178520202636719,
+      "details": null,
+      "timestamp": "2025-07-21T22:43:24.278034"
+    },
+    {
+      "phase": "First user dashboard creation",
+      "duration": 5.668247938156128,
+      "elapsed": 7.486103057861328,
+      "details": "Dashboard object created",
+      "timestamp": "2025-07-21T22:43:29.946287"
+    },
+    {
+      "phase": "Dashboard structure analysis",
+      "duration": 2.1457672119140625e-06,
+      "elapsed": 7.486119031906128,
+      "details": "No tabs found",
+      "timestamp": "2025-07-21T22:43:29.946301"
+    },
+    {
+      "phase": "Simulated rendering process",
+      "duration": 0.004634857177734375,
+      "elapsed": 7.490757942199707,
+      "details": "Bokeh serialization complete",
+      "timestamp": "2025-07-21T22:43:29.950940"
+    },
+    {
+      "phase": "Today tab data loading test",
+      "duration": 0.5829780101776123,
+      "elapsed": 8.073743104934692,
+      "details": "gen:0.10s, plot:0.13s",
+      "timestamp": "2025-07-21T22:43:30.533926"
+    }
+  ],
+  "timestamp": "2025-07-21T22:43:30.534355"
+}

@@ -44,7 +44,11 @@
       "Bash(git remote add:*)",
       "Bash(git remote remove:*)",
       "Bash(git remote:*)",
-      "Bash(cp:*)"
+      "Bash(cp:*)",
+      "Bash(cd \"/Users/davidleitch/Library/Mobile Documents/com~apple~CloudDocs/snakeplay/AEMO_spot/aemo-energy-dashboard\")",
+      "Bash(git commit -m \"Initial commit - fresh repository without history\")",
+      "Bash(git pull:*)",
+      "Bash(timeout:*)"
     ],
     "deny": []
   }

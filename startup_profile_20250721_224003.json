@@ -1,0 +1,72 @@
+{
+  "total_time": 2.6974246501922607,
+  "timings": [
+    {
+      "phase": "Python initialization",
+      "duration": 0.0,
+      "details": "Script startup and path setup",
+      "timestamp": "2025-07-21T22:40:00.557102"
+    },
+    {
+      "phase": "Environment setup",
+      "duration": 0.0013530254364013672,
+      "details": ".env file loaded",
+      "timestamp": "2025-07-21T22:40:00.558468"
+    },
+    {
+      "phase": "Standard library imports",
+      "duration": 0.2747378349304199,
+      "details": "pandas, numpy, asyncio",
+      "timestamp": "2025-07-21T22:40:00.833213"
+    },
+    {
+      "phase": "Panel import and setup",
+      "duration": 0.4197719097137451,
+      "details": "Panel with tabulator extension",
+      "timestamp": "2025-07-21T22:40:01.253001"
+    },
+    {
+      "phase": "HvPlot/HoloViews import",
+      "duration": 0.2660989761352539,
+      "details": "hvplot, holoviews with bokeh",
+      "timestamp": "2025-07-21T22:40:01.519116"
+    },
+    {
+      "phase": "Dashboard module imports",
+      "duration": 1.2211918830871582,
+      "details": "EnergyDashboard and dependencies",
+      "timestamp": "2025-07-21T22:40:02.740321"
+    },
+    {
+      "phase": "DuckDB initialization",
+      "duration": 9.5367431640625e-07,
+      "details": "Views created: Unknown",
+      "timestamp": "2025-07-21T22:40:02.740331"
+    },
+    {
+      "phase": "App factory creation",
+      "duration": 9.5367431640625e-07,
+      "details": "create_app() function",
+      "timestamp": "2025-07-21T22:40:02.740335"
+    },
+    {
+      "phase": "Dashboard instance creation",
+      "duration": 0.0013842582702636719,
+      "details": "First user dashboard created",
+      "timestamp": "2025-07-21T22:40:02.741721"
+    },
+    {
+      "phase": "Initial data loading test",
+      "duration": 0.5123090744018555,
+      "details": "Error: 'EnergyDashboard' object has no attribute 'rooftop_solar_data'",
+      "timestamp": "2025-07-21T22:40:03.254038"
+    },
+    {
+      "phase": "Panel widget creation test",
+      "duration": 0.0005757808685302734,
+      "details": "Select: 0.000s, Radio: 0.000s",
+      "timestamp": "2025-07-21T22:40:03.254624"
+    }
+  ],
+  "timestamp": "2025-07-21T22:40:03.255097"
+}
