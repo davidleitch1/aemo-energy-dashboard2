@@ -103,13 +103,38 @@ class DataResolutionManager:
             logger.info(f"User requested performance mode for {data_type}")
             return '30min'
             
-        # Calculate date range characteristics
-        duration = end_date - start_date
-        duration_days = duration.total_seconds() / (24 * 3600)
+        # Add detailed logging for date type debugging
+        logger.info(f"get_optimal_resolution called - start: {start_date} (type: {type(start_date)}), end: {end_date} (type: {type(end_date)})")
+        
+        # Calculate date range characteristics with error handling
+        try:
+            duration = end_date - start_date
+            duration_days = duration.total_seconds() / (24 * 3600)
+        except TypeError as e:
+            logger.error(f"Date type error: {e}. start_date type: {type(start_date)}, end_date type: {type(end_date)}")
+            # Try to convert if needed
+            if hasattr(start_date, 'date') and hasattr(end_date, 'date'):
+                # Already datetime objects
+                raise
+            else:
+                # Convert date to datetime
+                from datetime import datetime as dt
+                if not hasattr(start_date, 'hour'):
+                    start_date = dt.combine(start_date, dt.min.time())
+                if not hasattr(end_date, 'hour'):
+                    end_date = dt.combine(end_date, dt.max.time())
+                duration = end_date - start_date
+                duration_days = duration.total_seconds() / (24 * 3600)
+                logger.info(f"Converted dates and recalculated duration: {duration_days} days")
         
         # Check if we're querying recent data (always use 5-min for last 24h)
         now = datetime.now()
-        hours_from_now = abs((now - end_date).total_seconds() / 3600)
+        try:
+            hours_from_now = abs((now - end_date).total_seconds() / 3600)
+        except TypeError as e:
+            logger.error(f"Date comparison error: {e}")
+            # Default to 30min for safety
+            return '30min'
         if hours_from_now <= self.PERFORMANCE_THRESHOLDS['realtime_hours'] and duration_days <= 7:
             logger.info(f"Recent data range detected ({hours_from_now:.1f}h from now), using 5-minute resolution for {data_type}")
             return '5min'

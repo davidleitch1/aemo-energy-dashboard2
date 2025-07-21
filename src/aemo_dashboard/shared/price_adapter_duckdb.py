@@ -53,31 +53,44 @@ def load_price_data(
     """
     
     try:
+        # Add detailed logging for Safari refresh debugging
+        logger.info(f"load_price_data called - start: {start_date} (type: {type(start_date)}), end: {end_date} (type: {type(end_date)})")
+        
         # Handle date defaults
         if start_date is None or end_date is None:
+            logger.warning("Date(s) are None, fetching date ranges from DuckDB service")
             date_ranges = duckdb_data_service.get_date_ranges()
             if 'prices' in date_ranges:
                 if start_date is None:
                     start_date = date_ranges['prices']['start']
+                    logger.info(f"Using DuckDB start date: {start_date}")
                 if end_date is None:
                     end_date = date_ranges['prices']['end']
+                    logger.info(f"Using DuckDB end date: {end_date}")
             else:
                 # Fallback defaults
+                logger.warning("No price date ranges from DuckDB, using fallback defaults")
                 if start_date is None:
                     start_date = datetime(2020, 1, 1)
                 if end_date is None:
                     end_date = datetime.now()
+                logger.info(f"Fallback dates - start: {start_date}, end: {end_date}")
+        
+        # Log the date range that will be queried
+        duration = end_date - start_date
+        logger.info(f"Date range to query: {start_date} to {end_date} (duration: {duration})")
         
         # Determine optimal resolution
         if resolution == 'auto':
+            logger.info("Determining optimal resolution...")
             resolution_strategy = resolution_manager.get_optimal_resolution_with_fallback(
                 start_date, end_date, 'price'
             )
             resolution = resolution_strategy['primary_resolution']
-            if logger.isEnabledFor(logging.DEBUG):
-                logger.debug(f"Auto-selected resolution: {resolution} - {resolution_strategy['reasoning']}")
+            logger.info(f"Auto-selected resolution: {resolution} - {resolution_strategy['reasoning']}")
         
         # Query price data using DuckDB
+        logger.info(f"Querying DuckDB for {resolution} price data...")
         with perf_logger.timer("duckdb_price_query", threshold=0.5):
             df = duckdb_data_service.get_regional_prices(
                 start_date=start_date,
@@ -85,6 +98,8 @@ def load_price_data(
                 regions=regions,
                 resolution=resolution
             )
+        
+        logger.info(f"DuckDB query returned {len(df)} records")
         
         if df.empty:
             logger.warning(f"No price data found for date range {start_date} to {end_date}")

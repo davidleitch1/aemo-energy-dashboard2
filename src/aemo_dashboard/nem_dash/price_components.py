@@ -11,11 +11,18 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import numpy as np
 from pathlib import Path
+import time
+import threading
 
 from ..shared.config import config
 from ..shared.logging_config import get_logger
 
 logger = get_logger(__name__)
+
+# Add debug logging for refresh issues
+import logging
+refresh_logger = logging.getLogger('refresh.price_components')
+refresh_logger.setLevel(logging.DEBUG)
 
 # ITK teal style for dataframe (from original)
 PRICE_TABLE_STYLES = [
@@ -71,17 +78,39 @@ DRACULA_STYLE = {
 }
 
 
-def load_price_data():
+def load_price_data(start_date=None, end_date=None):
     """
     Load price data using the price adapter
+    
+    Args:
+        start_date: Start date for price data (defaults to 48 hours ago)
+        end_date: End date for price data (defaults to now)
     """
+    refresh_logger.debug(f"load_price_data called at {time.time()} with dates: {start_date} to {end_date}")
+    
+    # If no dates provided, default to last 48 hours to prevent loading all data
+    if start_date is None or end_date is None:
+        end_date = pd.Timestamp.now()
+        start_date = end_date - pd.Timedelta(hours=48)
+        refresh_logger.info(f"No dates provided, using default range: {start_date} to {end_date}")
+    else:
+        # Convert date objects to pandas Timestamps if needed
+        refresh_logger.debug(f"Date types received: start_date={type(start_date)}, end_date={type(end_date)}")
+        if hasattr(start_date, 'date'):  # It's already a datetime/Timestamp
+            pass
+        else:  # It's likely a date object, convert to Timestamp
+            start_date = pd.Timestamp(start_date)
+            end_date = pd.Timestamp(end_date) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)  # End of day
+        refresh_logger.info(f"Using provided dates (converted): {start_date} to {end_date}")
+    
     try:
         from ..shared.adapter_selector import load_price_data as load_price_adapter
         
-        logger.info("Loading price data using adapter for nem_dash...")
+        logger.info(f"Loading price data for {start_date} to {end_date}")
+        refresh_logger.debug("About to call load_price_adapter with date filtering...")
         
-        # Load data using the adapter (handles format conversion)
-        data = load_price_adapter()
+        # Load data using the adapter with date filtering
+        data = load_price_adapter(start_date=start_date, end_date=end_date)
         
         if data.empty:
             logger.error("No price data returned from adapter")
@@ -146,10 +175,13 @@ def create_price_chart(prices):
     Create smoothed price chart
     Adapted from display_spot.py pcht function
     """
+    refresh_logger.debug(f"create_price_chart called with {len(prices) if not prices.empty else 0} price records")
+    
     if prices.empty:
         return pn.pane.HTML("<div>No price data available</div>", width=550, height=250)
     
     try:
+        refresh_logger.debug("Starting matplotlib figure creation...")
         # Count consecutive valid points from the end for each column
         valid_counts = {}
         for col in prices.columns:
@@ -174,9 +206,11 @@ def create_price_chart(prices):
         df = prices.tail(rows_to_take).ewm(alpha=0.22, adjust=False).mean()
         
         # Create matplotlib figure
+        refresh_logger.debug("Creating matplotlib figure...")
         fig, ax = plt.subplots()
         fig.set_size_inches(5.5, 2.5)
         plt.rcParams.update(DRACULA_STYLE)
+        refresh_logger.debug("Matplotlib figure created successfully")
         
         when = prices.index[-1].strftime("%d %b %H:%M")
         
@@ -207,32 +241,65 @@ def create_price_chart(prices):
         ax.legend(fontsize=7, frameon=False)
         
         plt.tight_layout()
+        refresh_logger.debug("Matplotlib chart completed, creating Panel pane...")
         
-        return pn.pane.Matplotlib(fig, sizing_mode='fixed', width=550, height=250)
+        pane = pn.pane.Matplotlib(fig, sizing_mode='fixed', width=550, height=250)
+        refresh_logger.debug(f"Panel Matplotlib pane created: {type(pane)}")
+        
+        return pane
         
     except Exception as e:
         logger.error(f"Error creating price chart: {e}")
         return pn.pane.HTML(f"<div>Error creating price chart: {e}</div>", width=550, height=250)
 
 
-def create_price_section():
+def create_price_section(start_date=None, end_date=None):
     """
     Create the complete price section with table and chart
-    """
-    def update_price_components():
-        prices = load_price_data()
-        table = create_price_table(prices)
-        chart = create_price_chart(prices)
-        
-        return pn.Column(
-            table,
-            chart,
-            sizing_mode='fixed',
-            width=550,
-            margin=(5, 5)
-        )
     
-    return pn.pane.panel(update_price_components)
+    Args:
+        start_date: Start date for price data
+        end_date: End date for price data
+    """
+    refresh_logger.info("="*60)
+    refresh_logger.info(f"create_price_section called at {time.time()}")
+    refresh_logger.info(f"Date range: {start_date} to {end_date}")
+    refresh_logger.info(f"Thread: {threading.current_thread().name}")
+    refresh_logger.info(f"Panel state: {hasattr(pn.state, 'curdoc')}")
+    refresh_logger.info("="*60)
+    
+    def update_price_components():
+        refresh_logger.debug(f"update_price_components called with dates: {start_date} to {end_date}")
+        start_time = time.time()
+        
+        try:
+            refresh_logger.debug("Loading price data with date filtering...")
+            prices = load_price_data(start_date, end_date)
+            
+            refresh_logger.debug(f"Creating price table with {len(prices) if not prices.empty else 0} records...")
+            table = create_price_table(prices)
+            
+            refresh_logger.debug("Creating price chart...")
+            chart = create_price_chart(prices)
+            
+            refresh_logger.debug(f"Components created in {time.time() - start_time:.2f}s")
+            
+            return pn.Column(
+                table,
+                chart,
+                sizing_mode='fixed',
+                width=550,
+                margin=(5, 5)
+            )
+        except Exception as e:
+            refresh_logger.error(f"Error in update_price_components: {e}", exc_info=True)
+            raise
+    
+    refresh_logger.debug("Wrapping with pn.pane.panel...")
+    result = pn.pane.panel(update_price_components)
+    refresh_logger.debug(f"create_price_section returning: {type(result)}")
+    
+    return result
 
 
 if __name__ == "__main__":

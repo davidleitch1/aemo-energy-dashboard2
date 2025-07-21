@@ -43,8 +43,30 @@ def create_nem_dash_tab(dashboard_instance=None):
     try:
         logger.info("Creating Nem-dash tab components")
         
+        # Get date range from dashboard instance if available
+        start_date = getattr(dashboard_instance, 'start_date', None) if dashboard_instance else None
+        end_date = getattr(dashboard_instance, 'end_date', None) if dashboard_instance else None
+        
+        # Add detailed logging about date types
+        logger.info(f"Raw date values from dashboard - start: {start_date} (type: {type(start_date)}), end: {end_date} (type: {type(end_date)})")
+        
+        # Convert date objects to datetime objects for compatibility
+        if start_date is not None:
+            from datetime import datetime
+            if not hasattr(start_date, 'hour'):  # It's a date object, not datetime
+                start_date = datetime.combine(start_date, datetime.min.time())
+                logger.info(f"Converted start_date to datetime: {start_date}")
+        
+        if end_date is not None:
+            from datetime import datetime
+            if not hasattr(end_date, 'hour'):  # It's a date object, not datetime
+                end_date = datetime.combine(end_date, datetime.max.time())
+                logger.info(f"Converted end_date to datetime: {end_date}")
+        
+        logger.info(f"Creating price section with date range: {start_date} to {end_date}")
+        
         # Create individual components
-        price_section = create_price_section()
+        price_section = create_price_section(start_date, end_date)
         renewable_gauge = create_renewable_gauge_component(dashboard_instance)
         generation_overview = create_generation_overview_component(dashboard_instance)
         
@@ -117,8 +139,27 @@ def create_nem_dash_tab_with_updates(dashboard_instance=None, auto_update=True):
                     top_row = tab[0]      # Row with price section and gauge
                     bottom_row = tab[1]   # Row with spacer and generation chart
                     
-                    # Update price section (index 0)
-                    new_price_section = create_price_section()
+                    # Get current date range from dashboard
+                    start_date = getattr(dashboard_instance, 'start_date', None) if dashboard_instance else None
+                    end_date = getattr(dashboard_instance, 'end_date', None) if dashboard_instance else None
+                    
+                    logger.info(f"Update: Raw dates - start: {start_date} (type: {type(start_date)}), end: {end_date} (type: {type(end_date)})")
+                    
+                    # Convert date objects to datetime objects for compatibility
+                    if start_date is not None:
+                        from datetime import datetime
+                        if not hasattr(start_date, 'hour'):  # It's a date object, not datetime
+                            start_date = datetime.combine(start_date, datetime.min.time())
+                            logger.info(f"Update: Converted start_date to datetime: {start_date}")
+                    
+                    if end_date is not None:
+                        from datetime import datetime
+                        if not hasattr(end_date, 'hour'):  # It's a date object, not datetime
+                            end_date = datetime.combine(end_date, datetime.max.time())
+                            logger.info(f"Update: Converted end_date to datetime: {end_date}")
+                    
+                    # Update price section (index 0) with date filtering
+                    new_price_section = create_price_section(start_date, end_date)
                     top_row[0] = new_price_section
                     
                     # Update renewable gauge (index 1)
