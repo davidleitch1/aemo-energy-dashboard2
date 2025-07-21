@@ -142,7 +142,7 @@ def create_price_table(prices):
     Adapted from display_spot.py display_table function
     """
     if prices.empty:
-        return pn.pane.HTML("<div>No price data available</div>", width=550, height=300)
+        return pn.pane.HTML("<div>No price data available</div>", width=550, height=350)
     
     try:
         display = prices.copy()
@@ -154,8 +154,8 @@ def create_price_table(prices):
         display.rename_axis(None, inplace=True)
         display.rename_axis(None, axis=1, inplace=True)
         
-        # Create styled table
-        styled_table = (display.tail(7)
+        # Create styled table - show last 9 rows (7 prices + 2 averages) to better fill the height
+        styled_table = (display.tail(9)
             .style
             .format('{:,.0f}')
             .set_caption("5 minute spot $/MWh " + prices.index[-1].strftime("%d %b %H:%M"))
@@ -163,11 +163,11 @@ def create_price_table(prices):
             .apply(lambda x: ['font-weight: bold' if x.name in display.tail(3).index else '' for _ in x], axis=1)
             .apply(lambda x: ['color: #e0e0e0' if x.name not in display.tail(3).index else '' for _ in x], axis=1))
         
-        return pn.pane.DataFrame(styled_table, sizing_mode='fixed', width=550, height=300)
+        return pn.pane.DataFrame(styled_table, sizing_mode='fixed', width=550, height=350)
         
     except Exception as e:
         logger.error(f"Error creating price table: {e}")
-        return pn.pane.HTML(f"<div>Error creating price table: {e}</div>", width=550, height=300)
+        return pn.pane.HTML(f"<div>Error creating price table: {e}</div>", width=550, height=350)
 
 
 def create_price_chart(prices):
@@ -178,7 +178,7 @@ def create_price_chart(prices):
     refresh_logger.debug(f"create_price_chart called with {len(prices) if not prices.empty else 0} price records")
     
     if prices.empty:
-        return pn.pane.HTML("<div>No price data available</div>", width=550, height=250)
+        return pn.pane.HTML("<div>No price data available</div>", width=550, height=400)
     
     try:
         refresh_logger.debug("Starting matplotlib figure creation...")
@@ -200,16 +200,19 @@ def create_price_chart(prices):
         rows_to_take = min(rows_to_take, len(prices))
         
         if rows_to_take == 0:
-            return pn.pane.HTML("<div>No valid price data points</div>", width=550, height=250)
+            return pn.pane.HTML("<div>No valid price data points</div>", width=550, height=400)
         
         # Calculate EWM only on the rows we'll use
         df = prices.tail(rows_to_take).ewm(alpha=0.22, adjust=False).mean()
         
+        # Apply Dracula style BEFORE creating figure
+        refresh_logger.debug("Applying Dracula style...")
+        plt.rcParams.update(DRACULA_STYLE)
+        
         # Create matplotlib figure
         refresh_logger.debug("Creating matplotlib figure...")
         fig, ax = plt.subplots()
-        fig.set_size_inches(5.5, 2.5)
-        plt.rcParams.update(DRACULA_STYLE)
+        fig.set_size_inches(5.5, 4.0)  # Increased height to match generation chart
         refresh_logger.debug("Matplotlib figure created successfully")
         
         when = prices.index[-1].strftime("%d %b %H:%M")
@@ -243,14 +246,14 @@ def create_price_chart(prices):
         plt.tight_layout()
         refresh_logger.debug("Matplotlib chart completed, creating Panel pane...")
         
-        pane = pn.pane.Matplotlib(fig, sizing_mode='fixed', width=550, height=250)
+        pane = pn.pane.Matplotlib(fig, sizing_mode='fixed', width=550, height=400)
         refresh_logger.debug(f"Panel Matplotlib pane created: {type(pane)}")
         
         return pane
         
     except Exception as e:
         logger.error(f"Error creating price chart: {e}")
-        return pn.pane.HTML(f"<div>Error creating price chart: {e}</div>", width=550, height=250)
+        return pn.pane.HTML(f"<div>Error creating price chart: {e}</div>", width=550, height=400)
 
 
 def create_price_section(start_date=None, end_date=None):
@@ -300,6 +303,36 @@ def create_price_section(start_date=None, end_date=None):
     refresh_logger.debug(f"create_price_section returning: {type(result)}")
     
     return result
+
+
+def create_price_chart_component(start_date=None, end_date=None):
+    """
+    Create just the price chart component (for separated layout)
+    
+    Args:
+        start_date: Start date for price data
+        end_date: End date for price data
+    """
+    def update_chart():
+        prices = load_price_data(start_date, end_date)
+        return create_price_chart(prices)
+    
+    return pn.pane.panel(update_chart)
+
+
+def create_price_table_component(start_date=None, end_date=None):
+    """
+    Create just the price table component (for separated layout)
+    
+    Args:
+        start_date: Start date for price data
+        end_date: End date for price data
+    """
+    def update_table():
+        prices = load_price_data(start_date, end_date)
+        return create_price_table(prices)
+    
+    return pn.pane.panel(update_table)
 
 
 if __name__ == "__main__":

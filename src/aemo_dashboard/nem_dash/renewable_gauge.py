@@ -249,8 +249,8 @@ def create_renewable_gauge_plotly(current_value, all_time_record=45.2, hour_reco
         fig.add_trace(go.Indicator(
             mode="gauge+number",
             value=current_value,
-            title={'text': "Renewable Energy %", 'font': {'size': 16, 'color': "#ff79c6"}},
-            number={'suffix': "%", 'font': {'size': 18, 'color': "#ff79c6"}, 'valueformat': '.0f'},
+            title={'text': "Renewable Energy %", 'font': {'size': 16, 'color': "white"}},
+            number={'suffix': "%", 'font': {'size': 18, 'color': "white"}, 'valueformat': '.0f'},
             domain={'x': [0, 1], 'y': [0.15, 1]},  # Leave space at bottom for legend
             gauge={
                 'axis': {
@@ -259,20 +259,14 @@ def create_renewable_gauge_plotly(current_value, all_time_record=45.2, hour_reco
                     'tick0': 0,
                     'dtick': 20,
                     'tickwidth': 1,
-                    'tickcolor': "rgba(255, 121, 198, 0.6)",  # Pink with alpha 0.6
-                    'tickfont': {'color': "rgba(255, 121, 198, 0.6)"}  # Pink text with alpha 0.6
+                    'tickcolor': "white",  # White tick marks
+                    'tickfont': {'color': "white"}  # White text
                 },
-                'bar': {'color': "#ff79c6", 'thickness': 0.6, 'line': {'color': "#ff79c6", 'width': 4}},
-                'bgcolor': "white",
+                'bar': {'color': "#50fa7b", 'thickness': 0.6, 'line': {'color': "#50fa7b", 'width': 4}},  # Green bar
+                'bgcolor': "#44475a",  # Single Dracula background color
                 'borderwidth': 2,
-                'bordercolor': "gray",
-                'steps': [
-                    {'range': [0, 20], 'color': "rgba(255, 68, 68, 0.3)"},    # Red
-                    {'range': [20, 40], 'color': "rgba(255, 136, 68, 0.3)"},  # Orange
-                    {'range': [40, 60], 'color': "rgba(255, 170, 68, 0.3)"},  # Yellow
-                    {'range': [60, 80], 'color': "rgba(136, 221, 68, 0.3)"},  # Light green
-                    {'range': [80, 100], 'color': "rgba(68, 255, 68, 0.3)"}   # Green
-                ],
+                'bordercolor': "#6272a4",  # Dracula border color
+                'steps': [],  # No steps - single background color
                 'threshold': {
                     'line': {'color': "gold", 'width': 4},
                     'thickness': 0.75,
@@ -307,7 +301,7 @@ def create_renewable_gauge_plotly(current_value, all_time_record=45.2, hour_reco
             showarrow=False,
             xref="paper", yref="paper",
             align="center",
-            font=dict(size=10, color="#ff79c6")
+            font=dict(size=10, color="white")
         )
         
         # Add legend items horizontally side-by-side to avoid overlap
@@ -326,7 +320,7 @@ def create_renewable_gauge_plotly(current_value, all_time_record=45.2, hour_reco
             showarrow=False,
             xref="paper", yref="paper",
             align="left",
-            font=dict(size=9, color="#ff79c6")
+            font=dict(size=9, color="white")
         )
         
         # Grey line and text (right side)
@@ -344,11 +338,11 @@ def create_renewable_gauge_plotly(current_value, all_time_record=45.2, hour_reco
             showarrow=False,
             xref="paper", yref="paper",
             align="left",
-            font=dict(size=9, color="#ff79c6")
+            font=dict(size=9, color="white")
         )
         
         fig.update_layout(
-            paper_bgcolor="rgba(0,0,0,0)",
+            paper_bgcolor="#282a36",  # Dracula background
             height=350,
             width=400,
             margin=dict(l=30, r=30, t=60, b=30),

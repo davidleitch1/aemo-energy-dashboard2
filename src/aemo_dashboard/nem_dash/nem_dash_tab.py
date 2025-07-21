@@ -5,7 +5,7 @@ Combines price section, renewable energy gauge, and 24-hour generation overview
 
 import panel as pn
 from ..shared.logging_config import get_logger
-from .price_components import create_price_section
+from .price_components import create_price_section, create_price_chart_component, create_price_table_component
 from .renewable_gauge import create_renewable_gauge_component
 from .generation_overview import create_generation_overview_component
 
@@ -63,28 +63,29 @@ def create_nem_dash_tab(dashboard_instance=None):
                 end_date = datetime.combine(end_date, datetime.max.time())
                 logger.info(f"Converted end_date to datetime: {end_date}")
         
-        logger.info(f"Creating price section with date range: {start_date} to {end_date}")
+        logger.info(f"Creating price components with date range: {start_date} to {end_date}")
         
-        # Create individual components
-        price_section = create_price_section(start_date, end_date)
+        # Create individual components for clean 2x2 grid layout
+        price_chart = create_price_chart_component(start_date, end_date)
+        price_table = create_price_table_component(start_date, end_date)
         renewable_gauge = create_renewable_gauge_component(dashboard_instance)
         generation_overview = create_generation_overview_component(dashboard_instance)
         
-        # Create the layout with 2x2 grid appearance:
-        # Top row: Price section (left) and Renewable gauge (right)
-        # Bottom row: Empty space (left) and Generation chart (right, spanning wider)
+        # Create the layout with two main plots side by side
+        # Top row: Price chart and Generation chart side by side
+        # Bottom row: Price table and Renewable gauge
         layout = pn.Column(
-            # Top row: Price section and gauge side by side
+            # Top row: Two main charts side by side
             pn.Row(
-                price_section,          # ~550px width (left)
-                renewable_gauge,        # ~400px width (right)
+                price_chart,            # Price chart (left)
+                generation_overview,    # Generation chart (right)
                 sizing_mode='stretch_width',
                 margin=(5, 5)
             ),
-            # Bottom row: Empty left, Generation chart on right
+            # Bottom row: Price table and gauge
             pn.Row(
-                pn.Spacer(width=550),   # Empty space matching price section width
-                generation_overview,    # ~800px width, 400px height
+                price_table,            # Price table (left)
+                renewable_gauge,        # Renewable gauge (right)
                 sizing_mode='stretch_width',
                 margin=(5, 5)
             ),
@@ -158,17 +159,21 @@ def create_nem_dash_tab_with_updates(dashboard_instance=None, auto_update=True):
                             end_date = datetime.combine(end_date, datetime.max.time())
                             logger.info(f"Update: Converted end_date to datetime: {end_date}")
                     
-                    # Update price section (index 0) with date filtering
-                    new_price_section = create_price_section(start_date, end_date)
-                    top_row[0] = new_price_section
+                    # Update price chart (index 0 of top row)
+                    new_price_chart = create_price_chart_component(start_date, end_date)
+                    top_row[0] = new_price_chart
                     
-                    # Update renewable gauge (index 1)
-                    new_gauge = create_renewable_gauge_component(dashboard_instance)
-                    top_row[1] = new_gauge
-                    
-                    # Update generation overview (index 1 of bottom row, after spacer)
+                    # Update generation overview (index 1 of top row)
                     new_overview = create_generation_overview_component(dashboard_instance)
-                    bottom_row[1] = new_overview
+                    top_row[1] = new_overview
+                    
+                    # Update price table (index 0 of bottom row)
+                    new_price_table = create_price_table_component(start_date, end_date)
+                    bottom_row[0] = new_price_table
+                    
+                    # Update renewable gauge (index 1 of bottom row)
+                    new_gauge = create_renewable_gauge_component(dashboard_instance)
+                    bottom_row[1] = new_gauge
                     
                     logger.info("Nem-dash tab components updated successfully")
                     
