@@ -1,0 +1,102 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+cover/
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Project specific
+data/
+logs/
+*.log
+*.parquet
+*.pkl
+*.pickle
+
+# Email alert caches
+unknown_duids_alerts.json
+duid_exceptions.json
+price_alert_state.pkl
+
+# Temporary files
+temp/
+tmp/
+*.tmp
+
+# Jupyter Notebooks
+.ipynb_checkpoints/
+
+# Documentation builds
+docs/_build/
+site/
+
+# Environment variables (keep .env.sample for template)
+.env
+.env.local
+.env.productionscreenshots/
+
+# Environment files with secrets
+.env*
+!.env.example
+!.env.sample
