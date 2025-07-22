@@ -2376,6 +2376,7 @@ class EnergyDashboard(param.Parameterized):
             tabs = pn.Tabs(
                 ("Today", nem_dash_tab),  # Load immediately
                 ("Generation mix", pn.pane.HTML(loading_html)),  # Lazy
+                ("Prices", pn.pane.HTML(loading_html)),  # Lazy - NEW
                 ("Pivot table", pn.pane.HTML(loading_html)),  # Lazy
                 ("Station Analysis", pn.pane.HTML(loading_html)),  # Lazy
                 ("Penetration", pn.pane.HTML(loading_html)),  # Lazy
@@ -2393,9 +2394,10 @@ class EnergyDashboard(param.Parameterized):
             # Store tab creation functions (no need for Today since it's loaded)
             self._tab_creators = {
                 1: self._create_generation_tab_lazy,
-                2: self._create_price_analysis_tab,
-                3: self._create_station_analysis_tab,
-                4: self._create_penetration_tab
+                2: self._create_prices_tab,  # NEW
+                3: self._create_price_analysis_tab,  # Shifted from 2 to 3
+                4: self._create_station_analysis_tab,  # Shifted from 3 to 4
+                5: self._create_penetration_tab  # Shifted from 4 to 5
             }
             
             # Watch for tab changes
@@ -2475,6 +2477,598 @@ class EnergyDashboard(param.Parameterized):
     def _create_generation_tab_lazy(self):
         """Wrapper for lazy loading generation tab"""
         return self._create_generation_tab()
+    
+    def _create_prices_tab(self):
+        """Create prices analysis tab with selectors and visualizations"""
+        try:
+            logger.info("Creating prices tab...")
+            
+            # Calculate date range - actual price data available from 2020-01-01
+            # prices30.parquet has 5+ years of data, prices5.parquet only has ~52 days
+            end_date = self.end_date
+            start_date = self.start_date  # This should already be 5 years of data
+            
+            # Date preset radio buttons (vertical like frequency)
+            date_presets = pn.widgets.RadioBoxGroup(
+                name='',  # Empty name, we'll add label separately
+                options=['1 day', '7 days', '30 days', '90 days', '1 year', 'All data'],
+                value='30 days',
+                inline=False,  # Vertical layout
+                width=100
+            )
+            
+            # Date pickers instead of slider (like generation tab)
+            start_date_picker = pn.widgets.DatePicker(
+                name='Start Date',
+                value=end_date - pd.Timedelta(days=30),  # Default to 30 days ago
+                start=start_date,
+                end=end_date,
+                width=150
+            )
+            
+            end_date_picker = pn.widgets.DatePicker(
+                name='End Date',
+                value=end_date,
+                start=start_date,
+                end=end_date,
+                width=150
+            )
+            
+            # Show selected dates clearly
+            date_display = pn.pane.Markdown(
+                f"**Selected Period:** {start_date_picker.value.strftime('%Y-%m-%d')} to {end_date_picker.value.strftime('%Y-%m-%d')}",
+                width=300
+            )
+            
+            # Region checkbox group for multi-selection
+            regions = ['NSW1', 'QLD1', 'SA1', 'TAS1', 'VIC1']
+            region_selector = pn.widgets.CheckBoxGroup(
+                name='Select Regions to Compare',
+                value=['NSW1', 'VIC1'],  # Default selection
+                options=regions,
+                inline=False,  # Vertical layout
+                width=250
+            )
+            
+            # Aggregate level radio buttons (compact)
+            aggregate_selector = pn.widgets.RadioBoxGroup(
+                name='',
+                value='1 hour',
+                options=['5 min', '1 hour', 'Daily', 'Monthly', 'Quarterly', 'Yearly'],
+                inline=False,  # Vertical for frequency options
+                width=120
+            )
+            
+            # Smoothing options
+            smoothing_selector = pn.widgets.Select(
+                name='Smoothing',
+                value='None',
+                options=['None', '7-period MA', '30-period MA', 'Exponential (α=0.3)'],
+                width=200
+            )
+            
+            # Add log scale checkbox
+            log_scale_checkbox = pn.widgets.Checkbox(
+                name='Log Scale Y-axis',
+                value=False,
+                width=150
+            )
+            
+            # Add Analyze button
+            analyze_button = pn.widgets.Button(
+                name='Analyze Prices',
+                button_type='primary',
+                width=150
+            )
+            
+            # Create price plot pane - will be updated by load_price_data
+            self.price_plot_pane = pn.pane.HoloViews(
+                height=400,
+                sizing_mode='stretch_width'
+            )
+            
+            # Initialize with instruction message
+            self.price_plot_pane.object = hv.Text(0.5, 0.5, "Click 'Analyze Prices' to load data").opts(
+                xlim=(0, 1), ylim=(0, 1), 
+                bgcolor='#282a36',  # Dracula background
+                color='#f8f8f2',    # Dracula foreground
+                fontsize=16
+            )
+            
+            # Create statistics table pane
+            # Initialize with empty DataFrame showing message
+            empty_stats_df = pd.DataFrame({
+                'Message': ['Click "Analyze Prices" to see statistics']
+            })
+            self.stats_pane = pn.widgets.Tabulator(
+                value=empty_stats_df,  # Use 'value' parameter explicitly
+                theme='fast',
+                layout='fit_columns',
+                height=300,
+                show_index=False,  # Changed to False for cleaner look
+                sizing_mode='stretch_width',
+                stylesheets=["""
+                    .tabulator {
+                        background-color: #282a36;
+                        color: #f8f8f2;
+                    }
+                    .tabulator-header {
+                        background-color: #44475a;
+                        color: #f8f8f2;
+                        font-weight: bold;
+                    }
+                    .tabulator-row {
+                        background-color: #282a36;
+                        color: #f8f8f2;
+                    }
+                    .tabulator-row:nth-child(even) {
+                        background-color: #383a46;
+                    }
+                    .tabulator-row:hover {
+                        background-color: #44475a;
+                    }
+                    .tabulator-cell {
+                        padding: 8px;
+                    }
+                """],
+                configuration={
+                    'columnDefaults': {
+                        'headerFilter': False,
+                        'tooltip': True
+                    }
+                }
+            )
+            
+            # Create price bands plot pane
+            self.bands_plot_pane = pn.pane.HoloViews(
+                height=400,
+                sizing_mode='stretch_width'
+            )
+            # Initialize with instruction message
+            self.bands_plot_pane.object = hv.Text(0.5, 0.5, "Price bands will appear here").opts(
+                xlim=(0, 1), ylim=(0, 1), 
+                bgcolor='#282a36', color='#f8f8f2', fontsize=14
+            )
+            
+            # Layout the controls in columns
+            region_column = pn.Column(
+                "### Region",
+                region_selector,
+                width=150
+            )
+            
+            # Split dates into two sub-columns for better layout
+            date_presets_column = pn.Column(
+                "### Quick Select",
+                date_presets,
+                width=120
+            )
+            
+            date_pickers_column = pn.Column(
+                "### Date Range",
+                start_date_picker,
+                end_date_picker,
+                date_display,
+                width=180
+            )
+            
+            frequency_column = pn.Column(
+                "### Frequency",
+                aggregate_selector,
+                width=150
+            )
+            
+            smoothing_column = pn.Column(
+                "### Smoothing",
+                smoothing_selector,
+                log_scale_checkbox,
+                pn.Spacer(height=10),
+                analyze_button,
+                width=200
+            )
+            
+            # Horizontal layout of all controls
+            controls = pn.Column(
+                "## Price Analysis Controls",
+                pn.Row(
+                    region_column,
+                    pn.Spacer(width=20),
+                    frequency_column,
+                    pn.Spacer(width=20),
+                    date_presets_column,
+                    pn.Spacer(width=20),
+                    date_pickers_column,
+                    pn.Spacer(width=20),
+                    smoothing_column
+                ),
+                sizing_mode='stretch_width'
+            )
+            
+            # Main content area
+            main_content = pn.Column(
+                pn.Row(
+                    pn.Column(
+                        "## Price Time Series",
+                        self.price_plot_pane,
+                        sizing_mode='stretch_width'
+                    )
+                ),
+                pn.Spacer(height=20),
+                pn.Row(
+                    pn.Column(
+                        self.stats_pane,
+                        sizing_mode='stretch_width'
+                    ),
+                    pn.Spacer(width=20),
+                    pn.Column(
+                        self.bands_plot_pane,
+                        sizing_mode='stretch_width'
+                    )
+                ),
+                sizing_mode='stretch_width'
+            )
+            
+            # Complete tab layout - vertical with controls on top
+            prices_tab = pn.Column(
+                controls,
+                pn.Spacer(height=20),
+                main_content,
+                sizing_mode='stretch_width'
+            )
+            
+            # Set up callbacks for date presets
+            def update_date_range(event):
+                """Update date range based on preset selection"""
+                preset = event.new
+                if preset == '1 day':
+                    new_start = end_date - pd.Timedelta(days=1)
+                elif preset == '7 days':
+                    new_start = end_date - pd.Timedelta(days=7)
+                elif preset == '30 days':
+                    new_start = end_date - pd.Timedelta(days=30)
+                elif preset == '90 days':
+                    new_start = end_date - pd.Timedelta(days=90)
+                elif preset == '1 year':
+                    new_start = end_date - pd.Timedelta(days=365)
+                else:  # All data
+                    # Use the actual available data range from prices30.parquet
+                    new_start = pd.Timestamp('2020-01-01').date()
+                
+                start_date_picker.value = new_start
+                end_date_picker.value = end_date
+            
+            # Set up callback for date picker changes
+            def update_date_display(event):
+                """Update the date display when date pickers change"""
+                date_display.object = f"**Selected Period:** {start_date_picker.value.strftime('%Y-%m-%d')} to {end_date_picker.value.strftime('%Y-%m-%d')}"
+            
+            # Function to load and update price data
+            def load_and_plot_prices(event=None):
+                """Load price data and create hvplot"""
+                try:
+                    # Show loading message
+                    self.price_plot_pane.object = hv.Text(0.5, 0.5, 'Loading price data...').opts(
+                        xlim=(0, 1), ylim=(0, 1), 
+                        bgcolor='#282a36', color='#f8f8f2', fontsize=14
+                    )
+                    
+                    # Get current selections
+                    selected_regions = region_selector.value
+                    if not selected_regions:
+                        self.price_plot_pane.object = hv.Text(0.5, 0.5, 'Please select at least one region').opts(
+                            xlim=(0, 1), ylim=(0, 1), 
+                            bgcolor='#282a36', color='#ff5555', fontsize=14
+                        )
+                        # Clear statistics table
+                        self.stats_pane.value = pd.DataFrame({'Message': ['Please select at least one region']})
+                        # Clear bands plot
+                        self.bands_plot_pane.object = hv.Text(0.5, 0.5, 'Please select at least one region').opts(
+                            xlim=(0, 1), ylim=(0, 1), 
+                            bgcolor='#282a36', color='#ff5555', fontsize=14
+                        )
+                        return
+                    
+                    # Import price adapter
+                    from ..shared.price_adapter import load_price_data
+                    
+                    # Load price data
+                    logger.info(f"Loading price data for regions: {selected_regions}")
+                    # Convert date to datetime for the adapter
+                    from datetime import datetime, time
+                    start_datetime = datetime.combine(start_date_picker.value, time.min)
+                    end_datetime = datetime.combine(end_date_picker.value, time.max)
+                    
+                    price_data = load_price_data(
+                        start_date=start_datetime,
+                        end_date=end_datetime,
+                        regions=selected_regions,
+                        resolution='auto'
+                    )
+                    
+                    if price_data.empty:
+                        self.price_plot_pane.object = hv.Text(0.5, 0.5, 'No data available for selected period').opts(
+                            xlim=(0, 1), ylim=(0, 1), 
+                            bgcolor='#282a36', color='#f8f8f2', fontsize=14
+                        )
+                        # Clear statistics table
+                        self.stats_pane.value = pd.DataFrame({'Message': ['No data available for selected period']})
+                        # Clear bands plot
+                        self.bands_plot_pane.object = hv.Text(0.5, 0.5, 'No data available').opts(
+                            xlim=(0, 1), ylim=(0, 1), 
+                            bgcolor='#282a36', color='#f8f8f2', fontsize=14
+                        )
+                        return
+                    
+                    # Ensure SETTLEMENTDATE is a column, not index
+                    if price_data.index.name == 'SETTLEMENTDATE' and 'SETTLEMENTDATE' not in price_data.columns:
+                        price_data = price_data.reset_index()
+                    
+                    # Handle negative prices for log scale
+                    use_log = log_scale_checkbox.value
+                    if use_log and (price_data['RRP'] <= 0).any():
+                        # Option 1: Shift all values to make them positive
+                        min_price = price_data['RRP'].min()
+                        if min_price <= 0:
+                            shift_value = abs(min_price) + 1
+                            price_data['RRP_adjusted'] = price_data['RRP'] + shift_value
+                            ylabel = f'Price ($/MWh) + {shift_value:.0f} [Log Scale]'
+                            y_col = 'RRP_adjusted'
+                        else:
+                            y_col = 'RRP'
+                            ylabel = 'Price ($/MWh) [Log Scale]'
+                    else:
+                        y_col = 'RRP'
+                        ylabel = 'Price ($/MWh)'
+                    
+                    # Resample based on frequency selection
+                    freq_map = {
+                        '5 min': '5min',
+                        '1 hour': 'h',
+                        'Daily': 'D',
+                        'Monthly': 'M',
+                        'Quarterly': 'Q',
+                        'Yearly': 'Y'
+                    }
+                    freq = freq_map.get(aggregate_selector.value, 'h')
+                    
+                    # Resample data
+                    if freq != '5min':  # Only resample if not 5 minute
+                        # Set SETTLEMENTDATE as index if it's not already
+                        if 'SETTLEMENTDATE' in price_data.columns:
+                            price_data = price_data.set_index('SETTLEMENTDATE')
+                        price_data = price_data.groupby('REGIONID').resample(freq).agg({
+                            y_col: 'mean',
+                            'RRP': 'mean'  # Keep original for reference
+                        }).reset_index()
+                    
+                    # Apply smoothing if selected
+                    if smoothing_selector.value != 'None':
+                        for region in selected_regions:
+                            region_mask = price_data['REGIONID'] == region
+                            if smoothing_selector.value == '7-period MA':
+                                price_data.loc[region_mask, y_col] = price_data.loc[region_mask, y_col].rolling(7, center=True).mean()
+                            elif smoothing_selector.value == '30-period MA':
+                                price_data.loc[region_mask, y_col] = price_data.loc[region_mask, y_col].rolling(30, center=True).mean()
+                            elif smoothing_selector.value == 'Exponential (α=0.3)':
+                                price_data.loc[region_mask, y_col] = price_data.loc[region_mask, y_col].ewm(alpha=0.3).mean()
+                    
+                    # Define Dracula theme colors for regions
+                    region_colors = {
+                        'NSW1': '#8be9fd',  # Cyan
+                        'QLD1': '#50fa7b',  # Green  
+                        'SA1': '#ffb86c',   # Orange
+                        'TAS1': '#ff79c6',  # Pink
+                        'VIC1': '#bd93f9'   # Purple
+                    }
+                    
+                    # Create hvplot
+                    plot = price_data.hvplot.line(
+                        x='SETTLEMENTDATE',
+                        y=y_col,
+                        by='REGIONID',
+                        width=1200,
+                        height=400,
+                        xlabel='Time',
+                        ylabel=ylabel,
+                        title='Electricity Spot Prices by Region',
+                        logy=use_log,
+                        grid=True,
+                        color=[region_colors.get(r, '#6272a4') for r in selected_regions],
+                        line_width=2,
+                        hover=True,
+                        hover_cols=['REGIONID', 'RRP'],  # Show original price in hover
+                        bgcolor='#282a36',  # Dracula background
+                        fontsize={'title': 14, 'labels': 12, 'ticks': 10}
+                    ).opts(
+                        toolbar='above',
+                        active_tools=['pan', 'wheel_zoom'],
+                        tools=['hover', 'pan', 'wheel_zoom', 'box_zoom', 'reset', 'save']
+                    )
+                    
+                    self.price_plot_pane.object = plot
+                    
+                    # Calculate statistics for each region
+                    stats_list = []
+                    for region in selected_regions:
+                        region_data = price_data[price_data['REGIONID'] == region]['RRP']
+                        stats = region_data.describe()
+                        
+                        # Add additional statistics
+                        stats_dict = {
+                            'Statistic': ['Count', 'Mean', 'Std Dev', 'Min', '25%', '50% (Median)', '75%', 'Max', 
+                                         '95%', 'Variance', 'CV %'],
+                            region: [
+                                f"{int(stats['count']):,}",
+                                f"${stats['mean']:.0f}",
+                                f"${stats['std']:.0f}",
+                                f"${stats['min']:.0f}",
+                                f"${stats['25%']:.0f}",
+                                f"${stats['50%']:.0f}",
+                                f"${stats['75%']:.0f}",
+                                f"${stats['max']:.0f}",
+                                f"${region_data.quantile(0.95):.0f}",
+                                f"${region_data.var():.0f}",
+                                f"{(stats['std'] / stats['mean'] * 100) if stats['mean'] != 0 else 0:.0f}%"
+                            ]
+                        }
+                        stats_list.append(pd.DataFrame(stats_dict))
+                    
+                    # Merge all statistics into one DataFrame
+                    if stats_list:
+                        stats_df = stats_list[0]
+                        for df in stats_list[1:]:
+                            stats_df = stats_df.merge(df, on='Statistic', how='outer')
+                        
+                        # Don't set Statistic as index - keep it as a column for Tabulator
+                        # stats_df already has 'Statistic' as first column and regions as other columns
+                        
+                        # Update the statistics table
+                        logger.info(f"Updating statistics table with {len(stats_df)} rows and {len(stats_df.columns)} columns")
+                        logger.info(f"Stats DataFrame: \n{stats_df}")
+                        logger.info(f"Stats DataFrame columns: {stats_df.columns.tolist()}")
+                        
+                        # Update the Tabulator widget value
+                        self.stats_pane.value = stats_df
+                    
+                    # Calculate price band contributions
+                    price_bands = [
+                        ('Below $0', -float('inf'), 0),
+                        ('$0-$50', 0, 50),
+                        ('$51-$100', 51, 100),
+                        ('$101-$300', 101, 300),
+                        ('$301-$1000', 301, 1000),
+                        ('Above $1000', 1000, float('inf'))
+                    ]
+                    
+                    band_contributions = []
+                    
+                    for region in selected_regions:
+                        region_data = price_data[price_data['REGIONID'] == region]['RRP']
+                        mean_price = region_data.mean()
+                        
+                        for band_name, low, high in price_bands:
+                            # Count periods in this band
+                            if low == -float('inf'):
+                                band_mask = region_data < high
+                            elif high == float('inf'):
+                                band_mask = region_data >= low
+                            else:
+                                band_mask = (region_data >= low) & (region_data < high)
+                            
+                            band_data = region_data[band_mask]
+                            
+                            if len(band_data) > 0:
+                                # Calculate weighted contribution
+                                band_proportion = len(band_data) / len(region_data)
+                                band_avg = band_data.mean()
+                                # Weighted contribution to overall mean
+                                contribution = (band_proportion * band_avg)
+                                
+                                band_contributions.append({
+                                    'Region': region,
+                                    'Price Band': band_name,
+                                    'Contribution': contribution,
+                                    'Percentage': band_proportion * 100,
+                                    'Band Average': band_avg
+                                })
+                    
+                    if band_contributions:
+                        # Create DataFrame for plotting
+                        bands_df = pd.DataFrame(band_contributions)
+                        
+                        # Format date range for title
+                        date_range_text = ""
+                        if date_presets.value == '1 day':
+                            date_range_text = "Last 24 hours"
+                        elif date_presets.value == '7 days':
+                            date_range_text = "Last 7 days"
+                        elif date_presets.value == '30 days':
+                            date_range_text = "Last 30 days"
+                        elif date_presets.value == '90 days':
+                            date_range_text = "Last 90 days"
+                        elif date_presets.value == '1 year':
+                            date_range_text = "Last year"
+                        elif date_presets.value == 'All data':
+                            date_range_text = "All available data"
+                        else:
+                            # Custom date range
+                            date_range_text = f"{start_date_picker.value.strftime('%Y-%m-%d')} to {end_date_picker.value.strftime('%Y-%m-%d')}"
+                        
+                        # Create stacked bar chart
+                        bands_plot = bands_df.hvplot.bar(
+                            x='Region',
+                            y='Contribution',
+                            by='Price Band',
+                            stacked=True,
+                            width=800,
+                            height=400,
+                            xlabel='Region',
+                            ylabel='Contribution to Mean Price ($/MWh)',
+                            title=f'Price Band Contribution to Mean Price ({date_range_text})',
+                            color=['#ff5555', '#50fa7b', '#8be9fd', '#ffb86c', '#bd93f9', '#ff79c6'],
+                            bgcolor='#282a36',
+                            legend='top',
+                            toolbar='above',
+                            hover_cols=['Percentage', 'Band Average']
+                        ).opts(
+                            xrotation=0,
+                            show_grid=True,
+                            gridstyle={'grid_line_alpha': 0.3}
+                        )
+                        
+                        # Add labels to the bars
+                        # Create text overlay for each contribution
+                        text_overlays = []
+                        for region in selected_regions:
+                            region_bands = bands_df[bands_df['Region'] == region]
+                            cumulative_height = 0
+                            
+                            for _, row in region_bands.iterrows():
+                                if row['Contribution'] > 5:  # Only show label if contribution is significant
+                                    # Position text at the middle of this band's contribution
+                                    y_pos = cumulative_height + row['Contribution'] / 2
+                                    text_overlays.append(
+                                        hv.Text(row['Region'], y_pos, f"{int(row['Contribution'])}")
+                                            .opts(color='white', fontsize=10, text_align='center', text_baseline='middle')
+                                    )
+                                cumulative_height += row['Contribution']
+                        
+                        # Combine plot with text overlays
+                        if text_overlays:
+                            bands_plot = bands_plot * hv.Overlay(text_overlays)
+                        
+                        self.bands_plot_pane.object = bands_plot
+                    
+                except Exception as e:
+                    logger.error(f"Error loading price data: {e}")
+                    self.price_plot_pane.object = hv.Text(0.5, 0.5, f'Error: {str(e)}').opts(
+                        xlim=(0, 1), ylim=(0, 1), 
+                        bgcolor='#282a36', color='#ff5555', fontsize=14
+                    )
+                    # Clear statistics table with error message
+                    self.stats_pane.value = pd.DataFrame({'Error': [str(e)]})
+                    # Clear bands plot
+                    self.bands_plot_pane.object = hv.Text(0.5, 0.5, 'Error loading data').opts(
+                        xlim=(0, 1), ylim=(0, 1), 
+                        bgcolor='#282a36', color='#ff5555', fontsize=14
+                    )
+            
+            # Set up callbacks for UI updates only
+            date_presets.param.watch(update_date_range, 'value')
+            start_date_picker.param.watch(update_date_display, 'value')
+            end_date_picker.param.watch(update_date_display, 'value')
+            
+            # Set up button click handler
+            analyze_button.on_click(lambda event: load_and_plot_prices())
+            
+            # Don't load data automatically - wait for user to click button
+            
+            logger.info("Prices tab created successfully")
+            return prices_tab
+            
+        except Exception as e:
+            logger.error(f"Error creating prices tab: {e}")
+            return pn.pane.Markdown(f"**Error loading Prices tab:** {e}")
     
     def _create_price_analysis_tab(self):
         """Create price analysis tab"""

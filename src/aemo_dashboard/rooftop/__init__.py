@@ -1,0 +1,1 @@
+"""Rooftop solar data collection and processing module"""
