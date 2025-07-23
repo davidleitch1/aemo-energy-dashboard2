@@ -48,7 +48,8 @@
       "Bash(cd \"/Users/davidleitch/Library/Mobile Documents/com~apple~CloudDocs/snakeplay/AEMO_spot/aemo-energy-dashboard\")",
       "Bash(git commit -m \"Initial commit - fresh repository without history\")",
       "Bash(git pull:*)",
-      "Bash(timeout:*)"
+      "Bash(timeout:*)",
+      "Bash(uv sync:*)"
     ],
     "deny": []
   }

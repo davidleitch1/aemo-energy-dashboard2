@@ -2497,21 +2497,21 @@ class EnergyDashboard(param.Parameterized):
                 width=100
             )
             
-            # Date pickers instead of slider (like generation tab)
+            # Date pickers - simpler without start/end constraints that cause issues
+            # Use explicit date objects to avoid timezone issues
+            default_end = pd.Timestamp.now().date()
+            default_start = default_end - pd.Timedelta(days=30)
+            
             start_date_picker = pn.widgets.DatePicker(
                 name='Start Date',
-                value=end_date - pd.Timedelta(days=30),  # Default to 30 days ago
-                start=start_date,
-                end=end_date,
-                width=150
+                value=default_start,
+                width=120
             )
             
             end_date_picker = pn.widgets.DatePicker(
                 name='End Date',
-                value=end_date,
-                start=start_date,
-                end=end_date,
-                width=150
+                value=default_end,
+                width=120
             )
             
             # Show selected dates clearly
@@ -2544,8 +2544,15 @@ class EnergyDashboard(param.Parameterized):
             smoothing_selector = pn.widgets.Select(
                 name='Smoothing',
                 value='None',
-                options=['None', '7-period MA', '30-period MA', 'Exponential (α=0.3)'],
-                width=200
+                options=[
+                    'None',
+                    'LOESS (3 hours, frac=0.01)',  # For 5-minute data, ~36 points
+                    'LOESS (1 day, frac=0.02)',    # ~288 points for 5-min data
+                    'LOESS (7 days, frac=0.05)',
+                    'LOESS (30 days, frac=0.1)',
+                    'LOESS (90 days, frac=0.15)'
+                ],
+                width=250
             )
             
             # Add log scale checkbox
@@ -2574,6 +2581,12 @@ class EnergyDashboard(param.Parameterized):
                 bgcolor='#282a36',  # Dracula background
                 color='#f8f8f2',    # Dracula foreground
                 fontsize=16
+            )
+            
+            # Create statistics title pane
+            self.stats_title_pane = pn.pane.Markdown(
+                "### Price Statistics",
+                styles={'color': '#f8f8f2', 'background-color': '#282a36', 'padding': '10px'}
             )
             
             # Create statistics table pane
@@ -2613,6 +2626,12 @@ class EnergyDashboard(param.Parameterized):
                     }
                     .tabulator-col {
                         min-width: auto !important;  /* Allow columns to be more compact */
+                    }
+                    /* Make the first row (Mean) bold and highlighted */
+                    .tabulator-row:first-child .tabulator-cell {
+                        font-weight: bold;
+                        color: #50fa7b;  /* Green color for emphasis */
+                        background-color: #383a46;  /* Slightly different background */
                     }
                 """],
                 configuration={
@@ -2713,6 +2732,7 @@ class EnergyDashboard(param.Parameterized):
             # Top row: Statistics and Price Bands
             top_row = pn.Row(
                 pn.Column(
+                    self.stats_title_pane,
                     self.stats_pane,
                     sizing_mode='stretch_both'
                 ),
@@ -2762,22 +2782,24 @@ class EnergyDashboard(param.Parameterized):
             def update_date_range(event):
                 """Update date range based on preset selection"""
                 preset = event.new
+                # Use the current end_date_picker value as the reference point
+                current_end = end_date_picker.value
+                
                 if preset == '1 day':
-                    new_start = end_date - pd.Timedelta(days=1)
+                    new_start = current_end - pd.Timedelta(days=1)
                 elif preset == '7 days':
-                    new_start = end_date - pd.Timedelta(days=7)
+                    new_start = current_end - pd.Timedelta(days=7)
                 elif preset == '30 days':
-                    new_start = end_date - pd.Timedelta(days=30)
+                    new_start = current_end - pd.Timedelta(days=30)
                 elif preset == '90 days':
-                    new_start = end_date - pd.Timedelta(days=90)
+                    new_start = current_end - pd.Timedelta(days=90)
                 elif preset == '1 year':
-                    new_start = end_date - pd.Timedelta(days=365)
+                    new_start = current_end - pd.Timedelta(days=365)
                 else:  # All data
                     # Use the actual available data range from prices30.parquet
                     new_start = pd.Timestamp('2020-01-01').date()
                 
                 start_date_picker.value = new_start
-                end_date_picker.value = end_date
             
             # Set up callback for date picker changes
             def update_date_display(event):
@@ -2893,16 +2915,168 @@ class EnergyDashboard(param.Parameterized):
                             'RRP': 'mean'  # Keep original for reference
                         }).reset_index()
                     
-                    # Apply smoothing if selected
+                    # Keep a copy of the original data for statistics and other charts
+                    original_price_data = price_data.copy()
+                    
+                    # Apply smoothing if selected (only for time series plot)
                     if smoothing_selector.value != 'None':
                         for region in selected_regions:
                             region_mask = price_data['REGIONID'] == region
-                            if smoothing_selector.value == '7-period MA':
+                            if smoothing_selector.value == 'Moving Avg (7 periods)':
                                 price_data.loc[region_mask, y_col] = price_data.loc[region_mask, y_col].rolling(7, center=True).mean()
-                            elif smoothing_selector.value == '30-period MA':
+                            elif smoothing_selector.value == 'Moving Avg (30 periods)':
                                 price_data.loc[region_mask, y_col] = price_data.loc[region_mask, y_col].rolling(30, center=True).mean()
                             elif smoothing_selector.value == 'Exponential (α=0.3)':
                                 price_data.loc[region_mask, y_col] = price_data.loc[region_mask, y_col].ewm(alpha=0.3).mean()
+                            elif smoothing_selector.value.startswith('Savitzky-Golay'):
+                                # Import scipy for Savitzky-Golay filter
+                                from scipy.signal import savgol_filter
+                                
+                                # Calculate window size based on days and frequency
+                                # Extract days from the option string
+                                if '7 days' in smoothing_selector.value:
+                                    days = 7
+                                elif '30 days' in smoothing_selector.value:
+                                    days = 30
+                                elif '90 days' in smoothing_selector.value:
+                                    days = 90
+                                else:
+                                    days = 7  # Default
+                                
+                                # Calculate periods based on frequency
+                                freq = aggregate_selector.value
+                                if freq == '5 min':
+                                    periods_per_day = 24 * 12  # 288 periods
+                                elif freq == '1 hour':
+                                    periods_per_day = 24
+                                elif freq == 'Daily':
+                                    periods_per_day = 1
+                                elif freq == 'Monthly':
+                                    # For monthly, use days directly as window
+                                    window_size = min(days, 12)  # Cap at 12 months
+                                    poly_order = 3
+                                elif freq == 'Quarterly':
+                                    # For quarterly, use quarters
+                                    window_size = min(days // 30, 4)  # Approximate quarters
+                                    poly_order = 2  # Lower order for fewer points
+                                elif freq == 'Yearly':
+                                    # For yearly, very limited smoothing
+                                    window_size = 3  # Minimum for poly order 2
+                                    poly_order = 2
+                                else:
+                                    periods_per_day = 24  # Default to hourly
+                                
+                                # Calculate window size for sub-daily frequencies
+                                if freq in ['5 min', '1 hour', 'Daily']:
+                                    window_size = days * periods_per_day
+                                    poly_order = 3  # Cubic polynomial
+                                    
+                                    # Ensure window size is odd
+                                    if window_size % 2 == 0:
+                                        window_size += 1
+                                    
+                                    # Cap window size to be reasonable
+                                    max_window = min(len(price_data.loc[region_mask]) // 2, 2001)
+                                    window_size = min(window_size, max_window)
+                                    
+                                logger.info(f"Savitzky-Golay: {days} days at {freq} frequency = {window_size} periods (poly_order={poly_order})")
+                                
+                                # Apply Savitzky-Golay filter
+                                try:
+                                    # Get the region data
+                                    region_prices = price_data.loc[region_mask, y_col].values
+                                    
+                                    # Check if we have enough points for the window
+                                    if len(region_prices) >= window_size:
+                                        smoothed = savgol_filter(
+                                            region_prices,
+                                            window_size,
+                                            poly_order,
+                                            mode='nearest'  # Handle edges by extrapolating
+                                        )
+                                        price_data.loc[region_mask, y_col] = smoothed
+                                    else:
+                                        logger.warning(f"Not enough data points ({len(region_prices)}) for Savitzky-Golay window size {window_size}")
+                                except Exception as e:
+                                    logger.error(f"Error applying Savitzky-Golay filter: {e}")
+                                    # Fall back to original data if smoothing fails
+                                    pass
+                            elif smoothing_selector.value.startswith('LOESS'):
+                                # Import statsmodels for LOESS
+                                from statsmodels.nonparametric.smoothers_lowess import lowess
+                                
+                                # Extract parameters from the option string
+                                if '3 hours' in smoothing_selector.value:
+                                    time_desc = '3 hours'
+                                    frac = 0.01
+                                elif '1 day' in smoothing_selector.value:
+                                    time_desc = '1 day'
+                                    frac = 0.02
+                                elif '7 days' in smoothing_selector.value:
+                                    time_desc = '7 days'
+                                    frac = 0.05
+                                elif '30 days' in smoothing_selector.value:
+                                    time_desc = '30 days'
+                                    frac = 0.1
+                                elif '90 days' in smoothing_selector.value:
+                                    time_desc = '90 days'
+                                    frac = 0.15
+                                else:
+                                    time_desc = '30 days'  # Default
+                                    frac = 0.1
+                                
+                                logger.info(f"LOESS: {time_desc} with frac={frac} for region {region}")
+                                
+                                # Apply LOESS filter
+                                try:
+                                    # Get the region data
+                                    region_data = price_data.loc[region_mask].copy()
+                                    region_prices = region_data[y_col].values
+                                    
+                                    # Remove NaN values
+                                    valid_mask = ~np.isnan(region_prices)
+                                    if valid_mask.sum() == 0:
+                                        logger.warning(f"No valid data for LOESS in region {region}")
+                                        continue
+                                    
+                                    valid_prices = region_prices[valid_mask]
+                                    valid_indices = np.where(valid_mask)[0]
+                                    
+                                    # Check if we have enough points
+                                    min_points = max(3, int(frac * len(valid_prices)) + 1)
+                                    if len(valid_prices) >= min_points:
+                                        # Convert to numeric x values
+                                        x = np.arange(len(valid_prices))
+                                        
+                                        logger.info(f"Applying LOESS to {len(valid_prices)} valid points with frac={frac}")
+                                        
+                                        # Apply LOESS
+                                        smoothed_result = lowess(
+                                            valid_prices, 
+                                            x, 
+                                            frac=frac,
+                                            it=0,  # No robustness iterations for speed
+                                            delta=0.01 * len(valid_prices) if len(valid_prices) > 100 else 0  # Speed optimization for large data
+                                        )
+                                        
+                                        # Extract the smoothed y values
+                                        smoothed = smoothed_result[:, 1]
+                                        
+                                        # Put smoothed values back in the right places
+                                        smoothed_full = np.full_like(region_prices, np.nan)
+                                        smoothed_full[valid_mask] = smoothed
+                                        
+                                        # Update the data
+                                        price_data.loc[region_mask, y_col] = smoothed_full
+                                        logger.info(f"LOESS applied successfully to {region}, smoothed {len(valid_prices)} points")
+                                    else:
+                                        logger.warning(f"Not enough valid data points ({len(valid_prices)}) for LOESS with frac={frac} in region {region}")
+                                except Exception as e:
+                                    logger.error(f"Error applying LOESS filter for region {region}: {e}")
+                                    import traceback
+                                    logger.error(traceback.format_exc())
+                                    # Fall back to original data if smoothing fails
+                                    pass
                     
                     # Define Dracula theme colors for regions
                     region_colors = {
@@ -2913,6 +3087,27 @@ class EnergyDashboard(param.Parameterized):
                         'VIC1': '#bd93f9'   # Purple
                     }
                     
+                    # Format date range for title
+                    date_range_text = ""
+                    if date_presets.value == '1 day':
+                        date_range_text = "Last 24 hours"
+                    elif date_presets.value == '7 days':
+                        date_range_text = "Last 7 days"
+                    elif date_presets.value == '30 days':
+                        date_range_text = "Last 30 days"
+                    elif date_presets.value == '90 days':
+                        date_range_text = "Last 90 days"
+                    elif date_presets.value == '1 year':
+                        date_range_text = "Last year"
+                    elif date_presets.value == 'All data':
+                        date_range_text = "All available data"
+                    else:
+                        # Custom date range (including when date_presets.value is None)
+                        date_range_text = f"{start_date_picker.value.strftime('%Y-%m-%d')} to {end_date_picker.value.strftime('%Y-%m-%d')}"
+                    
+                    # Remove any NaN values that might cause rendering gaps
+                    price_data = price_data.dropna(subset=[y_col])
+                    
                     # Create hvplot
                     plot = price_data.hvplot.line(
                         x='SETTLEMENTDATE',
@@ -2922,7 +3117,7 @@ class EnergyDashboard(param.Parameterized):
                         height=400,
                         xlabel='Time',
                         ylabel=ylabel,
-                        title='Electricity Spot Prices by Region',
+                        title=f'Electricity Spot Prices by Region ({date_range_text})',
                         logy=use_log,
                         grid=True,
                         color=[region_colors.get(r, '#6272a4') for r in price_data['REGIONID'].unique()],
@@ -2937,29 +3132,49 @@ class EnergyDashboard(param.Parameterized):
                         tools=['hover', 'pan', 'wheel_zoom', 'box_zoom', 'reset', 'save']
                     )
                     
+                    # Add watermark text in bottom right
+                    # Get data ranges
+                    x_range = (price_data['SETTLEMENTDATE'].min(), price_data['SETTLEMENTDATE'].max())
+                    y_range = (price_data[y_col].min(), price_data[y_col].max())
+                    
+                    # Position at bottom right of the plot area
+                    x_pos = x_range[0] + 0.99 * (x_range[1] - x_range[0])
+                    # Position at the very bottom of the visible area
+                    y_pos = y_range[0] + 0.01 * (y_range[1] - y_range[0])
+                    
+                    # Create text annotation
+                    watermark = hv.Text(x_pos, y_pos, 'Design: ITK, Data: AEMO', 
+                                      fontsize=9, 
+                                      halign='right', 
+                                      valign='bottom'
+                                     ).opts(color='#6272a4')
+                    
+                    # Overlay watermark on plot
+                    plot = plot * watermark
+                    
                     self.price_plot_pane.object = plot
                     
-                    # Calculate statistics for each region
+                    # Calculate statistics for each region using ORIGINAL unsmoothed data
                     stats_list = []
                     for region in selected_regions:
-                        region_data = price_data[price_data['REGIONID'] == region]['RRP']
+                        region_data = original_price_data[original_price_data['REGIONID'] == region]['RRP']
                         stats = region_data.describe()
                         
                         # Add additional statistics (Mean first, no Variance)
                         stats_dict = {
-                            'Statistic': ['Mean', 'Count', 'Std Dev', 'Min', '25%', '50% (Median)', '75%', 'Max', 
-                                         '95%', 'CV %'],
+                            'Statistic': ['Mean', 'Variability', 'Std Dev', 'Max', 'Min', '25%', '50% (Median)', '75%', 
+                                         '95%', 'Count'],
                             region: [
                                 f"${stats['mean']:.0f}",
-                                f"{int(stats['count']):,}",
+                                f"{(stats['std'] / stats['mean'] * 100) if stats['mean'] != 0 else 0:.0f}%",
                                 f"${stats['std']:.0f}",
+                                f"${stats['max']:.0f}",
                                 f"${stats['min']:.0f}",
                                 f"${stats['25%']:.0f}",
                                 f"${stats['50%']:.0f}",
                                 f"${stats['75%']:.0f}",
-                                f"${stats['max']:.0f}",
                                 f"${region_data.quantile(0.95):.0f}",
-                                f"{(stats['std'] / stats['mean'] * 100) if stats['mean'] != 0 else 0:.0f}%"
+                                f"{int(stats['count']):,}"
                             ]
                         }
                         stats_list.append(pd.DataFrame(stats_dict))
@@ -2970,8 +3185,10 @@ class EnergyDashboard(param.Parameterized):
                         for df in stats_list[1:]:
                             stats_df = stats_df.merge(df, on='Statistic', how='outer')
                         
-                        # Don't set Statistic as index - keep it as a column for Tabulator
-                        # stats_df already has 'Statistic' as first column and regions as other columns
+                        # Ensure the rows are in the correct order with Mean first
+                        stat_order = ['Mean', 'Variability', 'Std Dev', 'Max', 'Min', '25%', '50% (Median)', '75%', '95%', 'Count']
+                        stats_df['Statistic'] = pd.Categorical(stats_df['Statistic'], categories=stat_order, ordered=True)
+                        stats_df = stats_df.sort_values('Statistic').reset_index(drop=True)
                         
                         # Update the statistics table
                         logger.info(f"Updating statistics table with {len(stats_df)} rows and {len(stats_df.columns)} columns")
@@ -2980,8 +3197,11 @@ class EnergyDashboard(param.Parameterized):
                         
                         # Update the Tabulator widget value
                         self.stats_pane.value = stats_df
+                        
+                        # Update statistics title
+                        self.stats_title_pane.object = f"### Price Statistics ({date_range_text})"
                     
-                    # Calculate price band contributions
+                    # Calculate price band contributions using ORIGINAL unsmoothed data
                     price_bands = [
                         ('Below $0', -float('inf'), 0),
                         ('$0-$50', 0, 50),
@@ -2994,7 +3214,7 @@ class EnergyDashboard(param.Parameterized):
                     band_contributions = []
                     
                     for region in selected_regions:
-                        region_data = price_data[price_data['REGIONID'] == region]['RRP']
+                        region_data = original_price_data[original_price_data['REGIONID'] == region]['RRP']
                         mean_price = region_data.mean()
                         
                         for band_name, low, high in price_bands:
@@ -3035,24 +3255,6 @@ class EnergyDashboard(param.Parameterized):
                         
                         # Sort by Price Band to ensure consistent ordering
                         bands_df = bands_df.sort_values(['Region', 'Price Band'])
-                        
-                        # Format date range for title
-                        date_range_text = ""
-                        if date_presets.value == '1 day':
-                            date_range_text = "Last 24 hours"
-                        elif date_presets.value == '7 days':
-                            date_range_text = "Last 7 days"
-                        elif date_presets.value == '30 days':
-                            date_range_text = "Last 30 days"
-                        elif date_presets.value == '90 days':
-                            date_range_text = "Last 90 days"
-                        elif date_presets.value == '1 year':
-                            date_range_text = "Last year"
-                        elif date_presets.value == 'All data':
-                            date_range_text = "All available data"
-                        else:
-                            # Custom date range
-                            date_range_text = f"{start_date_picker.value.strftime('%Y-%m-%d')} to {end_date_picker.value.strftime('%Y-%m-%d')}"
                         
                         # Create color list matching the band order
                         # Order is: Below $0, $0-$50, $51-$100, $101-$300, $301-$1000, Above $1000
@@ -3101,14 +3303,16 @@ class EnergyDashboard(param.Parameterized):
                         if text_overlays:
                             bands_plot = bands_plot * hv.Overlay(text_overlays)
                         
+                        # For bar charts, we'll add the watermark differently to avoid categorical x-axis issues
+                        # Just assign the plot without watermark for now
                         self.bands_plot_pane.object = bands_plot
                     
-                    # Create time-of-day analysis
+                    # Create time-of-day analysis using ORIGINAL unsmoothed data
                     # Extract hour from SETTLEMENTDATE
-                    price_data['Hour'] = pd.to_datetime(price_data['SETTLEMENTDATE']).dt.hour
+                    original_price_data['Hour'] = pd.to_datetime(original_price_data['SETTLEMENTDATE']).dt.hour
                     
                     # Calculate average price by hour for each region
-                    tod_data = price_data.groupby(['Hour', 'REGIONID'])['RRP'].mean().reset_index()
+                    tod_data = original_price_data.groupby(['Hour', 'REGIONID'])['RRP'].mean().reset_index()
                     tod_data.rename(columns={'RRP': 'Average Price'}, inplace=True)
                     
                     # Create time-of-day plot
@@ -3135,6 +3339,25 @@ class EnergyDashboard(param.Parameterized):
                         gridstyle={'grid_line_alpha': 0.3},
                         fontsize={'xlabel': 10, 'ylabel': 10, 'ticks': 9}
                     )
+                    
+                    # Add watermark text in bottom right
+                    # Get data ranges
+                    y_range = (tod_data['Average Price'].min(), tod_data['Average Price'].max())
+                    
+                    # Position at bottom right of the plot area
+                    x_pos = 23.5  # Very close to hour 24
+                    # Position at the very bottom of the visible area
+                    y_pos = y_range[0] + 0.01 * (y_range[1] - y_range[0])
+                    
+                    # Create text annotation
+                    tod_watermark = hv.Text(x_pos, y_pos, 'Design: ITK, Data: AEMO', 
+                                          fontsize=9, 
+                                          halign='right', 
+                                          valign='bottom'
+                                         ).opts(color='#6272a4')
+                    
+                    # Overlay watermark on plot
+                    tod_plot = tod_plot * tod_watermark
                     
                     self.tod_plot_pane.object = tod_plot
                     
