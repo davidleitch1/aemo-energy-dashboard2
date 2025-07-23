@@ -2523,11 +2523,12 @@ class EnergyDashboard(param.Parameterized):
             # Region checkbox group for multi-selection
             regions = ['NSW1', 'QLD1', 'SA1', 'TAS1', 'VIC1']
             region_selector = pn.widgets.CheckBoxGroup(
-                name='Select Regions to Compare',
+                name='',  # Remove name as we'll use column header
                 value=['NSW1', 'VIC1'],  # Default selection
                 options=regions,
                 inline=False,  # Vertical layout
-                width=250
+                align='start',  # Left align
+                margin=(0, 0, 0, 0)
             )
             
             # Aggregate level radio buttons (compact)
@@ -2583,8 +2584,8 @@ class EnergyDashboard(param.Parameterized):
             self.stats_pane = pn.widgets.Tabulator(
                 value=empty_stats_df,  # Use 'value' parameter explicitly
                 theme='fast',
-                layout='fit_columns',
-                height=300,
+                layout='fit_data_table',  # Changed to fit_data_table for more compact columns
+                height=420,  # Height for 10 rows (removed variance)
                 show_index=False,  # Changed to False for cleaner look
                 sizing_mode='stretch_width',
                 stylesheets=["""
@@ -2608,7 +2609,10 @@ class EnergyDashboard(param.Parameterized):
                         background-color: #44475a;
                     }
                     .tabulator-cell {
-                        padding: 8px;
+                        padding: 4px 8px;  /* Reduced vertical padding for more compact look */
+                    }
+                    .tabulator-col {
+                        min-width: auto !important;  /* Allow columns to be more compact */
                     }
                 """],
                 configuration={
@@ -2630,90 +2634,128 @@ class EnergyDashboard(param.Parameterized):
                 bgcolor='#282a36', color='#f8f8f2', fontsize=14
             )
             
-            # Layout the controls in columns
-            region_column = pn.Column(
-                "### Region",
-                region_selector,
-                width=150
+            # Create time-of-day price pattern pane
+            self.tod_plot_pane = pn.pane.HoloViews(
+                height=400,
+                sizing_mode='stretch_width'
+            )
+            # Initialize with instruction message
+            self.tod_plot_pane.object = hv.Text(0.5, 0.5, "Time of day analysis will appear here").opts(
+                xlim=(0, 1), ylim=(0, 1), 
+                bgcolor='#282a36', color='#f8f8f2', fontsize=14
             )
             
-            # Split dates into two sub-columns for better layout
-            date_presets_column = pn.Column(
-                "### Quick Select",
-                date_presets,
+            # Left column - all controls with compact layout
+            
+            # Row 1: Region and Frequency side by side
+            region_group = pn.Column(
+                "### Region",
+                region_selector,
+                align='start',  # Left align
                 width=120
             )
             
-            date_pickers_column = pn.Column(
-                "### Date Range",
-                start_date_picker,
-                end_date_picker,
-                date_display,
-                width=180
-            )
-            
-            frequency_column = pn.Column(
+            frequency_group = pn.Column(
                 "### Frequency",
                 aggregate_selector,
-                width=150
+                width=120
             )
             
-            smoothing_column = pn.Column(
+            top_controls = pn.Row(
+                region_group,
+                pn.Spacer(width=10),
+                frequency_group,
+                align='start'
+            )
+            
+            # Row 2: Date controls in one row
+            date_controls = pn.Row(
+                pn.Column(
+                    "Start Date",
+                    start_date_picker,
+                    width=100
+                ),
+                pn.Column(
+                    "End Date", 
+                    end_date_picker,
+                    width=100
+                ),
+                pn.Column(
+                    "Quick Select",
+                    date_presets,
+                    width=100
+                ),
+                align='start'
+            )
+            
+            # Combine all controls
+            controls_column = pn.Column(
+                "## Price Analysis Controls",
+                pn.Spacer(height=10),
+                top_controls,
+                pn.Spacer(height=15),
+                "### Date Range",
+                date_controls,
+                date_display,
+                pn.Spacer(height=15),
                 "### Smoothing",
                 smoothing_selector,
-                log_scale_checkbox,
                 pn.Spacer(height=10),
+                log_scale_checkbox,
+                pn.Spacer(height=15),
                 analyze_button,
-                width=200
+                width=350,  # Wider to accommodate side-by-side layout
+                margin=(0, 20, 0, 0),
+                align='start'
             )
             
-            # Horizontal layout of all controls
-            controls = pn.Column(
-                "## Price Analysis Controls",
-                pn.Row(
-                    region_column,
-                    pn.Spacer(width=20),
-                    frequency_column,
-                    pn.Spacer(width=20),
-                    date_presets_column,
-                    pn.Spacer(width=20),
-                    date_pickers_column,
-                    pn.Spacer(width=20),
-                    smoothing_column
+            # Right side - 2x2 grid layout
+            # Top row: Statistics and Price Bands
+            top_row = pn.Row(
+                pn.Column(
+                    self.stats_pane,
+                    sizing_mode='stretch_both'
+                ),
+                pn.Spacer(width=20),
+                pn.Column(
+                    self.bands_plot_pane,
+                    sizing_mode='stretch_both'
+                ),
+                sizing_mode='stretch_width',
+                height=400
+            )
+            
+            # Bottom row: Price Time Series and Time of Day Analysis
+            bottom_row = pn.Row(
+                pn.Column(
+                    "## Price Time Series",
+                    self.price_plot_pane,
+                    sizing_mode='stretch_both',
+                    width_policy='max'
+                ),
+                pn.Spacer(width=20),
+                pn.Column(
+                    "## Time of Day Pattern",
+                    self.tod_plot_pane,
+                    sizing_mode='stretch_width',
+                    width=400
                 ),
                 sizing_mode='stretch_width'
             )
             
-            # Main content area
-            main_content = pn.Column(
-                pn.Row(
-                    pn.Column(
-                        "## Price Time Series",
-                        self.price_plot_pane,
-                        sizing_mode='stretch_width'
-                    )
-                ),
+            # Right content area with 2x2 layout
+            content_area = pn.Column(
+                top_row,
                 pn.Spacer(height=20),
-                pn.Row(
-                    pn.Column(
-                        self.stats_pane,
-                        sizing_mode='stretch_width'
-                    ),
-                    pn.Spacer(width=20),
-                    pn.Column(
-                        self.bands_plot_pane,
-                        sizing_mode='stretch_width'
-                    )
-                ),
-                sizing_mode='stretch_width'
+                bottom_row,
+                sizing_mode='stretch_both'
             )
             
-            # Complete tab layout - vertical with controls on top
-            prices_tab = pn.Column(
-                controls,
-                pn.Spacer(height=20),
-                main_content,
-                sizing_mode='stretch_width'
+            # Complete tab layout - controls on left, content on right
+            prices_tab = pn.Row(
+                controls_column,
+                content_area,
+                sizing_mode='stretch_both'
             )
             
             # Set up callbacks for date presets
@@ -2766,6 +2808,11 @@ class EnergyDashboard(param.Parameterized):
                             xlim=(0, 1), ylim=(0, 1), 
                             bgcolor='#282a36', color='#ff5555', fontsize=14
                         )
+                        # Clear time-of-day plot
+                        self.tod_plot_pane.object = hv.Text(0.5, 0.5, 'Please select at least one region').opts(
+                            xlim=(0, 1), ylim=(0, 1), 
+                            bgcolor='#282a36', color='#ff5555', fontsize=14
+                        )
                         return
                     
                     # Import price adapter
@@ -2794,6 +2841,11 @@ class EnergyDashboard(param.Parameterized):
                         self.stats_pane.value = pd.DataFrame({'Message': ['No data available for selected period']})
                         # Clear bands plot
                         self.bands_plot_pane.object = hv.Text(0.5, 0.5, 'No data available').opts(
+                            xlim=(0, 1), ylim=(0, 1), 
+                            bgcolor='#282a36', color='#f8f8f2', fontsize=14
+                        )
+                        # Clear time-of-day plot
+                        self.tod_plot_pane.object = hv.Text(0.5, 0.5, 'No data available').opts(
                             xlim=(0, 1), ylim=(0, 1), 
                             bgcolor='#282a36', color='#f8f8f2', fontsize=14
                         )
@@ -2873,7 +2925,7 @@ class EnergyDashboard(param.Parameterized):
                         title='Electricity Spot Prices by Region',
                         logy=use_log,
                         grid=True,
-                        color=[region_colors.get(r, '#6272a4') for r in selected_regions],
+                        color=[region_colors.get(r, '#6272a4') for r in price_data['REGIONID'].unique()],
                         line_width=2,
                         hover=True,
                         hover_cols=['REGIONID', 'RRP'],  # Show original price in hover
@@ -2893,13 +2945,13 @@ class EnergyDashboard(param.Parameterized):
                         region_data = price_data[price_data['REGIONID'] == region]['RRP']
                         stats = region_data.describe()
                         
-                        # Add additional statistics
+                        # Add additional statistics (Mean first, no Variance)
                         stats_dict = {
-                            'Statistic': ['Count', 'Mean', 'Std Dev', 'Min', '25%', '50% (Median)', '75%', 'Max', 
-                                         '95%', 'Variance', 'CV %'],
+                            'Statistic': ['Mean', 'Count', 'Std Dev', 'Min', '25%', '50% (Median)', '75%', 'Max', 
+                                         '95%', 'CV %'],
                             region: [
-                                f"{int(stats['count']):,}",
                                 f"${stats['mean']:.0f}",
+                                f"{int(stats['count']):,}",
                                 f"${stats['std']:.0f}",
                                 f"${stats['min']:.0f}",
                                 f"${stats['25%']:.0f}",
@@ -2907,7 +2959,6 @@ class EnergyDashboard(param.Parameterized):
                                 f"${stats['75%']:.0f}",
                                 f"${stats['max']:.0f}",
                                 f"${region_data.quantile(0.95):.0f}",
-                                f"${region_data.var():.0f}",
                                 f"{(stats['std'] / stats['mean'] * 100) if stats['mean'] != 0 else 0:.0f}%"
                             ]
                         }
@@ -2976,6 +3027,15 @@ class EnergyDashboard(param.Parameterized):
                         # Create DataFrame for plotting
                         bands_df = pd.DataFrame(band_contributions)
                         
+                        # Define the order of price bands for consistent coloring
+                        band_order = ['Below $0', '$0-$50', '$51-$100', '$101-$300', '$301-$1000', 'Above $1000']
+                        
+                        # Convert Price Band to categorical with specified order
+                        bands_df['Price Band'] = pd.Categorical(bands_df['Price Band'], categories=band_order, ordered=True)
+                        
+                        # Sort by Price Band to ensure consistent ordering
+                        bands_df = bands_df.sort_values(['Region', 'Price Band'])
+                        
                         # Format date range for title
                         date_range_text = ""
                         if date_presets.value == '1 day':
@@ -2994,6 +3054,10 @@ class EnergyDashboard(param.Parameterized):
                             # Custom date range
                             date_range_text = f"{start_date_picker.value.strftime('%Y-%m-%d')} to {end_date_picker.value.strftime('%Y-%m-%d')}"
                         
+                        # Create color list matching the band order
+                        # Order is: Below $0, $0-$50, $51-$100, $101-$300, $301-$1000, Above $1000
+                        band_colors = ['#ff5555', '#8be9fd', '#50fa7b', '#ffb86c', '#bd93f9', '#ff79c6']
+                        
                         # Create stacked bar chart
                         bands_plot = bands_df.hvplot.bar(
                             x='Region',
@@ -3005,7 +3069,7 @@ class EnergyDashboard(param.Parameterized):
                             xlabel='Region',
                             ylabel='Contribution to Mean Price ($/MWh)',
                             title=f'Price Band Contribution to Mean Price ({date_range_text})',
-                            color=['#ff5555', '#50fa7b', '#8be9fd', '#ffb86c', '#bd93f9', '#ff79c6'],
+                            color=band_colors,
                             bgcolor='#282a36',
                             legend='top',
                             toolbar='above',
@@ -3039,9 +3103,45 @@ class EnergyDashboard(param.Parameterized):
                         
                         self.bands_plot_pane.object = bands_plot
                     
+                    # Create time-of-day analysis
+                    # Extract hour from SETTLEMENTDATE
+                    price_data['Hour'] = pd.to_datetime(price_data['SETTLEMENTDATE']).dt.hour
+                    
+                    # Calculate average price by hour for each region
+                    tod_data = price_data.groupby(['Hour', 'REGIONID'])['RRP'].mean().reset_index()
+                    tod_data.rename(columns={'RRP': 'Average Price'}, inplace=True)
+                    
+                    # Create time-of-day plot
+                    # Create color list for time-of-day chart
+                    tod_colors = [region_colors.get(r, '#6272a4') for r in tod_data['REGIONID'].unique()]
+                    
+                    tod_plot = tod_data.hvplot.line(
+                        x='Hour',
+                        y='Average Price',
+                        by='REGIONID',
+                        width=400,
+                        height=400,
+                        xlabel='Hour of Day',
+                        ylabel='Average Price ($/MWh)',
+                        title=f'Average Price by Hour ({date_range_text})',
+                        color=tod_colors,
+                        bgcolor='#282a36',
+                        legend='top_right',
+                        xticks=list(range(0, 24, 3)),  # Show every 3 hours
+                        toolbar='above',
+                        grid=True
+                    ).opts(
+                        show_grid=True,
+                        gridstyle={'grid_line_alpha': 0.3},
+                        fontsize={'xlabel': 10, 'ylabel': 10, 'ticks': 9}
+                    )
+                    
+                    self.tod_plot_pane.object = tod_plot
+                    
                 except Exception as e:
-                    logger.error(f"Error loading price data: {e}")
-                    self.price_plot_pane.object = hv.Text(0.5, 0.5, f'Error: {str(e)}').opts(
+                    logger.error(f"Error loading price data: {e}", exc_info=True)
+                    error_msg = f'Error: {str(e)}'
+                    self.price_plot_pane.object = hv.Text(0.5, 0.5, error_msg).opts(
                         xlim=(0, 1), ylim=(0, 1), 
                         bgcolor='#282a36', color='#ff5555', fontsize=14
                     )
@@ -3049,6 +3149,11 @@ class EnergyDashboard(param.Parameterized):
                     self.stats_pane.value = pd.DataFrame({'Error': [str(e)]})
                     # Clear bands plot
                     self.bands_plot_pane.object = hv.Text(0.5, 0.5, 'Error loading data').opts(
+                        xlim=(0, 1), ylim=(0, 1), 
+                        bgcolor='#282a36', color='#ff5555', fontsize=14
+                    )
+                    # Clear time-of-day plot
+                    self.tod_plot_pane.object = hv.Text(0.5, 0.5, 'Error loading data').opts(
                         xlim=(0, 1), ylim=(0, 1), 
                         bgcolor='#282a36', color='#ff5555', fontsize=14
                     )
