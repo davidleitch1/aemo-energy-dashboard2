@@ -286,7 +286,7 @@ def create_renewable_gauge_plotly(current_value, all_time_record=45.2, hour_reco
                 'bgcolor': "rgba(0,0,0,0)",  # Transparent background
                 'borderwidth': 0,
                 'threshold': {
-                    'line': {'color': "grey", 'width': 4},
+                    'line': {'color': "#5DCED0", 'width': 4},  # Light teal color
                     'thickness': 0.75,
                     'value': hour_record
                 }
@@ -323,12 +323,12 @@ def create_renewable_gauge_plotly(current_value, all_time_record=45.2, hour_reco
             font=dict(size=9, color="white")
         )
         
-        # Grey line and text (right side)
+        # Light teal line and text (right side)
         fig.add_shape(
             type="line",
             x0=0.55, y0=0.05,
             x1=0.60, y1=0.05,
-            line=dict(color="grey", width=4),
+            line=dict(color="#5DCED0", width=4),  # Light teal color
             xref="paper", yref="paper"
         )
         

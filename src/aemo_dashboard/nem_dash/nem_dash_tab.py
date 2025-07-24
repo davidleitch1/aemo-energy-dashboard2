@@ -8,6 +8,7 @@ from ..shared.logging_config import get_logger
 from .price_components import create_price_section, create_price_chart_component, create_price_table_component
 from .renewable_gauge import create_renewable_gauge_component
 from .generation_overview import create_generation_overview_component
+from .daily_summary import create_daily_summary_component
 
 # Custom CSS to remove chart borders
 CUSTOM_CSS = """
@@ -65,15 +66,16 @@ def create_nem_dash_tab(dashboard_instance=None):
         
         logger.info(f"Creating price components with date range: {start_date} to {end_date}")
         
-        # Create individual components for clean 2x2 grid layout
+        # Create individual components for clean 2x3 grid layout
         price_chart = create_price_chart_component(start_date, end_date)
         price_table = create_price_table_component(start_date, end_date)
         renewable_gauge = create_renewable_gauge_component(dashboard_instance)
         generation_overview = create_generation_overview_component(dashboard_instance)
+        daily_summary = create_daily_summary_component()
         
-        # Create the layout with two main plots side by side
+        # Create the layout with 2x3 grid
         # Top row: Price chart and Generation chart side by side
-        # Bottom row: Price table and Renewable gauge
+        # Bottom row: Price table, Renewable gauge, and Daily summary
         layout = pn.Column(
             # Top row: Two main charts side by side
             pn.Row(
@@ -82,10 +84,11 @@ def create_nem_dash_tab(dashboard_instance=None):
                 sizing_mode='stretch_width',
                 margin=(5, 5)
             ),
-            # Bottom row: Price table and gauge
+            # Bottom row: Price table, gauge, and daily summary
             pn.Row(
                 price_table,            # Price table (left)
-                renewable_gauge,        # Renewable gauge (right)
+                renewable_gauge,        # Renewable gauge (middle)
+                daily_summary,          # Daily summary (right)
                 sizing_mode='stretch_width',
                 margin=(5, 5)
             ),
