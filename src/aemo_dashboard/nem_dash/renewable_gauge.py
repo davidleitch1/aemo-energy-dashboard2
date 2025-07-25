@@ -21,7 +21,7 @@ logger = get_logger(__name__)
 query_manager = NEMDashQueryManager()
 
 # Renewable fuel types to include in calculation
-RENEWABLE_FUELS = ['Wind', 'Solar', 'Water', 'Rooftop Solar']
+RENEWABLE_FUELS = ['Wind', 'Solar', 'Water', 'Rooftop Solar', 'Hydro', 'Biomass']
 
 # File to store historical records
 RECORDS_FILE = Path(config.data_dir) / 'renewable_records.json'
