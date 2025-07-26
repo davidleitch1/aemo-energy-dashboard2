@@ -101,7 +101,8 @@ def create_generation_plot_cached(
     area_plot = area_plot.opts(
         show_grid=False,
         bgcolor='black',
-        xaxis=None
+        xaxis='bottom',  # Show x-axis for linking
+        xlabel='Time'
     )
     
     creation_time = time.time() - start_time
@@ -1467,7 +1468,8 @@ class EnergyDashboard(param.Parameterized):
                     title=f'Generation by Fuel Type - {self.region} ({time_range_display}) | data:AEMO, design ITK',
                     show_grid=False,
                     bgcolor='black',
-                    xaxis=None,  # Hide x-axis since price chart will show it
+                    xaxis='bottom',  # Show x-axis for linking
+                    xlabel='Time',
                     hooks=[self._get_datetime_formatter_hook()]
                 )
                 
@@ -1530,7 +1532,8 @@ class EnergyDashboard(param.Parameterized):
                     ).opts(
                         show_grid=False,
                         bgcolor='black',
-                        xaxis=None  # Hide x-axis since price chart will show it
+                        xaxis='bottom',  # Show x-axis for linking
+                        xlabel='Time'
                 )
             
             # Load and create price chart
@@ -1561,11 +1564,56 @@ class EnergyDashboard(param.Parameterized):
                 hooks=[self._get_datetime_formatter_hook()]
             )
             
-            # Stack the plots vertically using Layout (just generation + price)
-            # Disable shared_axes to prevent UFuncTypeError when switching tabs
+            # Always use two-plot approach with linked x-axes for better handling of negative values
+            logger.info("Using two-plot approach with linked x-axes")
+            # Add a hook to link x-axes after rendering
+            def link_x_ranges_hook(plot, element):
+                """Link x-ranges between plots after rendering"""
+                try:
+                    # Get the underlying bokeh figure
+                    if hasattr(plot, 'state') and hasattr(plot.state, 'x_range'):
+                        # Store reference to this plot's x_range for linking
+                        if not hasattr(link_x_ranges_hook, 'x_ranges'):
+                            link_x_ranges_hook.x_ranges = []
+                        link_x_ranges_hook.x_ranges.append(plot.state.x_range)
+                        
+                        # If we have two x_ranges, link them
+                        if len(link_x_ranges_hook.x_ranges) == 2:
+                            x_range1, x_range2 = link_x_ranges_hook.x_ranges
+                            
+                            # Create bidirectional links
+                            x_range1.js_link('start', x_range2, 'start')
+                            x_range1.js_link('end', x_range2, 'end')
+                            x_range2.js_link('start', x_range1, 'start')
+                            x_range2.js_link('end', x_range1, 'end')
+                            
+                            logger.info("Successfully linked x-axes between generation and price plots")
+                            # Reset for next use
+                            link_x_ranges_hook.x_ranges = []
+                except Exception as e:
+                    logger.error(f"Failed to link x-axes: {e}")
+            
+            # Reset the hook's state
+            if hasattr(link_x_ranges_hook, 'x_ranges'):
+                link_x_ranges_hook.x_ranges = []
+            
+            # Apply hooks to individual plots before combining
+            area_plot = area_plot.opts(
+                xaxis='bottom',  # Show x-axis on area plot
+                xlabel='Time',
+                hooks=[self._get_datetime_formatter_hook(), link_x_ranges_hook]
+            )
+            
+            price_plot = price_plot.opts(
+                xaxis='bottom',  # Ensure x-axis is visible
+                xlabel='Time',
+                hooks=[self._get_datetime_formatter_hook(), link_x_ranges_hook]
+            )
+            
+            # Create the stacked layout
             combined_layout = (area_plot + price_plot).cols(1).opts(
-                shared_axes=False,  # Disable to prevent UFuncTypeError
-                merge_tools=True   # Merge toolbars into a single toolbar
+                shared_axes=False,  # Keep false to prevent UFuncTypeError
+                merge_tools=False   # Keep tools separate so each plot has its own
             )
             
             self.last_update = datetime.now()
@@ -2214,6 +2262,35 @@ class EnergyDashboard(param.Parameterized):
                 )
         return formatter_hook
     
+    def _get_attribution_hook(self, align='right', offset=-5):
+        """Get a reusable attribution hook for hvplot charts
+        
+        Args:
+            align: Alignment of attribution text ('left', 'center', 'right')
+            offset: Vertical offset for the attribution text
+            
+        Returns:
+            Hook function that adds attribution to plot
+        """
+        def add_attribution(plot, element):
+            """Add attribution text to the plot after rendering"""
+            try:
+                from bokeh.models import Title
+                # Get the plot figure
+                p = plot.state
+                # Add attribution as a subtitle below the plot
+                attribution = Title(text='Design: ITK, Data: AEMO', 
+                                  text_font_size='9pt',
+                                  text_color='#6272a4',
+                                  align=align,
+                                  offset=offset)
+                # Add to below center
+                p.add_layout(attribution, 'below')
+            except Exception as e:
+                logger.debug(f"Could not add attribution: {e}")
+        
+        return add_attribution
+    
     def test_vol_price(self):
         """Test method to verify vol_price functionality"""
         try:
@@ -2379,7 +2456,8 @@ class EnergyDashboard(param.Parameterized):
                 ("Prices", pn.pane.HTML(loading_html)),  # Lazy - NEW
                 ("Pivot table", pn.pane.HTML(loading_html)),  # Lazy
                 ("Station Analysis", pn.pane.HTML(loading_html)),  # Lazy
-                ("Penetration", pn.pane.HTML(loading_html)),  # Lazy
+                ("Trends", pn.pane.HTML(loading_html)),  # Lazy
+                ("Insights", pn.pane.HTML(loading_html)),  # Lazy
                 dynamic=True,
                 closable=False,
                 sizing_mode='stretch_width'
@@ -2397,7 +2475,8 @@ class EnergyDashboard(param.Parameterized):
                 2: self._create_prices_tab,  # NEW
                 3: self._create_price_analysis_tab,  # Shifted from 2 to 3
                 4: self._create_station_analysis_tab,  # Shifted from 3 to 4
-                5: self._create_penetration_tab  # Shifted from 4 to 5
+                5: self._create_trends_tab,  # Shifted from 4 to 5
+                6: self._create_insights_tab  # NEW
             }
             
             # Watch for tab changes
@@ -2653,6 +2732,36 @@ class EnergyDashboard(param.Parameterized):
                 bgcolor='#282a36', color='#f8f8f2', fontsize=14
             )
             
+            # Create high price events table pane
+            self.high_price_events_pane = pn.widgets.Tabulator(
+                pd.DataFrame(),
+                show_index=False,
+                sizing_mode='stretch_both',
+                height=380,  # Increased height to use more space
+                theme='midnight',
+                configuration={
+                    'columnDefaults': {
+                        'headerSort': False,
+                        'cellVertAlign': 'middle'
+                    },
+                    'layout': 'fitColumns',
+                    'responsiveLayout': 'hide',
+                    'rowHeight': 20,  # Reduced row height
+                    'headerHeight': 25  # Reduced header height
+                },
+                stylesheets=["""
+                .tabulator {
+                    font-size: 11px !important;
+                }
+                .tabulator-header {
+                    font-size: 11px !important;
+                }
+                .tabulator-cell {
+                    padding: 2px 4px !important;
+                }
+                """]
+            )
+            
             # Create time-of-day price pattern pane
             self.tod_plot_pane = pn.pane.HoloViews(
                 height=400,
@@ -2729,17 +2838,25 @@ class EnergyDashboard(param.Parameterized):
             )
             
             # Right side - 2x2 grid layout
-            # Top row: Statistics and Price Bands
+            # Top row: Statistics, High Price Events, and Price Bands
             top_row = pn.Row(
                 pn.Column(
                     self.stats_title_pane,
                     self.stats_pane,
-                    sizing_mode='stretch_both'
+                    sizing_mode='stretch_both',
+                    width_policy='max'
+                ),
+                pn.Spacer(width=20),
+                pn.Column(
+                    self.high_price_events_pane,
+                    sizing_mode='stretch_both',
+                    width_policy='max'
                 ),
                 pn.Spacer(width=20),
                 pn.Column(
                     self.bands_plot_pane,
-                    sizing_mode='stretch_both'
+                    sizing_mode='stretch_both',
+                    width_policy='max'
                 ),
                 sizing_mode='stretch_width',
                 height=400
@@ -2825,6 +2942,8 @@ class EnergyDashboard(param.Parameterized):
                         )
                         # Clear statistics table
                         self.stats_pane.value = pd.DataFrame({'Message': ['Please select at least one region']})
+                        # Clear high price events table
+                        self.high_price_events_pane.value = pd.DataFrame({'Message': ['Please select at least one region']})
                         # Clear bands plot
                         self.bands_plot_pane.object = hv.Text(0.5, 0.5, 'Please select at least one region').opts(
                             xlim=(0, 1), ylim=(0, 1), 
@@ -2861,6 +2980,8 @@ class EnergyDashboard(param.Parameterized):
                         )
                         # Clear statistics table
                         self.stats_pane.value = pd.DataFrame({'Message': ['No data available for selected period']})
+                        # Clear high price events table
+                        self.high_price_events_pane.value = pd.DataFrame({'Message': ['No data available for selected period']})
                         # Clear bands plot
                         self.bands_plot_pane.object = hv.Text(0.5, 0.5, 'No data available').opts(
                             xlim=(0, 1), ylim=(0, 1), 
@@ -3119,7 +3240,7 @@ class EnergyDashboard(param.Parameterized):
                         ylabel=ylabel,
                         title=f'Electricity Spot Prices by Region ({date_range_text})',
                         logy=use_log,
-                        grid=True,
+                        grid=False,
                         color=[region_colors.get(r, '#6272a4') for r in price_data['REGIONID'].unique()],
                         line_width=2,
                         hover=True,
@@ -3132,25 +3253,8 @@ class EnergyDashboard(param.Parameterized):
                         tools=['hover', 'pan', 'wheel_zoom', 'box_zoom', 'reset', 'save']
                     )
                     
-                    # Add watermark text in bottom right
-                    # Get data ranges
-                    x_range = (price_data['SETTLEMENTDATE'].min(), price_data['SETTLEMENTDATE'].max())
-                    y_range = (price_data[y_col].min(), price_data[y_col].max())
-                    
-                    # Position at bottom right of the plot area
-                    x_pos = x_range[0] + 0.99 * (x_range[1] - x_range[0])
-                    # Position at the very bottom of the visible area
-                    y_pos = y_range[0] + 0.01 * (y_range[1] - y_range[0])
-                    
-                    # Create text annotation
-                    watermark = hv.Text(x_pos, y_pos, 'Design: ITK, Data: AEMO', 
-                                      fontsize=9, 
-                                      halign='right', 
-                                      valign='bottom'
-                                     ).opts(color='#6272a4')
-                    
-                    # Overlay watermark on plot
-                    plot = plot * watermark
+                    # Apply attribution hook to the plot
+                    plot = plot.opts(hooks=[self._get_attribution_hook()])
                     
                     self.price_plot_pane.object = plot
                     
@@ -3204,9 +3308,7 @@ class EnergyDashboard(param.Parameterized):
                     # Calculate price band contributions using ORIGINAL unsmoothed data
                     price_bands = [
                         ('Below $0', -float('inf'), 0),
-                        ('$0-$50', 0, 50),
-                        ('$51-$100', 51, 100),
-                        ('$101-$300', 101, 300),
+                        ('$0-$300', 0, 300),
                         ('$301-$1000', 301, 1000),
                         ('Above $1000', 1000, float('inf'))
                     ]
@@ -3248,7 +3350,7 @@ class EnergyDashboard(param.Parameterized):
                         bands_df = pd.DataFrame(band_contributions)
                         
                         # Define the order of price bands for consistent coloring
-                        band_order = ['Below $0', '$0-$50', '$51-$100', '$101-$300', '$301-$1000', 'Above $1000']
+                        band_order = ['Below $0', '$0-$300', '$301-$1000', 'Above $1000']
                         
                         # Convert Price Band to categorical with specified order
                         bands_df['Price Band'] = pd.Categorical(bands_df['Price Band'], categories=band_order, ordered=True)
@@ -3257,8 +3359,8 @@ class EnergyDashboard(param.Parameterized):
                         bands_df = bands_df.sort_values(['Region', 'Price Band'])
                         
                         # Create color list matching the band order
-                        # Order is: Below $0, $0-$50, $51-$100, $101-$300, $301-$1000, Above $1000
-                        band_colors = ['#ff5555', '#8be9fd', '#50fa7b', '#ffb86c', '#bd93f9', '#ff79c6']
+                        # Order is: Below $0, $0-$300, $301-$1000, Above $1000
+                        band_colors = ['#ff5555', '#50fa7b', '#ffb86c', '#ff79c6']
                         
                         # Create stacked bar chart
                         bands_plot = bands_df.hvplot.bar(
@@ -3268,7 +3370,7 @@ class EnergyDashboard(param.Parameterized):
                             stacked=True,
                             width=800,
                             height=400,
-                            xlabel='Region',
+                            xlabel='',  # Remove x-axis label
                             ylabel='Contribution to Mean Price ($/MWh)',
                             title=f'Price Band Contribution to Mean Price ({date_range_text})',
                             color=band_colors,
@@ -3278,24 +3380,22 @@ class EnergyDashboard(param.Parameterized):
                             hover_cols=['Percentage', 'Band Average']
                         ).opts(
                             xrotation=0,
-                            show_grid=True,
-                            gridstyle={'grid_line_alpha': 0.3}
+                            show_grid=False
                         )
                         
                         # Add labels to the bars
-                        # Create text overlay for each contribution
                         text_overlays = []
                         for region in selected_regions:
                             region_bands = bands_df[bands_df['Region'] == region]
                             cumulative_height = 0
                             
                             for _, row in region_bands.iterrows():
-                                if row['Contribution'] > 5:  # Only show label if contribution is significant
+                                if row['Contribution'] > 3:  # Lower threshold for showing labels
                                     # Position text at the middle of this band's contribution
                                     y_pos = cumulative_height + row['Contribution'] / 2
                                     text_overlays.append(
-                                        hv.Text(row['Region'], y_pos, f"{int(row['Contribution'])}")
-                                            .opts(color='white', fontsize=10, text_align='center', text_baseline='middle')
+                                        hv.Text(row['Region'], y_pos, f"${int(row['Contribution'])}")
+                                            .opts(color='white', fontsize=8, text_align='center', text_baseline='middle')
                                     )
                                 cumulative_height += row['Contribution']
                         
@@ -3303,8 +3403,63 @@ class EnergyDashboard(param.Parameterized):
                         if text_overlays:
                             bands_plot = bands_plot * hv.Overlay(text_overlays)
                         
-                        # For bar charts, we'll add the watermark differently to avoid categorical x-axis issues
-                        # Just assign the plot without watermark for now
+                        # Create high price events table
+                        high_price_rows = []
+                        
+                        # Calculate mean price for each region to compute contribution percentages
+                        region_means = {}
+                        for region in selected_regions:
+                            region_data = original_price_data[original_price_data['REGIONID'] == region]['RRP']
+                            region_means[region] = region_data.mean()
+                        
+                        for _, row in bands_df.iterrows():
+                            # Include negative prices, high price bands, or any band < 5% of time
+                            if row['Price Band'] in ['Below $0', '$301-$1000', 'Above $1000'] or row['Percentage'] < 5:
+                                # Calculate percentage contribution to mean
+                                mean_price = region_means[row['Region']]
+                                pct_contribution = (row['Contribution'] / mean_price) * 100 if mean_price > 0 else 0
+                                
+                                high_price_rows.append({
+                                    'Region': row['Region'],
+                                    'Price Band': row['Price Band'],
+                                    '% of Time': f"{row['Percentage']:.1f}%",
+                                    'Avg Price': f"${row['Band Average']:.0f}",
+                                    'Contribution': f"${row['Contribution']:.1f}",
+                                    '% Contribution': f"{pct_contribution:.1f}%"
+                                })
+                        
+                        # Update high price events table
+                        if high_price_rows:
+                            high_price_df = pd.DataFrame(high_price_rows)
+                            # Sort by Region and Price Band for better grouping
+                            high_price_df = high_price_df.sort_values(['Region', 'Price Band'])
+                            
+                            # Create a modified display where region only appears once per group
+                            # Add a display column that blanks out repeated regions
+                            high_price_df['_Region'] = high_price_df['Region']
+                            prev_region = None
+                            for idx in high_price_df.index:
+                                if high_price_df.loc[idx, 'Region'] == prev_region:
+                                    high_price_df.loc[idx, '_Region'] = ''
+                                else:
+                                    prev_region = high_price_df.loc[idx, 'Region']
+                            
+                            # Reorder columns with the display region first
+                            high_price_df = high_price_df[['_Region', 'Price Band', '% of Time', 'Avg Price', 
+                                                         'Contribution', '% Contribution']]
+                            # Rename the display column
+                            high_price_df = high_price_df.rename(columns={'_Region': 'Region'})
+                            
+                            self.high_price_events_pane.value = high_price_df
+                        else:
+                            self.high_price_events_pane.value = pd.DataFrame({'Info': ['No high price events in selected period']})
+                        
+                        # Update plot options with attribution hook
+                        bands_plot = bands_plot.opts(
+                            padding=(0.1, 0.1),  # Add padding to make room for attribution
+                            hooks=[self._get_attribution_hook()]  # Use reusable attribution method
+                        )
+                        
                         self.bands_plot_pane.object = bands_plot
                     
                     # Create time-of-day analysis using ORIGINAL unsmoothed data
@@ -3333,31 +3488,14 @@ class EnergyDashboard(param.Parameterized):
                         legend='top_right',
                         xticks=list(range(0, 24, 3)),  # Show every 3 hours
                         toolbar='above',
-                        grid=True
+                        grid=False
                     ).opts(
-                        show_grid=True,
-                        gridstyle={'grid_line_alpha': 0.3},
+                        show_grid=False,
                         fontsize={'xlabel': 10, 'ylabel': 10, 'ticks': 9}
                     )
                     
-                    # Add watermark text in bottom right
-                    # Get data ranges
-                    y_range = (tod_data['Average Price'].min(), tod_data['Average Price'].max())
-                    
-                    # Position at bottom right of the plot area
-                    x_pos = 23.5  # Very close to hour 24
-                    # Position at the very bottom of the visible area
-                    y_pos = y_range[0] + 0.01 * (y_range[1] - y_range[0])
-                    
-                    # Create text annotation
-                    tod_watermark = hv.Text(x_pos, y_pos, 'Design: ITK, Data: AEMO', 
-                                          fontsize=9, 
-                                          halign='right', 
-                                          valign='bottom'
-                                         ).opts(color='#6272a4')
-                    
-                    # Overlay watermark on plot
-                    tod_plot = tod_plot * tod_watermark
+                    # Apply attribution hook to the plot
+                    tod_plot = tod_plot.opts(hooks=[self._get_attribution_hook()])
                     
                     self.tod_plot_pane.object = tod_plot
                     
@@ -3370,6 +3508,8 @@ class EnergyDashboard(param.Parameterized):
                     )
                     # Clear statistics table with error message
                     self.stats_pane.value = pd.DataFrame({'Error': [str(e)]})
+                    # Clear high price events table
+                    self.high_price_events_pane.value = pd.DataFrame({'Error': [str(e)]})
                     # Clear bands plot
                     self.bands_plot_pane.object = hv.Text(0.5, 0.5, 'Error loading data').opts(
                         xlim=(0, 1), ylim=(0, 1), 
@@ -3420,19 +3560,36 @@ class EnergyDashboard(param.Parameterized):
             logger.error(f"Error creating station analysis tab: {e}")
             return pn.pane.Markdown(f"**Error loading Station Analysis:** {e}")
     
-    def _create_penetration_tab(self):
-        """Create penetration tab"""
+    def _create_trends_tab(self):
+        """Create trends tab"""
         try:
-            logger.info("Creating penetration tab...")
+            logger.info("Creating trends tab...")
             from aemo_dashboard.penetration import PenetrationTab
-            penetration_instance = PenetrationTab()
-            penetration_tab = penetration_instance.create_layout()
-            logger.info("Penetration tab created successfully")
-            return penetration_tab
+            trends_instance = PenetrationTab()
+            trends_tab = trends_instance.create_layout()
+            logger.info("Trends tab created successfully")
+            return trends_tab
         except Exception as e:
-            logger.error(f"Error creating penetration tab: {e}")
+            logger.error(f"Error creating trends tab: {e}")
             return pn.Column(
-                pn.pane.Markdown("# Penetration Analysis"),
+                pn.pane.Markdown("# Trends Analysis"),
+                pn.pane.Markdown(f"**Error loading tab:** {e}"),
+                sizing_mode='stretch_width'
+            )
+    
+    def _create_insights_tab(self):
+        """Create insights tab"""
+        try:
+            logger.info("Creating insights tab...")
+            from aemo_dashboard.insights import InsightsTab
+            insights_instance = InsightsTab()
+            insights_tab = insights_instance.create_layout()
+            logger.info("Insights tab created successfully")
+            return insights_tab
+        except Exception as e:
+            logger.error(f"Error creating insights tab: {e}")
+            return pn.Column(
+                pn.pane.Markdown("# Insights"),
                 pn.pane.Markdown(f"**Error loading tab:** {e}"),
                 sizing_mode='stretch_width'
             )
