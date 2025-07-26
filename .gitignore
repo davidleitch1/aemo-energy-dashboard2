@@ -100,3 +100,10 @@ site/
 .env*
 !.env.example
 !.env.sample
+
+# Production-specific gauge files
+gauge_production.env
+deploy_gauge_simple.sh
+deploy_gauge_with_alerts.sh
+standalone_renewable_gauge_with_alerts.py
+test_gauge_data.py
