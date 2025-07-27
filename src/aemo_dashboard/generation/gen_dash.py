@@ -2891,12 +2891,14 @@ class EnergyDashboard(param.Parameterized):
             self.high_price_events_pane = pn.widgets.Tabulator(
                 pd.DataFrame(),
                 show_index=False,
-                sizing_mode='stretch_both',
+                sizing_mode='fixed',
+                width=550,  # Fixed width to show all columns
                 height=380,  # Increased height to use more space
                 theme='midnight',
                 configuration={
                     'columnDefaults': {
                         'headerSort': False,
+                        'resizable': True,
                         'cellVertAlign': 'middle'
                     },
                     'layout': 'fitColumns',
@@ -2993,26 +2995,34 @@ class EnergyDashboard(param.Parameterized):
             )
             
             # Right side - 2x2 grid layout
-            # Top row: Statistics, High Price Events, and Price Bands
-            top_row = pn.Row(
-                pn.Column(
-                    self.stats_title_pane,
-                    self.stats_pane,
-                    sizing_mode='stretch_both',
-                    width_policy='max'
-                ),
-                pn.Spacer(width=20),
-                pn.Column(
-                    self.high_price_events_pane,
-                    width=300,
-                    height=400,
+            # Top row: Statistics and High Price Events on left, Price Bands on right
+            # Split into two sub-columns to give bands plot more space
+            top_left = pn.Column(
+                pn.Row(
+                    pn.Column(
+                        self.stats_title_pane,
+                        self.stats_pane,
+                        sizing_mode='stretch_both',
+                        max_width=250
+                    ),
+                    pn.Spacer(width=10),
+                    pn.Column(
+                        self.high_price_events_pane,
+                        width=550,  # Fixed width to show all columns
+                        height=400
+                    ),
                     sizing_mode='fixed'
                 ),
+                sizing_mode='fixed'
+            )
+            
+            top_row = pn.Row(
+                top_left,
                 pn.Spacer(width=20),
                 pn.Column(
                     self.bands_plot_pane,
                     sizing_mode='stretch_both',
-                    width_policy='max'
+                    min_width=600  # Ensure bands plot has adequate width
                 ),
                 sizing_mode='stretch_width',
                 height=400
@@ -3597,6 +3607,24 @@ class EnergyDashboard(param.Parameterized):
                             region_data = original_price_data[original_price_data['REGIONID'] == region]['RRP']
                             region_means[region] = region_data.mean()
                         
+                        # Calculate total hours in the period for revenue calculation
+                        # Determine if we're using 5-minute or 30-minute data
+                        total_periods = len(original_price_data[original_price_data['REGIONID'] == selected_regions[0]])
+                        if total_periods > 0:
+                            # Check time difference between first two periods to determine resolution
+                            sorted_times = original_price_data[original_price_data['REGIONID'] == selected_regions[0]]['SETTLEMENTDATE'].sort_values()
+                            if len(sorted_times) > 1:
+                                time_diff = pd.to_datetime(sorted_times.iloc[1]) - pd.to_datetime(sorted_times.iloc[0])
+                                minutes_per_period = time_diff.total_seconds() / 60
+                                periods_per_hour = 60 / minutes_per_period
+                            else:
+                                # Default to 30-minute periods if can't determine
+                                periods_per_hour = 2
+                        else:
+                            periods_per_hour = 2
+                        
+                        total_hours = total_periods / periods_per_hour
+                        
                         for _, row in bands_df.iterrows():
                             # Include negative prices, high price bands, or any band < 5% of time
                             if row['Price Band'] in ['Below $0', '$301-$1000', 'Above $1000'] or row['Percentage'] < 5:
@@ -3604,11 +3632,26 @@ class EnergyDashboard(param.Parameterized):
                                 mean_price = region_means[row['Region']]
                                 pct_contribution = (row['Contribution'] / mean_price) * 100 if mean_price > 0 else 0
                                 
+                                # Calculate revenue in this band
+                                # Revenue = Average Price ($/MWh) * Time in band (hours) * Average demand (MW)
+                                # Using approximate average demand of 1500 MW per region
+                                # This correctly handles both 5-min and 30-min data by converting periods to hours
+                                hours_in_band = (row['Percentage'] / 100) * total_hours
+                                avg_demand_mw = 1500  # Average regional demand in MW
+                                revenue_millions = (row['Band Average'] * hours_in_band * avg_demand_mw) / 1_000_000
+                                
+                                # Format revenue as $Xbn or $Xm
+                                if revenue_millions >= 1000:
+                                    revenue_str = f"${revenue_millions/1000:.1f}bn"
+                                else:
+                                    revenue_str = f"${revenue_millions:.0f}m"
+                                
                                 high_price_rows.append({
                                     'Region': row['Region'],
                                     'Price Band': row['Price Band'],
                                     '% of Time': f"{row['Percentage']:.1f}%",
                                     'Avg Price': f"${row['Band Average']:.0f}",
+                                    'Revenue': revenue_str,
                                     'Contribution': f"${row['Contribution']:.1f}",
                                     '% Contribution': f"{pct_contribution:.1f}%"
                                 })
@@ -3631,7 +3674,7 @@ class EnergyDashboard(param.Parameterized):
                             
                             # Reorder columns with the display region first
                             high_price_df = high_price_df[['_Region', 'Price Band', '% of Time', 'Avg Price', 
-                                                         'Contribution', '% Contribution']]
+                                                         'Revenue', 'Contribution', '% Contribution']]
                             # Rename the display column
                             high_price_df = high_price_df.rename(columns={'_Region': 'Region'})
                             
