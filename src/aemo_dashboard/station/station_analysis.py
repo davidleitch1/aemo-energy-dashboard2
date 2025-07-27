@@ -285,7 +285,9 @@ class StationAnalysisMotor:
             
             # Basic metrics
             total_generation_mwh = data['scadavalue'].sum() * interval_hours
+            total_generation_gwh = total_generation_mwh / 1000  # Convert to GWh
             total_revenue = data['revenue_5min'].sum()
+            total_revenue_millions = total_revenue / 1_000_000  # Convert to millions
             avg_price = (data['scadavalue'] * data['price']).sum() / data['scadavalue'].sum() if data['scadavalue'].sum() > 0 else 0
             
             # Capacity and utilization
@@ -293,33 +295,61 @@ class StationAnalysisMotor:
             
             # Time-based calculations
             date_range = data['settlementdate'].max() - data['settlementdate'].min()
-            hours_in_period = date_range.total_seconds() / 3600
+            hours_in_period = date_range.total_seconds() / 3600 + interval_hours  # Add one interval for inclusive range
             
+            # For capacity factor, annualize if period is not exactly one year
             if capacity_mw > 0 and hours_in_period > 0:
+                # Calculate actual capacity factor for the period
                 capacity_factor = (total_generation_mwh / (capacity_mw * hours_in_period)) * 100
+                
+                # For annualized capacity factor (for comparison purposes)
+                # This represents what the CF would be if this pattern continued for a full year
+                annualized_capacity_factor = capacity_factor  # Already a percentage, no need to adjust
             else:
                 capacity_factor = 0
+                annualized_capacity_factor = 0
+            
+            # Get owner information
+            owner = data['owner'].iloc[0] if 'owner' in data.columns and not data['owner'].isna().all() else 'Unknown'
             
             # Generation statistics
             intervals_generating = (data['scadavalue'] > 0).sum()
             total_intervals = len(data)
             generation_availability = (intervals_generating / total_intervals * 100) if total_intervals > 0 else 0
             
+            # Peak generation
+            peak_generation = data['scadavalue'].max()
+            
+            # Operating hours (when generation > 0)
+            operating_hours = intervals_generating * interval_hours
+            
             metrics = {
+                # Primary metrics for the table
+                'total_generation_gwh': round(total_generation_gwh, 1),
+                'total_revenue_millions': round(total_revenue_millions, 1),
+                'average_price': round(avg_price, 2),
+                'capacity_factor': round(capacity_factor, 1),
+                'annualized_capacity_factor': round(annualized_capacity_factor, 1),
+                'capacity_mw': round(capacity_mw, 1),
+                'owner': owner,
+                
+                # Additional metrics (kept for compatibility)
                 'total_generation_mwh': round(total_generation_mwh, 2),
                 'total_revenue': round(total_revenue, 2),
                 'avg_generation_mw': round(data['scadavalue'].mean(), 2),
                 'max_generation_mw': round(data['scadavalue'].max(), 2),
+                'peak_generation': round(peak_generation, 1),
                 'min_generation_mw': round(data['scadavalue'].min(), 2),
                 'std_generation_mw': round(data['scadavalue'].std(), 2),
                 'avg_price_per_mwh': round(avg_price, 2),
-                'capacity_mw': round(capacity_mw, 1),
                 'capacity_factor_pct': round(capacity_factor, 1),
                 'generation_availability_pct': round(generation_availability, 1),
+                'operating_hours': round(operating_hours, 1),
                 'data_start': data['settlementdate'].min().strftime('%Y-%m-%d %H:%M'),
                 'data_end': data['settlementdate'].max().strftime('%Y-%m-%d %H:%M'),
                 'intervals': total_intervals,
-                'intervals_generating': intervals_generating
+                'intervals_generating': intervals_generating,
+                'hours_in_period': round(hours_in_period, 1)
             }
             
             logger.info(f"Calculated performance metrics: {list(metrics.keys())}")

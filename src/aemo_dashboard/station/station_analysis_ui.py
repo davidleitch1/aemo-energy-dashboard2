@@ -323,7 +323,7 @@ class StationAnalysisUI(param.Parameterized):
                 value="Individual Units",
                 button_type="primary",
                 button_style="outline",
-                width=250
+                width=300
             )
             self.mode_toggle.param.watch(self._on_mode_change, 'value')
             
@@ -337,7 +337,7 @@ class StationAnalysisUI(param.Parameterized):
                 name="",
                 options=station_options,
                 value='Select a station...',
-                width=260
+                width=310
             )
             
             # Bind station selection to reactive parameter
@@ -347,7 +347,7 @@ class StationAnalysisUI(param.Parameterized):
             self.search_input = pn.widgets.TextInput(
                 name="",
                 placeholder="Search by Name/DUID...",
-                width=260
+                width=310
             )
             
             # Bind search input to reactive parameter  
@@ -380,14 +380,37 @@ class StationAnalysisUI(param.Parameterized):
             # Preset buttons using RadioBoxGroup for more compact display
             self.preset_buttons = pn.widgets.RadioBoxGroup(
                 name="Days",
-                options=["1", "7", "30", "All"],
+                options=["1", "7", "30", "365", "All"],
                 value="7",
                 inline=True,  # Horizontal layout
-                width=200
+                width=300  # Increased width to accommodate new option
             )
             
             # Connect preset buttons to reactive updates  
             self.preset_buttons.param.watch(self._on_preset_change, 'value')
+            
+            # Smoothing selector
+            self.smoothing_selector = pn.widgets.Select(
+                name="",
+                value='None',
+                options=[
+                    'None',
+                    'Moving Avg (7 periods)',
+                    'Moving Avg (30 periods)',
+                    'Exponential (α=0.3)',
+                    'LOESS (3 hours, frac=0.01)',
+                    'LOESS (1 day, frac=0.02)',
+                    'LOESS (7 days, frac=0.05)',
+                    'LOESS (30 days, frac=0.1)',
+                    'LOESS (90 days, frac=0.15)',
+                    'EWM (7 days, fast response)',
+                    'EWM (14 days, balanced)',
+                    'EWM (30 days, smooth)',
+                    'EWM (60 days, very smooth)'
+                ],
+                width=310
+            )
+            self.smoothing_selector.param.watch(self._on_smoothing_change, 'value')
             
             # Create search card with simplified, cleaner layout
             search_card = pn.Column(
@@ -402,8 +425,11 @@ class StationAnalysisUI(param.Parameterized):
                 ),
                 pn.pane.HTML("<div style='color: #aaa; font-size: 11px; margin: 8px 0 2px 0;'>Days</div>"),
                 self.preset_buttons,
+                pn.Spacer(height=12),
+                pn.pane.HTML("<div style='color: #aaa; font-size: 11px; margin: 8px 0 2px 0;'>Smoothing</div>"),
+                self.smoothing_selector,
                 css_classes=['material-card'],
-                width=280,  # Reduced to give more space to chart
+                width=330,  # Increased width for better layout
                 styles={'background-color': '#1e1e1e', 'border-radius': '8px', 'padding': '14px'}
             )
             
@@ -562,6 +588,8 @@ class StationAnalysisUI(param.Parameterized):
                 start_date = end_date - timedelta(days=7)
             elif preset == "30":
                 start_date = end_date - timedelta(days=30)
+            elif preset == "365":
+                start_date = end_date - timedelta(days=365)
             elif preset == "All":
                 # Use earliest available data (matches dashboard range)
                 start_date = datetime(2020, 1, 1).date()
@@ -584,6 +612,19 @@ class StationAnalysisUI(param.Parameterized):
                 
         except Exception as e:
             logger.error(f"Error handling preset change: {e}")
+    
+    def _on_smoothing_change(self, event):
+        """Handle smoothing selector change"""
+        try:
+            smoothing_type = event.new
+            logger.info(f"Smoothing changed to: {smoothing_type}")
+            
+            # Update analysis if we have a selected station or DUID
+            if self.selected_duid or self.selected_station_duids:
+                self._update_station_analysis()
+                
+        except Exception as e:
+            logger.error(f"Error handling smoothing change: {e}")
     
     def _refresh_station_options(self):
         """Refresh station selector options based on current analysis mode"""
@@ -769,6 +810,45 @@ class StationAnalysisUI(param.Parameterized):
             logger.info(f"Chart data shape: {chart_data.shape}")
             logger.info(f"Chart data columns: {list(chart_data.columns)}")
             
+            # Apply smoothing if selected
+            if hasattr(self, 'smoothing_selector') and self.smoothing_selector.value != 'None':
+                try:
+                    logger.info(f"Applying smoothing: {self.smoothing_selector.value}")
+                    # Import the main dashboard module to access the smoothing method
+                    from ..generation.gen_dash import EnergyDashboard
+                    
+                    # Create a temporary instance to access the method
+                    temp_dash = EnergyDashboard()
+                    
+                    # Store original data for comparison
+                    original_gen = chart_data['scadavalue'].copy()
+                    original_price = chart_data['price'].copy()
+                    
+                    # Apply smoothing to both price and generation data
+                    chart_data = temp_dash._apply_smoothing(
+                        chart_data, 
+                        self.smoothing_selector.value, 
+                        'scadavalue'
+                    )
+                    chart_data = temp_dash._apply_smoothing(
+                        chart_data, 
+                        self.smoothing_selector.value, 
+                        'price'
+                    )
+                    
+                    # Check if smoothing actually changed the data
+                    gen_changed = not chart_data['scadavalue'].equals(original_gen)
+                    price_changed = not chart_data['price'].equals(original_price)
+                    
+                    logger.info(f"Applied {self.smoothing_selector.value} smoothing - Generation changed: {gen_changed}, Price changed: {price_changed}")
+                except Exception as e:
+                    logger.error(f"Error applying smoothing: {e}")
+                    import traceback
+                    logger.error(f"Smoothing traceback: {traceback.format_exc()}")
+                    # Continue with unsmoothed data
+            else:
+                logger.info(f"No smoothing applied. Has selector: {hasattr(self, 'smoothing_selector')}, Value: {getattr(self, 'smoothing_selector', None) and self.smoothing_selector.value}")
+            
             # Use Bokeh directly for proper dual-axis control
             from bokeh.plotting import figure
             from bokeh.models import LinearAxis, Range1d
@@ -833,6 +913,15 @@ class StationAnalysisUI(param.Parameterized):
             p.legend.location = "top_left"
             p.legend.click_policy = "hide"
             p.xaxis.axis_label = 'Time'
+            
+            # Add attribution
+            from bokeh.models import Title
+            attribution = Title(text='Design: ITK, Data: AEMO', 
+                              text_font_size='9pt',
+                              text_color='#6272a4',
+                              align='right',
+                              offset=-5)
+            p.add_layout(attribution, 'below')
             
             return pn.pane.Bokeh(p, sizing_mode='stretch_width', height=500)
             
@@ -915,6 +1004,15 @@ class StationAnalysisUI(param.Parameterized):
             p.xaxis.axis_label = 'Hour of Day'
             p.xaxis.ticker = list(range(0, 24, 3))  # Show every 3 hours
             
+            # Add attribution
+            from bokeh.models import Title
+            attribution = Title(text='Design: ITK, Data: AEMO', 
+                              text_font_size='9pt',
+                              text_color='#6272a4',
+                              align='right',
+                              offset=-5)
+            p.add_layout(attribution, 'below')
+            
             return pn.pane.Bokeh(p, sizing_mode='stretch_width', height=500)
             
         except Exception as e:
@@ -929,26 +1027,60 @@ class StationAnalysisUI(param.Parameterized):
             if not metrics:
                 return pn.pane.Markdown("No performance metrics available.")
             
-            # Format metrics for display
+            # Format metrics for display - in specific order requested
             summary_data = []
             
+            # Generation total (GWh or TWh if > 1000 GWh)
             if 'total_generation_gwh' in metrics:
-                summary_data.append(['Total Generation', f"{metrics['total_generation_gwh']:.1f} GWh"])
+                gen_gwh = metrics['total_generation_gwh']
+                if gen_gwh >= 1000:
+                    gen_twh = gen_gwh / 1000
+                    summary_data.append(['Generation Total', f"{gen_twh:.1f} TWh"])
+                else:
+                    summary_data.append(['Generation Total', f"{gen_gwh:.1f} GWh"])
             
+            # Revenue $m or $bn if > $1000M
             if 'total_revenue_millions' in metrics:
-                summary_data.append(['Total Revenue', f"${metrics['total_revenue_millions']:.1f}M"])
+                rev_m = metrics['total_revenue_millions']
+                if rev_m >= 1000:
+                    rev_b = rev_m / 1000
+                    summary_data.append(['Revenue', f"${rev_b:.1f}bn"])
+                else:
+                    summary_data.append(['Revenue', f"${rev_m:.1f}M"])
                 
+            # Average price to nearest dollar
             if 'average_price' in metrics:
-                summary_data.append(['Average Price', f"${metrics['average_price']:.2f}/MWh"])
+                summary_data.append(['Average Price', f"${metrics['average_price']:.0f}/MWh"])
                 
-            if 'capacity_factor' in metrics:
-                summary_data.append(['Capacity Factor', f"{metrics['capacity_factor']:.1f}%"])
+            # Average output in MW
+            if 'avg_generation_mw' in metrics:
+                summary_data.append(['Average Output', f"{metrics['avg_generation_mw']:.0f} MW"])
                 
-            if 'peak_generation' in metrics:
-                summary_data.append(['Peak Generation', f"{metrics['peak_generation']:.1f} MW"])
+            # Capacity utilization (use annualized for periods != 1 year) - to nearest percent
+            if 'capacity_factor' in metrics and 'hours_in_period' in metrics:
+                # Determine if we should show annualized or actual
+                hours = metrics.get('hours_in_period', 0)
+                # Check if period is close to a year (8760 hours ± 24 hours)
+                is_annual = abs(hours - 8760) < 24
                 
-            if 'operating_hours' in metrics:
-                summary_data.append(['Operating Hours', f"{metrics['operating_hours']:.1f} hours"])
+                if is_annual or hours > 8760:
+                    # For annual or multi-year periods, show actual capacity factor
+                    cf_value = metrics['capacity_factor']
+                    cf_label = 'Capacity Utilization'
+                else:
+                    # For shorter periods, show annualized to make it comparable
+                    cf_value = metrics.get('annualized_capacity_factor', metrics['capacity_factor'])
+                    cf_label = 'Capacity Utilization*'
+                    
+                summary_data.append([cf_label, f"{cf_value:.0f}%"])
+                
+            # Capacity
+            if 'capacity_mw' in metrics:
+                summary_data.append(['Capacity', f"{metrics['capacity_mw']:.0f} MW"])
+                
+            # Owner
+            if 'owner' in metrics:
+                summary_data.append(['Owner', metrics['owner']])
             
             # Create DataFrame for tabulator
             summary_df = pd.DataFrame(summary_data, columns=['Metric', 'Value'])
@@ -959,12 +1091,34 @@ class StationAnalysisUI(param.Parameterized):
                 pagination='remote',
                 page_size=10,
                 width=250,  # Reduced width to give more space to chart
-                height=250,  # Reduced height for more compact appearance
+                height=280,  # Increased height to show all 7 rows without scrolling
                 theme='midnight',  # Dark theme
                 show_index=False  # Remove index column
             )
             
-            return summary_table
+            # Check if we need to add a footnote for annualized capacity utilization
+            needs_footnote = False
+            if 'hours_in_period' in metrics:
+                hours = metrics.get('hours_in_period', 0)
+                is_annual = abs(hours - 8760) < 24
+                if not is_annual and hours < 8760:
+                    needs_footnote = True
+            
+            if needs_footnote:
+                # Return table with footnote
+                return pn.Column(
+                    summary_table,
+                    pn.pane.HTML(
+                        "<div style='font-size: 10px; color: #888; margin-top: 5px;'>"
+                        "* Annualized for comparison"
+                        "</div>",
+                        width=250
+                    ),
+                    sizing_mode='fixed',
+                    width=250
+                )
+            else:
+                return summary_table
             
         except Exception as e:
             logger.error(f"Error creating summary statistics: {e}")
