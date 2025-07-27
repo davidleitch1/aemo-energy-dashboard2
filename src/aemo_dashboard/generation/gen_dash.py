@@ -2291,6 +2291,157 @@ class EnergyDashboard(param.Parameterized):
         
         return add_attribution
     
+    def _apply_smoothing(self, data, smoothing_type, column_name, group_column=None):
+        """Apply smoothing to data with various algorithms
+        
+        Args:
+            data: DataFrame containing the data to smooth
+            smoothing_type: String describing the smoothing method
+            column_name: Name of column to smooth
+            group_column: Optional column name to group by (e.g., 'REGIONID', 'duid')
+            
+        Returns:
+            DataFrame with smoothed values in the specified column
+        """
+        import numpy as np
+        
+        # Create a copy to avoid modifying original
+        smoothed_data = data.copy()
+        
+        if smoothing_type == 'None':
+            return smoothed_data
+            
+        # Define groups to smooth
+        if group_column and group_column in smoothed_data.columns:
+            groups = smoothed_data[group_column].unique()
+        else:
+            groups = [None]  # Treat entire dataset as one group
+            
+        for group in groups:
+            if group is not None:
+                mask = smoothed_data[group_column] == group
+            else:
+                mask = np.ones(len(smoothed_data), dtype=bool)
+                
+            group_data = smoothed_data.loc[mask, column_name]
+            
+            try:
+                if smoothing_type == 'Moving Avg (7 periods)':
+                    smoothed_values = group_data.rolling(7, center=True).mean()
+                elif smoothing_type == 'Moving Avg (30 periods)':
+                    smoothed_values = group_data.rolling(30, center=True).mean()
+                elif smoothing_type == 'Exponential (α=0.3)':
+                    smoothed_values = group_data.ewm(alpha=0.3).mean()
+                    
+                elif smoothing_type.startswith('LOESS'):
+                    from statsmodels.nonparametric.smoothers_lowess import lowess
+                    
+                    # Extract parameters from the option string
+                    if '3 hours' in smoothing_type:
+                        frac = 0.01
+                    elif '1 day' in smoothing_type:
+                        frac = 0.02
+                    elif '7 days' in smoothing_type:
+                        frac = 0.05
+                    elif '30 days' in smoothing_type:
+                        frac = 0.1
+                    elif '90 days' in smoothing_type:
+                        frac = 0.15
+                    else:
+                        frac = 0.1  # Default
+                    
+                    # Get valid data points
+                    valid_mask = ~group_data.isna()
+                    if valid_mask.sum() == 0:
+                        continue
+                        
+                    valid_data = group_data[valid_mask].values
+                    valid_indices = np.where(valid_mask)[0]
+                    
+                    # Check if we have enough points
+                    min_points = max(3, int(frac * len(valid_data)) + 1)
+                    if len(valid_data) >= min_points:
+                        # Convert to numeric x values
+                        x = np.arange(len(valid_data))
+                        
+                        # Apply LOESS
+                        smoothed_result = lowess(
+                            valid_data, 
+                            x, 
+                            frac=frac,
+                            it=0,  # No robustness iterations for speed
+                            delta=0.01 * len(valid_data) if len(valid_data) > 100 else 0
+                        )
+                        
+                        # Extract smoothed values
+                        smoothed_vals = smoothed_result[:, 1]
+                        
+                        # Put smoothed values back in the right places
+                        smoothed_values = pd.Series(index=group_data.index, dtype=float)
+                        smoothed_values.iloc[valid_indices] = smoothed_vals
+                    else:
+                        logger.warning(f"Not enough data points for LOESS smoothing")
+                        smoothed_values = group_data
+                        
+                elif smoothing_type.startswith('EWM'):
+                    # Exponentially Weighted Moving Average
+                    
+                    # Extract span from the option string
+                    if '7 days' in smoothing_type:
+                        # For high-frequency data (5-min or 30-min)
+                        if hasattr(data, 'index') and len(data) > 1:
+                            time_diff = (data.index[1] - data.index[0]).total_seconds() / 60
+                            if time_diff <= 10:  # 5-minute data
+                                span = 7 * 24 * 12  # 7 days * 288 periods/day
+                            else:  # 30-minute data
+                                span = 7 * 24 * 2   # 7 days * 48 periods/day
+                        else:
+                            span = 336  # Default to 30-min
+                    elif '14 days' in smoothing_type:
+                        if hasattr(data, 'index') and len(data) > 1:
+                            time_diff = (data.index[1] - data.index[0]).total_seconds() / 60
+                            if time_diff <= 10:  # 5-minute data
+                                span = 14 * 24 * 12
+                            else:  # 30-minute data
+                                span = 14 * 24 * 2
+                        else:
+                            span = 672
+                    elif '30 days' in smoothing_type:
+                        if hasattr(data, 'index') and len(data) > 1:
+                            time_diff = (data.index[1] - data.index[0]).total_seconds() / 60
+                            if time_diff <= 10:  # 5-minute data
+                                span = 30 * 24 * 12
+                            else:  # 30-minute data
+                                span = 30 * 24 * 2
+                        else:
+                            span = 1440
+                    elif '60 days' in smoothing_type:
+                        if hasattr(data, 'index') and len(data) > 1:
+                            time_diff = (data.index[1] - data.index[0]).total_seconds() / 60
+                            if time_diff <= 10:  # 5-minute data
+                                span = 60 * 24 * 12
+                            else:  # 30-minute data
+                                span = 60 * 24 * 2
+                        else:
+                            span = 2880
+                    else:
+                        span = 336  # Default to 7 days
+                    
+                    # Apply EWM
+                    smoothed_values = group_data.ewm(span=span, adjust=False).mean()
+                else:
+                    # Unknown smoothing type, return original
+                    smoothed_values = group_data
+                    
+                # Apply the smoothed values back to the dataframe
+                smoothed_data.loc[mask, column_name] = smoothed_values
+                
+            except Exception as e:
+                logger.error(f"Error applying {smoothing_type} smoothing: {e}")
+                # Keep original values on error
+                
+        return smoothed_data
+    
     def test_vol_price(self):
         """Test method to verify vol_price functionality"""
         try:
@@ -2629,7 +2780,11 @@ class EnergyDashboard(param.Parameterized):
                     'LOESS (1 day, frac=0.02)',    # ~288 points for 5-min data
                     'LOESS (7 days, frac=0.05)',
                     'LOESS (30 days, frac=0.1)',
-                    'LOESS (90 days, frac=0.15)'
+                    'LOESS (90 days, frac=0.15)',
+                    'EWM (7 days, fast response)',
+                    'EWM (14 days, balanced)',
+                    'EWM (30 days, smooth)',
+                    'EWM (60 days, very smooth)'
                 ],
                 width=250
             )
@@ -2849,8 +3004,9 @@ class EnergyDashboard(param.Parameterized):
                 pn.Spacer(width=20),
                 pn.Column(
                     self.high_price_events_pane,
-                    sizing_mode='stretch_both',
-                    width_policy='max'
+                    width=300,
+                    height=400,
+                    sizing_mode='fixed'
                 ),
                 pn.Spacer(width=20),
                 pn.Column(
@@ -3362,42 +3518,71 @@ class EnergyDashboard(param.Parameterized):
                         # Order is: Below $0, $0-$300, $301-$1000, Above $1000
                         band_colors = ['#ff5555', '#50fa7b', '#ffb86c', '#ff79c6']
                         
-                        # Create stacked bar chart
-                        bands_plot = bands_df.hvplot.bar(
-                            x='Region',
-                            y='Contribution',
+                        # Create data for dual bar chart - price contribution and time percentage
+                        # Reshape data to show both metrics
+                        contrib_df = bands_df[['Region', 'Price Band', 'Contribution']].copy()
+                        contrib_df['Metric'] = 'Price ($/MWh)'
+                        contrib_df['Value'] = contrib_df['Contribution']
+                        
+                        percent_df = bands_df[['Region', 'Price Band', 'Percentage']].copy()
+                        percent_df['Metric'] = 'Time (%)'
+                        percent_df['Value'] = percent_df['Percentage']
+                        
+                        # Combine the dataframes
+                        combined_df = pd.concat([contrib_df[['Region', 'Price Band', 'Metric', 'Value']], 
+                                               percent_df[['Region', 'Price Band', 'Metric', 'Value']]])
+                        
+                        # Create combined region-metric label for x-axis
+                        combined_df['Region_Metric'] = combined_df['Region'] + '\n' + combined_df['Metric']
+                        
+                        # Create stacked bar chart with both metrics
+                        bands_plot = combined_df.hvplot.bar(
+                            x='Region_Metric',
+                            y='Value',
                             by='Price Band',
                             stacked=True,
-                            width=800,
+                            responsive=True,  # Use responsive sizing instead of fixed width
                             height=400,
-                            xlabel='',  # Remove x-axis label
-                            ylabel='Contribution to Mean Price ($/MWh)',
-                            title=f'Price Band Contribution to Mean Price ({date_range_text})',
+                            xlabel='',
+                            ylabel='',
+                            title=f'Price Band Contribution ($/MWh) and Time Distribution (%) ({date_range_text})',
                             color=band_colors,
                             bgcolor='#282a36',
                             legend='top',
-                            toolbar='above',
-                            hover_cols=['Percentage', 'Band Average']
+                            toolbar='above'
                         ).opts(
                             xrotation=0,
-                            show_grid=False
+                            show_grid=False,
+                            fontsize={'ticks': 8}
                         )
                         
                         # Add labels to the bars
                         text_overlays = []
-                        for region in selected_regions:
-                            region_bands = bands_df[bands_df['Region'] == region]
+                        for region_metric in combined_df['Region_Metric'].unique():
+                            metric_bands = combined_df[combined_df['Region_Metric'] == region_metric]
                             cumulative_height = 0
                             
-                            for _, row in region_bands.iterrows():
-                                if row['Contribution'] > 3:  # Lower threshold for showing labels
+                            for _, row in metric_bands.iterrows():
+                                # Format label based on metric type
+                                if 'Price' in row['Metric']:
+                                    label = f"${int(row['Value'])}"
+                                    threshold = 3  # Show price labels > $3
+                                else:
+                                    # For percentages, show with appropriate precision
+                                    if row['Value'] < 1:
+                                        label = f"{row['Value']:.2f}%"
+                                    else:
+                                        label = f"{row['Value']:.0f}%"
+                                    threshold = 5  # Show percentage labels > 5%
+                                
+                                if row['Value'] > threshold:
                                     # Position text at the middle of this band's contribution
-                                    y_pos = cumulative_height + row['Contribution'] / 2
+                                    y_pos = cumulative_height + row['Value'] / 2
                                     text_overlays.append(
-                                        hv.Text(row['Region'], y_pos, f"${int(row['Contribution'])}")
-                                            .opts(color='white', fontsize=8, text_align='center', text_baseline='middle')
+                                        hv.Text(row['Region_Metric'], y_pos, label)
+                                            .opts(color='white', fontsize=7, text_align='center', text_baseline='middle')
                                     )
-                                cumulative_height += row['Contribution']
+                                cumulative_height += row['Value']
                         
                         # Combine plot with text overlays
                         if text_overlays:
