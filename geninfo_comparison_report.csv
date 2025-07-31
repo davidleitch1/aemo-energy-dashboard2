@@ -1,0 +1,510 @@
+DUID,Pickle_Site_Name,Excel_Site_Name,Pickle_Region,Excel_Region,Pickle_Owner,Excel_Owner,Pickle_Capacity_MW,Excel_Capacity_MW,Pickle_Storage_MWh,Excel_Storage_MWh,Pickle_Fuel,Excel_Fuel,Differences
+ADPBA1,Adelaide Desalination Plant,Adelaide Desalination Plant,SA1,SA1,South Australian Water Corporation,South Australian Water Corporation,7.76,7.76,12.6,12.6,Battery Storage,Other - Other,Fuel
+ADPPV1,Adelaide Desalination Plant,Adelaide Desalination Plant,SA1,SA1,South Australian Water Corporation,South Australian Water Corporation,11.0,2.75,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+ADPPV2,Adelaide Desalination Plant,Adelaide Desalination Plant,SA1,SA1,South Australian Water Corporation,South Australian Water Corporation,13.75,2.75,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+ADPPV3,Adelaide Desalination Plant,Adelaide Desalination Plant,SA1,SA1,South Australian Water Corporation,South Australian Water Corporation,0.02,0.02,0.0,,Solar,Solar - Solar,Fuel
+ADVMH1,Adelaide Desalination Plant,Adelaide Desalination Plant,SA1,SA1,South Australian Water Corporation,South Australian Water Corporation,1.0,1.0,0.0,,Water,Hydro - Water,Fuel
+AGLHAL,Hallett GT,Hallett GT,SA1,SA1,EnergyAustralia Hallett Pty Ltd,EnergyAustralia Hallett Pty Ltd,276.86,17.0,0.0,,OCGT,Fossil - Natural Gas Pipeline,"Capacity(MW), Fuel"
+AGLSOM,Somerton,Somerton,VIC1,VIC1,AGL Hydro partnership,AGL Hydro partnership,170.0,42.5,0.0,,OCGT,Fossil - Natural Gas Pipeline,"Capacity(MW), Fuel"
+ALDGASF1,Aldoga Solar Farm,Aldoga Solar Farm,QLD1,QLD1,Acciona Energy Australia Global Pty Ltd,Acciona Energy Australia Global Pty Ltd,387.01,2.47,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+ANGAST1,Angaston,Angaston,SA1,SA1,Snowy Hydro Ltd,Snowy Hydro Ltd,46.2,15.4,0.0,,Other,Fossil - Diesel,"Capacity(MW), Fuel"
+APPIN,Appin,Appin,NSW1,NSW1,EDL CSM NSW Pty Ltd,EDL CSM NSW Pty Ltd,55.62,1.03,0.0,,Gas other,Fossil - Waste Coal Mine Gas,"Capacity(MW), Fuel"
+ARWF1,Ararat Wind Farm,Ararat Wind Farm,VIC1,VIC1,Ararat Wind Farm Pty Ltd,Ararat Wind Farm Pty Ltd,240.0,3.2,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+AVLSF1,Avonlie Solar Farm,Avonlie Solar Farm,NSW1,NSW1,Iberdrola Australia Limited,Iberdrola Australia Limited,254.1,3.63,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+BAKING1,Baking Board Solar Farm Chinchilla,Baking Board Solar Farm Chinchilla,QLD1,QLD1,Chinchilla Solar Pty Ltd,Chinchilla Solar Pty Ltd,14.7,14.7,0.0,,Solar,Solar - Solar,Fuel
+BALB1,Ballarat Energy Storage System,Ballarat Energy Storage System,VIC1,VIC1,Ausnet Transmission Group Pty Ltd,Ausnet Transmission Group Pty Ltd,30.0,30.0,30.0,30.0,Battery Storage,Other - Other,Fuel
+BALDHWF1,Bald Hills Wind Farm,Bald Hills Wind Farm,VIC1,VIC1,Bald Hills Wind Farm Pty Ltd,Bald Hills Wind Farm Pty Ltd,106.6,2.05,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+BANGOWF1,Bango 973 Wind Farm,Bango 973 Wind Farm,NSW1,NSW1,BWF Nominees Pty Ltd as trustee for the BWF Trust,BWF Nominees Pty Ltd as trustee for the BWF Trust,159.0,5.3,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+BANGOWF2,Bango 999 Wind Farm,Bango 999 Wind Farm,NSW1,NSW1,BWF Nominees Pty Ltd as trustee for the BWF Trust,BWF Nominees Pty Ltd as trustee for the BWF Trust,84.8,5.3,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+BANN1,Bannerton Solar Park,Bannerton Solar Park,VIC1,VIC1,Foresight Solar Australia Pty Ltd,Foresight Solar Australia Pty Ltd,100.0,2.5,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+BAPS,Banimboola,Banimboola,VIC1,VIC1,AGL Hydro Partnership,AGL Hydro Partnership,12.2,2.2,0.0,,Water,Hydro - Water,"Capacity(MW), Fuel"
+BARCALDN,Barcaldine Power Station,Barcaldine Power Station,QLD1,QLD1,Ergon Energy Queensland Pty Ltd,Ergon Energy Queensland Pty Ltd,37.0,37.0,0.0,,OCGT,Fossil - Natural Gas Pipeline,Fuel
+BARCSF1,Barcaldine Remote Community Solar Farm,Barcaldine Remote Community Solar Farm,QLD1,QLD1,Barcaldine Remote Community Solar Farm Pty Ltd,Barcaldine Remote Community Solar Farm Pty Ltd,20.0,20.0,0.0,,Solar,Solar - Solar,Fuel
+BARKIPS1,Barker Inlet Power Station,Barker Inlet Power Station,SA1,SA1,AGL Barker Inlet Pty Ltd,AGL Barker Inlet Pty Ltd,210.0,17.5,0.0,,Gas other,Fossil - Natural Gas Pipeline,"Capacity(MW), Fuel"
+BARRON-1,Barron Gorge,Barron Gorge,QLD1,QLD1,CleanCo Queensland Limited,CleanCo Queensland Limited,35.0,35.0,0.0,,Water,Hydro - Water,Fuel
+BARRON-2,Barron Gorge,Barron Gorge,QLD1,QLD1,CleanCo Queensland Limited,CleanCo Queensland Limited,35.0,35.0,0.0,,Water,Hydro - Water,Fuel
+BASTYAN,Bastyan,Bastyan,TAS1,TAS1,Hydro-Electric Corporation,Hydro-Electric Corporation,79.9,79.9,0.0,,Water,Hydro - Water,Fuel
+BBASEHOS,Ballarat Base Hospital Plant,Ballarat Base Hospital Plant,VIC1,VIC1,Ballarat Health Services,Ballarat Health Services,1.6,0.8,0.0,,Other,Fossil - Diesel,"Capacity(MW), Fuel"
+BBATTERY1,Bouldercombe Battery project,Bouldercombe Battery project,QLD1,QLD1,Genex Power Limited,Genex Power Limited,50.0,1.25,100.0,100.0,Battery Storage,Other - Other,"Capacity(MW), Fuel"
+BBTHREE1,Bell Bay Three,Bell Bay Three,TAS1,TAS1,AETV Pty Ltd,AETV Pty Ltd,40.0,40.0,0.0,,OCGT,Fossil - Natural Gas Pipeline,Fuel
+BBTHREE2,Bell Bay Three,Bell Bay Three,TAS1,TAS1,AETV Pty Ltd,AETV Pty Ltd,40.0,40.0,0.0,,OCGT,Fossil - Natural Gas Pipeline,Fuel
+BBTHREE3,Bell Bay Three,Bell Bay Three,TAS1,TAS1,AETV Pty Ltd,AETV Pty Ltd,40.0,40.0,0.0,,OCGT,Fossil - Natural Gas Pipeline,Fuel
+BDL01,Bairnsdale,Bairnsdale,VIC1,VIC1,Alinta DEBO,Alinta DEBO,47.0,47.0,0.0,,OCGT,Fossil - Natural Gas Pipeline,Fuel
+BDL02,Bairnsdale,Bairnsdale,VIC1,VIC1,Alinta DEBO,Alinta DEBO,47.0,47.0,0.0,,OCGT,Fossil - Natural Gas Pipeline,Fuel
+BDONGHYD,Burrendong,Burrendong,NSW1,NSW1,AGL Hydro Partnership,AGL Hydro Partnership,19.0,19.0,0.0,,Water,Hydro - Water,Fuel
+BEER01,Baranduda Electrical Energy Reserve,Baranduda Electrical Energy Reserve,VIC1,VIC1, Birdwood Energy Reserve Pty Ltd (ACN 658 507 441) as Trustee for Birdwood Energy Reserve Trust, Birdwood Energy Reserve Pty Ltd (ACN 658 507 441) as Trustee for Birdwood Energy Reserve Trust,544.36,4.39,1800.0,1800.0,Battery Storage,Other - Other,"Capacity(MW), Fuel"
+BERYLSF1,Beryl Solar Farm,Beryl Solar Farm,NSW1,NSW1,FS NSW Project No 1 AT Pty Ltd as trustee of FS NSW Project No 1 Asset Trust,FS NSW Project No 1 AT Pty Ltd as trustee of FS NSW Project No 1 Asset Trust,98.4,1.64,0.0,0.0,Solar,Solar - Solar,"Capacity(MW), Fuel"
+BHB1,Broken Hill,Broken Hill,NSW1,NSW1,MACQGEN,MACQGEN,50.0,50.0,50.0,50.0,Battery Storage,Other - Other,Fuel
+BIRKBESS,Birkins Solar Farm - Storage - KCI,Birkins Solar Farm - Storage - KCI,VIC1,VIC1, FRV Services Australia Pty Ltd, FRV Services Australia Pty Ltd,199.5,3.5,400.0,400.0,Battery Storage,Solar - Solar,"Capacity(MW), Fuel"
+BLOWERNG,Blowering,Blowering,NSW1,NSW1,Snowy Hydro Ltd,Snowy Hydro Ltd,80.0,80.0,0.0,,Water,Hydro - Water,Fuel
+BLUEGSF1,Bluegrass Solar Farm,Bluegrass Solar Farm,QLD1,QLD1,X-Elio Australia Pty Ltd,X-Elio Australia Pty Ltd,148.0,148.0,0.0,,Solar,Solar - Solar,Fuel
+BLUFF1,Hallett 5 The Bluff WF,Hallett 5 The Bluff WF,SA1,SA1,Eurus Energy,Eurus Energy,52.5,2.1,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+BLYTHB1,Blyth BESS,Blyth BESS,SA1,SA1,Blyth Battery P/L as trustee for Blyth Battery Trust,Blyth Battery P/L as trustee for Blyth Battery Trust,200.0,3.13,400.0,400.0,Battery Storage,Other - Other,"Capacity(MW), Fuel"
+BNGSF1,Bungala One Solar Farm,Bungala One Solar Farm,SA1,SA1,Bungala One Operations Pty Ltd as trustee for the Bungala One Operations Trust,Bungala One Operations Pty Ltd as trustee for the Bungala One Operations Trust,135.0,2.5,0.0,0.0,Solar,Solar - Solar,"Capacity(MW), Fuel"
+BNGSF2,Bungala Two Solar Farm,Bungala Two Solar Farm,SA1,SA1,Bungala Two Operations Pty Ltd as trustee for the Bungala Two Operations Trust,Bungala Two Operations Pty Ltd as trustee for the Bungala Two Operations Trust,135.0,2.5,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+BOCOROC2,Boco Rock Wind Farm,Boco Rock Wind Farm,NSW1,NSW1,South Pacific Power Pty Ltd,South Pacific Power Pty Ltd,79.5,5.3,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+BOCORWF1,Boco Rock Wind Farm,Boco Rock Wind Farm,NSW1,NSW1,South Pacific Power Pty Ltd,South Pacific Power Pty Ltd,113.0,1.6,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+BODWF1,Bodangora Wind Farm,Bodangora Wind Farm,NSW1,NSW1,Bodangora Wind Farm Pty Ltd,Bodangora Wind Farm Pty Ltd,113.19,3.43,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+BOLIVPS1,Bolivar Power Station,Bolivar Power Station,SA1,SA1,Iberdrola Australia Energy Markets Pty Limited,Iberdrola Australia Energy Markets Pty Limited,128.4,32.1,0.0,,OCGT,Fossil - Natural Gas Pipeline,"Capacity(MW), Fuel"
+BOMENSF1,Bomen Solar Farm,Bomen Solar Farm,NSW1,NSW1,Spark Infrastructure Holdings No. 6 Pty Limited,Spark Infrastructure Holdings No. 6 Pty Limited,121.0,2.75,0.0,0.0,Solar,Solar - Solar,"Capacity(MW), Fuel"
+BOWWBA1,Bolivar Waste Water Treatment,Bolivar Waste Water Treatment,SA1,SA1,South Australian Water Corporation,South Australian Water Corporation,3.08,3.08,5.04,5.04,Battery Storage,Other - Other,Fuel
+BOWWPV1,Bolivar Waste Water Treatment,Bolivar Waste Water Treatment,SA1,SA1,South Australian Water Corporation,South Australian Water Corporation,8.25,2.75,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+BPLANDF1,Browns Plains,Browns Plains,QLD1,QLD1,EDL LFG (Qld) Pty Ltd,EDL LFG (Qld) Pty Ltd,2.1799999999999997,1.03,0.0,,Other,Other - Other,"Capacity(MW), Fuel"
+BRAEMAR1,Braemar,Braemar,QLD1,QLD1,Braemar Power Project Pty Ltd,Braemar Power Project Pty Ltd,188.0,188.0,0.0,,OCGT,Fossil - Coal Seam Methane,Fuel
+BRAEMAR2,Braemar,Braemar,QLD1,QLD1,Braemar Power Project Pty Ltd,Braemar Power Project Pty Ltd,188.0,188.0,0.0,,OCGT,Fossil - Coal Seam Methane,Fuel
+BRAEMAR3,Braemar,Braemar,QLD1,QLD1,Braemar Power Project Pty Ltd,Braemar Power Project Pty Ltd,188.0,188.0,0.0,,OCGT,Fossil - Coal Seam Methane,Fuel
+BRAEMAR5,Braemar 2 Power Station,Braemar 2 Power Station,QLD1,QLD1,NewGen Braemar 2 Partnership comprising Arrow Braemar 2 Pty Ltd and Arrow Southern Generation Pty Ltd,NewGen Braemar 2 Partnership comprising Arrow Braemar 2 Pty Ltd and Arrow Southern Generation Pty Ltd,173.0,173.0,0.0,,OCGT,Fossil - Coal Seam Methane,Fuel
+BRAEMAR6,Braemar 2 Power Station,Braemar 2 Power Station,QLD1,QLD1,NewGen Braemar 2 Partnership comprising Arrow Braemar 2 Pty Ltd and Arrow Southern Generation Pty Ltd,NewGen Braemar 2 Partnership comprising Arrow Braemar 2 Pty Ltd and Arrow Southern Generation Pty Ltd,173.0,173.0,0.0,,OCGT,Fossil - Coal Seam Methane,Fuel
+BRAEMAR7,Braemar 2 Power Station,Braemar 2 Power Station,QLD1,QLD1,NewGen Braemar 2 Partnership comprising Arrow Braemar 2 Pty Ltd and Arrow Southern Generation Pty Ltd,NewGen Braemar 2 Partnership comprising Arrow Braemar 2 Pty Ltd and Arrow Southern Generation Pty Ltd,173.0,173.0,0.0,,OCGT,Fossil - Coal Seam Methane,Fuel
+BROKENH1,Broken Hill Solar Plant,Broken Hill Solar Plant,NSW1,NSW1,PARF Company 6 Pty Limited,PARF Company 6 Pty Limited,53.0,1.33,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+BROOKLYN,Brooklyn LFG U1-3,Brooklyn LFG U1-3,VIC1,VIC1,EDL LFG Vic Pty Ltd,EDL LFG Vic Pty Ltd,2.83,2.83,0.0,,Other,Other - Other,Fuel
+BROWNMT,Brown Mountain Hydro Power Station,Brown Mountain Hydro Power Station,NSW1,NSW1,Cochrane Dam Pty Ltd,Cochrane Dam Pty Ltd,5.0,5.0,0.0,,Water,Hydro - Water,Fuel
+BRYB1WF1,Berrybank Wind Farm,Berrybank Wind Farm,VIC1,VIC1,Berrbank Development Pty ltd,Berrbank Development Pty ltd,180.6,4.2,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+BRYB2WF2,Berrybank Wind Farm,Berrybank Wind Farm,VIC1,VIC1,Berrbank Development Pty ltd,Berrbank Development Pty ltd,109.2,4.2,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+BULBES1,Bulgana Green Power Hub - BESS,Bulgana Green Power Hub - BESS,VIC1,VIC1,Bulgana Wind Farm Pty Ltd,Bulgana Wind Farm Pty Ltd,20.0,0.5,34.0,34.0,Battery Storage,Other - Other,"Capacity(MW), Fuel"
+BULGANA1,Bulgana Green Power Hub - Wind Farm,Bulgana Green Power Hub - Wind Farm,VIC1,VIC1,Bulgana Wind Farm Pty Ltd,Bulgana Wind Farm Pty Ltd,204.4,3.65,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+BURRIN,Burrinjuck,Burrinjuck,NSW1,NSW1,GSP Energy Pty Ltd,GSP Energy Pty Ltd,34.0,20.0,0.0,0.0,Water,Hydro - Water,"Capacity(MW), Fuel"
+BUTLERSG,Butlers Gorge,Butlers Gorge,TAS1,TAS1,Hydro-Electric Corporation,Hydro-Electric Corporation,14.399999999999999,12.2,0.0,,Water,Hydro - Water,"Capacity(MW), Fuel"
+BW01,Bayswater,Bayswater,NSW1,NSW1,AGL Macquarie Pty Limited,AGL Macquarie Pty Limited,660.0,660.0,0.0,,Coal,Fossil - Black Coal,Fuel
+BW02,Bayswater,Bayswater,NSW1,NSW1,AGL Macquarie Pty Limited,AGL Macquarie Pty Limited,685.0,685.0,0.0,,Coal,Fossil - Black Coal,Fuel
+BW03,Bayswater,Bayswater,NSW1,NSW1,AGL Macquarie Pty Limited,AGL Macquarie Pty Limited,685.0,685.0,0.0,,Coal,Fossil - Black Coal,Fuel
+BW04,Bayswater,Bayswater,NSW1,NSW1,AGL Macquarie Pty Limited,AGL Macquarie Pty Limited,685.0,685.0,0.0,,Coal,Fossil - Black Coal,Fuel
+BWTR1,Broadwater,Broadwater,NSW1,NSW1,Cape Byron Management PTY LTD,Cape Byron Management PTY LTD,38.0,38.0,0.0,,Biomass,Renewable Biomass or Waste - Biomass,Fuel
+CALL_B_1,Callide B,Callide B,QLD1,QLD1,CS Energy,CS Energy,350.0,350.0,0.0,,Coal,Fossil - Black Coal,Fuel
+CALL_B_2,Callide B,Callide B,QLD1,QLD1,CS Energy,CS Energy,350.0,350.0,0.0,,Coal,Fossil - Black Coal,Fuel
+CAPBES1,Capital Battery,Capital Battery,NSW1,NSW1,Capital Battery Pty Ltd,Capital Battery Pty Ltd,100.32,3.04,200.0,200.0,Battery Storage,Other - Other,"Capacity(MW), Fuel"
+CAPTL_WF,Capital Wind Farm,Capital Wind Farm,NSW1,NSW1,Renewable Power Ventures Pty Ltd,Renewable Power Ventures Pty Ltd,140.7,2.1,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+CATHROCK,Cathedral Rocks,Cathedral Rocks,SA1,SA1,JV Cathedral Rock Investments Pty Ltd  - Acciona Energy Australia Global Pty Ltd and EnergyAustralia Pty Ltd,JV Cathedral Rock Investments Pty Ltd  - Acciona Energy Australia Global Pty Ltd and EnergyAustralia Pty Ltd,62.0,2.0,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+CBWF1,Coonooer Bridge Wind Farm,Coonooer Bridge Wind Farm,VIC1,VIC1,Coonooer Bridge Wind Farm Pty Ltd,Coonooer Bridge Wind Farm Pty Ltd,19.8,3.3,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+CBWWBA1,Christies Beach Wastewater Treatment Plant,Christies Beach Wastewater Treatment Plant,SA1,SA1,South Australian Water Corporation,South Australian Water Corporation,2.16,2.16,4.32,4.32,Battery Storage,Other - Other,Fuel
+CBWWPV1,Christies Beach Wastewater Treatment Plant,Christies Beach Wastewater Treatment Plant,SA1,SA1,South Australian Water Corporation,South Australian Water Corporation,3.0,3.0,0.0,,Solar,Solar - Solar,Fuel
+CESF1,Capital East Solar Farm P1,Capital East Solar Farm P1,NSW1,NSW1,IBERDROLA AUSTRALIA HOLDINGS PTY LIMITED,IBERDROLA AUSTRALIA HOLDINGS PTY LIMITED,2.0,0.5,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+CETHANA,Cethana,Cethana,TAS1,TAS1,Hydro-Electric Corporation,Hydro-Electric Corporation,85.0,85.0,0.0,,Water,Hydro - Water,Fuel
+CG1,Colongra,Colongra,NSW1,NSW1,Snowy Hydro Ltd,Snowy Hydro Ltd,181.0,181.0,0.0,,OCGT,Fossil - Natural Gas Pipeline,Fuel
+CG2,Colongra,Colongra,NSW1,NSW1,Snowy Hydro Ltd,Snowy Hydro Ltd,181.0,181.0,0.0,,OCGT,Fossil - Natural Gas Pipeline,Fuel
+CG3,Colongra,Colongra,NSW1,NSW1,Snowy Hydro Ltd,Snowy Hydro Ltd,181.0,181.0,0.0,,OCGT,Fossil - Natural Gas Pipeline,Fuel
+CG4,Colongra,Colongra,NSW1,NSW1,Snowy Hydro Ltd,Snowy Hydro Ltd,181.0,181.0,0.0,,OCGT,Fossil - Natural Gas Pipeline,Fuel
+CHBESS1,Chinchilla BESS,Chinchilla BESS,QLD1,QLD1,CSE BESS Pty Ltd,CSE BESS Pty Ltd,100.0,100.0,200.0,200.0,Battery Storage,Other - Other,Fuel
+CHILDSF1,Childers Solar Farm,Childers Solar Farm,QLD1,QLD1,Childers Solar Pty Ltd as trustee for the Childers Solar Trust,Childers Solar Pty Ltd as trustee for the Childers Solar Trust,64.38,1.74,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+CHPSTWF1,Chepstowe Wind Farm - VIC,Chepstowe Wind Farm - VIC,VIC1,VIC1,Chepstowe Wind Farm Pty Ltd,Chepstowe Wind Farm Pty Ltd,6.15,2.05,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+CHYTWF1,Cherry Tree Wind Farm,Cherry Tree Wind Farm,VIC1,VIC1,Cherry Tree Wind Farm Pty Limited A.T.F. Cherry Tree Project Trust,Cherry Tree Wind Farm Pty Limited A.T.F. Cherry Tree Project Trust,57.6,3.6,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+CLARESF1,Clare Solar Farm,Clare Solar Farm,QLD1,QLD1,Clare Asset Co Pty Ltd ATF Clare Asset Trust,Clare Asset Co Pty Ltd ATF Clare Asset Trust,110.4,1.6,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+CLAYTON,Clayton,Clayton,VIC1,VIC1,EDL LFG Vic Pty Ltd,EDL LFG Vic Pty Ltd,12.0,1.0,0.0,,Biomass,Renewable Biomass or Waste - Landfill Gas,"Capacity(MW), Fuel"
+CLEMGPWF,Clements Gap Wind Farm,Clements Gap Wind Farm,SA1,SA1,Pacific Hydro Clements Gap Pty Ltd,Pacific Hydro Clements Gap Pty Ltd,56.7,2.1,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+CLERMSF1,Clermont Solar Farm,Clermont Solar Farm,QLD1,QLD1,Clermont Asset Co Pty Ltd as Trustee for Clerrmont Solar Unit Trust,Clermont Asset Co Pty Ltd as Trustee for Clerrmont Solar Unit Trust,92.5,2.5,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+CLOVER,Clover,Clover,VIC1,VIC1,AGL Hydro Partnership,AGL Hydro Partnership,29.0,14.5,0.0,,Water,Hydro - Water,"Capacity(MW), Fuel"
+CLRKCWF1,Clarke Creek Wind Farm,Clarke Creek Wind Farm,QLD1,QLD1,Squadron Energy Services Pty Ltd,Squadron Energy Services Pty Ltd,346.5,4.5,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+CLRKCWF2,Clarke Creek Wind Farm,Clarke Creek Wind Farm,QLD1,QLD1,Squadron Energy Services Pty Ltd,Squadron Energy Services Pty Ltd,103.5,4.5,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+CLUNY,Cluny,Cluny,TAS1,TAS1,Hydro-Electric Corporation,Hydro-Electric Corporation,19.0,19.0,0.0,,Water,Hydro - Water,Fuel
+CNUNDAWF,Canunda,Canunda,SA1,SA1,Canunda Power Pty Ltd,Canunda Power Pty Ltd,46.0,2.0,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+CODRNGTON,Codrington Wind Farm,Codrington Wind Farm,VIC1,VIC1,Energy Pacific (Vic) Pty Ltd,Energy Pacific (Vic) Pty Ltd,18.2,1.3,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+COHUNSF1,Cohuna Solar Farm,Cohuna Solar Farm,VIC1,VIC1,Cohuna Solar Farm Pty Ltd as trustee for the Cohuna Solar Farm Trust,Cohuna Solar Farm Pty Ltd as trustee for the Cohuna Solar Farm Trust,31.16,1.64,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+COLEASF1,Coleambally Solar Farm,Coleambally Solar Farm,NSW1,NSW1,Coleambally Solar Pty Ltd,Coleambally Solar Pty Ltd,150.3,1.67,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+COLUMSF1,Columboola Solar Farm,Columboola Solar Farm,QLD1,QLD1,Luminous Energy,Luminous Energy,217.25,2.75,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+COLWF01,Collector,Collector,NSW1,NSW1,Ratch Australia,Ratch Australia,226.8,4.2,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+CONDONG1,Condong,Condong,NSW1,NSW1,Cape Byron Management PTY LTD,Cape Byron Management PTY LTD,30.0,30.0,0.0,,Biomass,Renewable Biomass or Waste - Bagasse,Fuel
+COOPGWF1,Coopers Gap Wind Farm,Coopers Gap Wind Farm,QLD1,QLD1,PARF Company 6 Pty Limited,PARF Company 6 Pty Limited,452.89,3.83,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+COPBEL,Coppabella Wind Farm,Coppabella Wind Farm,NSW1,NSW1,Coppabella Wind Farm Pty Ltd,Coppabella Wind Farm Pty Ltd,289.8,4.2,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+COPTNHYD,Copeton,Copeton,NSW1,NSW1,AGL,AGL,20.0,20.0,0.0,,Water,Hydro - Water,Fuel
+CPP_3,Callide C,Callide C,QLD1,QLD1,Joint Venture; Callide Energy Pty Ltd and IG Power (Callide) Ltd. ,Joint Venture; Callide Energy Pty Ltd and IG Power (Callide) Ltd. ,424.0,424.0,0.0,,Coal,Fossil - Black Coal,Fuel
+CPP_4,Callide C,Callide C,QLD1,QLD1,Joint Venture; Callide Energy Pty Ltd and IG Power (Callide) Ltd. ,Joint Venture; Callide Energy Pty Ltd and IG Power (Callide) Ltd. ,420.0,420.0,0.0,,Coal,Fossil - Black Coal,Fuel
+CPSA,Condamine A,Condamine A,QLD1,QLD1,QGC Sales QLD Pty Ltd,QGC Sales QLD Pty Ltd,144.4,43.7,0.0,,CCGT,Fossil - Coal Seam Methane,"Capacity(MW), Fuel"
+CROOKWF2,Crookwell 2 Wind Farm,Crookwell 2 Wind Farm,NSW1,NSW1,Crookwell Development Pty Ltd,Crookwell Development Pty Ltd,96.04,3.43,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+CROOKWF3,Crookwell 3 Wind Farm,Crookwell 3 Wind Farm,NSW1,NSW1,Crookwell 3 Development Pty Ltd,Crookwell 3 Development Pty Ltd,57.6,3.6,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+CROWLWF1,Crowlands Wind Farm,Crowlands Wind Farm,VIC1,VIC1,Pacific Hydro Crowlands Pty Ltd,Pacific Hydro Crowlands Pty Ltd,79.95,2.05,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+CRURWF1,Crudine Ridge Wind Farm,Crudine Ridge Wind Farm,NSW1,NSW1,CRWF Nominees Pty Ltd as trustee of the CRWF Trust,CRWF Nominees Pty Ltd as trustee of the CRWF Trust,141.71,3.83,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+CRWASF1,Corowa Solar Farm,Corowa Solar Farm,NSW1,NSW1,Corowa Operationsco Pty Ltd as trustee for Corowa Operations Trust,Corowa Operationsco Pty Ltd as trustee for Corowa Operations Trust,36.01,1.64,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+CSPVPS1,Collinsville PV,Collinsville PV,QLD1,QLD1,Ratch Australia,Ratch Australia,42.5,2.5,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+CTHLWF1,Cattle Hill Wind Farm,Cattle Hill Wind Farm,TAS1,TAS1,Wild Cattle Hill Pty Ltd,Wild Cattle Hill Pty Ltd,144.0,3.2,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+CULLRGWF,Cullerin Range Wind Farm,Cullerin Range Wind Farm,NSW1,NSW1,Cullerin Range Wind Farm Pty Ltd,Cullerin Range Wind Farm Pty Ltd,30.0,2.0,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+CUSF1,Culcairn Solar Farm,Culcairn Solar Farm,NSW1,NSW1,Culcairn Solar Farm Pty Ltd as trustee for Culcairn Solar Farm Trust,Culcairn Solar Farm Pty Ltd as trustee for Culcairn Solar Farm Trust,349.98,3.15,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+DALNTH1,Dalrymple BESS,Dalrymple BESS,SA1,SA1,ElectraNet,ElectraNet,30.0,2.5,9.0,9.0,Battery Storage,Other - Other,"Capacity(MW), Fuel"
+DARLSF1,Darlington Point Solar Farm,Darlington Point Solar Farm,NSW1,NSW1,Darlington Point Solar Farm Pty Ltd,Darlington Point Solar Farm Pty Ltd,274.97,2.55,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+DARTM1,Dartmouth,Dartmouth,VIC1,VIC1,AGL Hydro Partnership,AGL Hydro Partnership,185.0,185.0,0.0,,Water,Hydro - Water,Fuel
+DAYDSF1,Daydream Solar Farm,Daydream Solar Farm,QLD1,QLD1,The Daydream Solar Farm Trust,The Daydream Solar Farm Trust,167.75,2.75,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+DDPS1,Darling Downs,Darling Downs,QLD1,QLD1,Origin Energy Power Limited,Origin Energy Power Limited,644.5,280.0,0.0,,CCGT,Fossil - Coal Seam Methane,"Capacity(MW), Fuel"
+DDSF1,Darling Downs Solar Farm,Darling Downs Solar Farm,QLD1,QLD1,Darling Downs Solar Farm Pty Ltd,Darling Downs Solar Farm Pty Ltd,121.0,2.75,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+DEVILS_G,Devils Gate,Devils Gate,TAS1,TAS1,Hydro-Electric Corporation,Hydro-Electric Corporation,60.0,60.0,0.0,,Water,Hydro - Water,Fuel
+DIAPURWF1,Diapur Wind Farm,Diapur Wind Farm,VIC1,VIC1,Diapur Wind Farm Pty Ltd,Diapur Wind Farm Pty Ltd,8.0,4.0,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+DPNTB1,Darlington Point Energy Storage System,Darlington Point Energy Storage System,NSW1,NSW1,DPESS Pty Ltd,DPESS Pty Ltd,25.0,25.0,50.0,50.0,Battery Storage,Other - Other,Fuel
+DRYCGT1,Dry Creek GT,Dry Creek GT,SA1,SA1,Synergen Power Pty Ltd,Synergen Power Pty Ltd,52.0,52.0,0.0,,OCGT,Fossil - Natural Gas Pipeline,Fuel
+DRYCGT2,Dry Creek GT,Dry Creek GT,SA1,SA1,Synergen Power Pty Ltd,Synergen Power Pty Ltd,52.0,52.0,0.0,,OCGT,Fossil - Natural Gas Pipeline,Fuel
+DRYCGT3,Dry Creek GT,Dry Creek GT,SA1,SA1,Synergen Power Pty Ltd,Synergen Power Pty Ltd,52.0,52.0,0.0,,OCGT,Fossil - Natural Gas Pipeline,Fuel
+DULAWF1,Dulacca Wind Farm,Dulacca Wind Farm,QLD1,QLD1,Dulacca Energy Project Co Pty Ltd,Dulacca Energy Project Co Pty Ltd,172.99,4.02,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+DUNDWF1,Dundonnell Wind Farm,Dundonnell Wind Farm,VIC1,VIC1,Tilt Renewables,Tilt Renewables,168.0,4.2,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+DUNDWF2,Dundonnell Wind Farm,Dundonnell Wind Farm,VIC1,VIC1,Tilt Renewables,Tilt Renewables,46.2,4.2,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+DUNDWF3,Dundonnell Wind Farm,Dundonnell Wind Farm,VIC1,VIC1,Tilt Renewables,Tilt Renewables,121.8,4.2,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+EASTCRK,Eastern Creek,Eastern Creek,NSW1,NSW1,EDL LFG NSW Pty Ltd,EDL LFG NSW Pty Ltd,5.06,1.26,0.0,,Biomass,Renewable Biomass or Waste - Landfill Gas,"Capacity(MW), Fuel"
+EDENVSF1,Edenvale Solar Park,Edenvale Solar Park,QLD1,QLD1,Edenvale Solar Park Pty Ltd,Edenvale Solar Park Pty Ltd,180.0,180.0,0.0,,Solar,Solar - Solar,Fuel
+EILDON1,Eildon,Eildon,VIC1,VIC1,AGL Hydro Partnership,AGL Hydro Partnership,67.5,7.5,0.0,,Water,Hydro - Water,"Capacity(MW), Fuel"
+EILDON2,Eildon,Eildon,VIC1,VIC1,AGL Hydro Partnership,AGL Hydro Partnership,67.5,7.5,0.0,,Water,Hydro - Water,"Capacity(MW), Fuel"
+EILDON3,Eildon Pondage Power Station (EPPS),Eildon Pondage Power Station (EPPS),VIC1,VIC1,Pacific Hydro Investments Pty Ltd,Pacific Hydro Investments Pty Ltd,4.5,4.5,0.0,,Water,Hydro - Water,Fuel
+ELAINWF1,Elaine Wind Farm,Elaine Wind Farm,VIC1,VIC1,Northleaf /InfraRed/Macquarie Capital,Northleaf /InfraRed/Macquarie Capital,83.6,3.8,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+EMERASF1,Emerald Solar Park,Emerald Solar Park,QLD1,QLD1,Lighthouse Infrastructure Management Limited,Lighthouse Infrastructure Management Limited,72.0,2.25,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+ER01,Eraring,Eraring,NSW1,NSW1,Origin Energy Eraring Pty Ltd,Origin Energy Eraring Pty Ltd,720.0,720.0,0.0,,Coal,Fossil - Black Coal,Fuel
+ER02,Eraring,Eraring,NSW1,NSW1,Origin Energy Eraring Pty Ltd,Origin Energy Eraring Pty Ltd,720.0,720.0,0.0,,Coal,Fossil - Black Coal,Fuel
+ER03,Eraring,Eraring,NSW1,NSW1,Origin Energy Eraring Pty Ltd,Origin Energy Eraring Pty Ltd,720.0,720.0,0.0,,Coal,Fossil - Black Coal,Fuel
+ER04,Eraring,Eraring,NSW1,NSW1,Origin Energy Eraring Pty Ltd,Origin Energy Eraring Pty Ltd,720.0,720.0,0.0,,Coal,Fossil - Black Coal,Fuel
+ERGT01,Eraring GT,Eraring GT,NSW1,NSW1,Origin Energy Eraring Pty Ltd,Origin Energy Eraring Pty Ltd,41.5,41.5,0.0,,OCGT,Fossil - Diesel,Fuel
+FINLYSF1,Finley Solar Farm,Finley Solar Farm,NSW1,NSW1,Finley Solar Farm Pty Ltd as The trustee for Finley Solar Trust,Finley Solar Farm Pty Ltd as The trustee for Finley Solar Trust,162.36,1.64,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+FISHER,Fisher,Fisher,TAS1,TAS1,Hydro-Electric Corporation,Hydro-Electric Corporation,43.2,43.2,0.0,,Water,Hydro - Water,Fuel
+FLYCRKWF,Flyers Creek Wind Farm,Flyers Creek Wind Farm,NSW1,NSW1,Flyers Creek Wind Farm Pty Ltd,Flyers Creek Wind Farm Pty Ltd,145.54,3.83,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+FNWF1,Ferguson Wind Farm,Ferguson Wind Farm,VIC1,VIC1,Ferguson Wind Farm Pty Ltd,Ferguson Wind Farm Pty Ltd,12.0,4.0,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+FTVBESS,Fosterville SF and BESS,Fosterville SF and BESS,VIC1,VIC1,FRV Services Australia,FRV Services Australia,119.0,3.5,240.0,240.0,Battery Storage,Other - Other,"Capacity(MW), Fuel"
+FTVPV,Fosterville SF and BESS,Fosterville SF and BESS,VIC1,VIC1,FRV Services Australia,FRV Services Australia,80.5,3.5,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+GANGARR1,Gangarri Solar Farm,Gangarri Solar Farm,QLD1,QLD1,Shell New Energies Australia Pty Ltd,Shell New Energies Australia Pty Ltd,162.0,3.0,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+GANNB1,Gannawarra Energy Storage System,Gannawarra Energy Storage System,VIC1,VIC1,GESS ProjectCo,GESS ProjectCo,25.33,25.33,50.0,50.0,Battery Storage,Other - Other,Fuel
+GANNSF1,Gannawarra Solar Farm,Gannawarra Solar Farm,VIC1,VIC1,Gannawarra Solar Farm Pty Ltd,Gannawarra Solar Farm Pty Ltd,55.0,2.5,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+GB01,Broken Hill GT,Broken Hill GT,NSW1,NSW1,Transgrid,Transgrid,50.0,50.0,0.0,,OCGT,Fossil - Diesel,Fuel
+GBBATT1,Gawara Baya Wind Farm,Gawara Baya Wind And BESS,QLD1,QLD1,UPPER BURDEKIN WIND FARM PTY LTD,UPPER BURDEKIN WIND FARM PTY LTD,104.0,26.0,208.0,208.0,Battery Storage,Other - Other,"Site Name, Capacity(MW), Fuel"
+GBWF1,Gawara Baya Wind Farm,Gawara Baya Wind And BESS,QLD1,QLD1,UPPER BURDEKIN WIND FARM PTY LTD,UPPER BURDEKIN WIND FARM PTY LTD,408.0,6.0,0.0,,Wind,Wind - Wind,"Site Name, Capacity(MW), Fuel"
+GERMCRK,German Creek,German Creek,QLD1,QLD1,EDL CSM Qld Pty Ltd,EDL CSM Qld Pty Ltd,45.01,3.3,0.0,,Gas other,Fossil - Waste Coal Mine Gas,"Capacity(MW), Fuel"
+GIRGSF,Girgarre Solar Farm,Girgarre Solar Farm,VIC1,VIC1,Giragarre Solar Farm Pty Ltd as trustee for Giragarre Solar Farm Trust,Giragarre Solar Farm Pty Ltd as trustee for Giragarre Solar Farm Trust,93.48,1.64,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+GLENMAG1,Glenmaggie Hydro,Glenmaggie Hydro,VIC1,VIC1,Pacific Hydro Investments Pty Ltd,Pacific Hydro Investments Pty Ltd,1.9,1.9,0.0,,Water,Hydro - Water,Fuel
+GLENSF1,Glenrowan Solar Farm,Glenrowan Solar Farm,VIC1,VIC1,Glenrowan Solar Farm Pty Ltd as trustee for Glenrowan Solar Farm Trust,Glenrowan Solar Farm Pty Ltd as trustee for Glenrowan Solar Farm Trust,126.0,4.2,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+GLRWNSF1,Glenrowan West Solar Farm,Glenrowan West Solar Farm,VIC1,VIC1,Glenrowan Sun Farm Pty Ltd,Glenrowan Sun Farm Pty Ltd,132.0,2.75,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+GNNDHSF1,Gunnedah Solar Farm,Gunnedah Solar Farm,NSW1,NSW1,Gunnedah SF Pty Ltd atf Gunnedah Asset Trust,Gunnedah SF Pty Ltd atf Gunnedah Asset Trust,110.0,110.0,0.0,,Solar,Solar - Solar,Fuel
+GOONSF1,Goonumbla Solar Farm,Goonumbla Solar Farm,NSW1,NSW1,Goonumbla Asset Co Pty Ltd as trustee for the Goonumbla Asset Trust,Goonumbla Asset Co Pty Ltd as trustee for the Goonumbla Asset Trust,69.75,2.25,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+GORDON,Gordon,Gordon,TAS1,TAS1,Hydro-Electric Corporation,Hydro-Electric Corporation,432.0,144.0,0.0,,Water,Hydro - Water,"Capacity(MW), Fuel"
+GPWFEST1,Golden Plains Wind Farm East,Golden Plains Wind Farm East,VIC1,VIC1,Golden Plains WF1 Pty Ltd as trustee for the Golden Plains WF1 Unit Trust,Golden Plains WF1 Pty Ltd as trustee for the Golden Plains WF1 Unit Trust,248.0,6.2,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+GPWFEST2,Golden Plains Wind Farm East,Golden Plains Wind Farm East,VIC1,VIC1,Golden Plains WF1 Pty Ltd as trustee for the Golden Plains WF1 Unit Trust,Golden Plains WF1 Pty Ltd as trustee for the Golden Plains WF1 Unit Trust,260.4,6.2,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+GPWFEST3,Golden Plains Wind Farm East,Golden Plains Wind Farm East,VIC1,VIC1,Golden Plains WF1 Pty Ltd as trustee for the Golden Plains WF1 Unit Trust,Golden Plains WF1 Pty Ltd as trustee for the Golden Plains WF1 Unit Trust,248.0,6.2,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+GRANGEAV,Grange Avenue,Grange Avenue,NSW1,NSW1,EDL LFG NSW Pty Ltd,EDL LFG NSW Pty Ltd,1.26,1.26,0.0,,Biomass,Renewable Biomass or Waste - Landfill Gas,Fuel
+GRANWF1,Granville Harbour Wind Farm,Granville Harbour Wind Farm,TAS1,TAS1,Granville Harbour Operations Pty Ltd as trustee for Granville Harbour Operations Trust,Granville Harbour Operations Pty Ltd as trustee for Granville Harbour Operations Trust,111.6,3.6,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+GREENB1,Greenbank BESS,Greenbank BESS,QLD1,QLD1,CSE BESS Pty Ltd,CSE BESS Pty Ltd,200.0,200.0,400.0,400.0,Battery Storage,Other - Other,Fuel
+GRIFSF1,Griffith Solar Farm,Griffith Solar Farm,NSW1,NSW1,Griffith Solar Farm Pty Ltd,Griffith Solar Farm Pty Ltd,27.19,2.27,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+GSTONE1,Gladstone,Gladstone,QLD1,QLD1,Gladstone Power Station Participants,Gladstone Power Station Participants,280.0,280.0,0.0,,Coal,Fossil - Black Coal,Fuel
+GSTONE2,Gladstone,Gladstone,QLD1,QLD1,Gladstone Power Station Participants,Gladstone Power Station Participants,280.0,280.0,0.0,,Coal,Fossil - Black Coal,Fuel
+GSTONE3,Gladstone,Gladstone,QLD1,QLD1,Gladstone Power Station Participants,Gladstone Power Station Participants,280.0,280.0,0.0,,Coal,Fossil - Black Coal,Fuel
+GSTONE4,Gladstone,Gladstone,QLD1,QLD1,Gladstone Power Station Participants,Gladstone Power Station Participants,280.0,280.0,0.0,,Coal,Fossil - Black Coal,Fuel
+GSTONE5,Gladstone,Gladstone,QLD1,QLD1,Gladstone Power Station Participants,Gladstone Power Station Participants,280.0,280.0,0.0,,Coal,Fossil - Black Coal,Fuel
+GSTONE6,Gladstone,Gladstone,QLD1,QLD1,Gladstone Power Station Participants,Gladstone Power Station Participants,280.0,280.0,0.0,,Coal,Fossil - Black Coal,Fuel
+GSWF1A,Goyder South Wind Farm 1A,Goyder South Wind Farm 1A,SA1,SA1,Goyder Wind Farm 1A Pty Ltd as trustee for Goyder Wind Farm 1A Trust,Goyder Wind Farm 1A Pty Ltd as trustee for Goyder Wind Farm 1A Trust,209.0,5.5,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+GSWF1B1,Goyder South Wind Farm 1B,Goyder South Wind Farm 1B,SA1,SA1,Goyder Wind Farm 1B Pty Ltd as trustee for Goyder Wind Farm 1B Trust,Goyder Wind Farm 1B Pty Ltd as trustee for Goyder Wind Farm 1B Trust,203.5,5.5,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+GULLRSF1,Gullen Range Solar Farm,Gullen Range Solar Farm,NSW1,NSW1,New Gullen Range Wind Farm Pty Ltd,New Gullen Range Wind Farm Pty Ltd,10.0,2.5,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+GULLRWF1,Gullen Range Wind Farm,Gullen Range Wind Farm,NSW1,NSW1,New Gullen Range Wind Farm Pty Ltd,New Gullen Range Wind Farm Pty Ltd,165.5,1.5,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+GULLRWF2,Gullen Range Wind Farm 2,Gullen Range Wind Farm 2,NSW1,NSW1,BEIJING JINGNENG CLEAN ENERGY (AUSTRALIA) HOLDING PTY LTD,BEIJING JINGNENG CLEAN ENERGY (AUSTRALIA) HOLDING PTY LTD,110.67,3.57,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+GUNNING1,Gunning Wind Farm,Gunning Wind Farm,NSW1,NSW1,Gunning Wind Energy Developments,Gunning Wind Energy Developments,46.5,1.5,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+GUTHEGA,Guthega,Guthega,NSW1,NSW1,Snowy Hydro Ltd,Snowy Hydro Ltd,60.0,30.0,0.0,,Water,Hydro - Water,"Capacity(MW), Fuel"
+HALAMRD1,Hallam Road,Hallam Road,VIC1,VIC1,LMS Energy Pty Ltd,LMS Energy Pty Ltd,8.98,1.12,0.0,,Biomass,Renewable Biomass or Waste - Landfill Gas,"Capacity(MW), Fuel"
+HALLWF1,Hallett Stage 1 Brown Hill,Hallett Stage 1 Brown Hill,SA1,SA1,Palisade Investment Partner Limited,Palisade Investment Partner Limited,94.5,2.1,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+HALLWF2,Hallett Stage 2 Hallett Hill,Hallett Stage 2 Hallett Hill,SA1,SA1,Infrastructure Capital Group Limited,Infrastructure Capital Group Limited,71.4,2.1,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+HAMISF1,Hamilton Solar Farm,Hamilton Solar Farm,QLD1,QLD1,Hamilton Solar Farm Pty Ltd,Hamilton Solar Farm Pty Ltd,57.5,2.5,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+HAUGHT11,Haughton Solar Farm Stage 1,Haughton Solar Farm Stage 1,QLD1,QLD1,Pacific Hydro Haughton Solar Farm Pty Ltd,Pacific Hydro Haughton Solar Farm Pty Ltd,132.6,1.64,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+HAYMSF1,Hayman Solar Farm,Hayman Solar Farm,QLD1,QLD1,The Hayman Solar Farm Trust,The Hayman Solar Farm Trust,57.75,2.75,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+HBESS1,Hazelwood Battery Energy Storage System (HBESS),Hazelwood Battery Energy Storage System (HBESS),VIC1,VIC1,Hazelwood BESS Project Co Pty Ltd as trustee for the HBESS Asset Trust,Hazelwood BESS Project Co Pty Ltd as trustee for the HBESS Asset Trust,200.07,200.07,162.0,162.0,Battery Storage,Other - Other,Fuel
+HD1WF1,Hawkesdale Wind Farm,Hawkesdale Wind Farm,VIC1,VIC1,Hawkesdale Asset Pty Ltd as trustee for Hawkesdale Asset Trust,Hawkesdale Asset Pty Ltd as trustee for Hawkesdale Asset Trust,96.6,4.2,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+HDWF1,Hornsdale Wind Farm Stage 1,Hornsdale Wind Farm Stage 1,SA1,SA1,HWF 1 Pty Ltd,HWF 1 Pty Ltd,102.4,3.2,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+HDWF2,Hornsdale Wind Farm Stage 2,Hornsdale Wind Farm Stage 2,SA1,SA1,HWF 2 Pty Ltd,HWF 2 Pty Ltd,102.4,3.2,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+HDWF3,Hornsdale Wind Farm Stage 3,Hornsdale Wind Farm Stage 3,SA1,SA1,HWF 3 Pty Ltd,HWF 3 Pty Ltd,112.0,3.2,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+HEPWIND1,Leonards Hill,Leonards Hill,VIC1,VIC1,Hepburn Community Wind Park Co-operative Limited,Hepburn Community Wind Park Co-operative Limited,4.1,2.05,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+HEZ1,Hunter EconomicZone,Hunter EconomicZone,NSW1,NSW1,Snowy Hydro Ltd,Snowy Hydro Ltd,20.8,20.8,0.0,,Other,Fossil - Diesel,Fuel
+HILLSTN1,Hillston Sun Farm,Hillston Sun Farm,NSW1,NSW1,Hillston Sun Farm Operations Pty Ltd ATF Hillston,Hillston Sun Farm Operations Pty Ltd ATF Hillston,110.0,2.75,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+HLMSEW01,HYMIVC06 Belgrave-Hallam Rd Micro Hydro,HYMIVC06 Belgrave-Hallam Rd Micro Hydro,VIC1,VIC1,South East Water Corporation,South East Water Corporation,0.25,0.25,0.0,0.0,Water,Hydro - Water,Fuel
+HPR1,Hornsdale Power Reserve Unit 1,Hornsdale Power Reserve Unit 1,SA1,SA1,Hornsdale Power Reserve Pty Ltd,Hornsdale Power Reserve Pty Ltd,150.0,50.0,117.0,61.3,Battery Storage,Other - Other,"Capacity(MW), Storage(MWh), Fuel"
+HUGSF1,Hughenden Sun Farm,Hughenden Sun Farm,QLD1,QLD1,Hughenden Solar Pty Ltd as Trustee for Hughenden Solar Trust,Hughenden Solar Pty Ltd as Trustee for Hughenden Solar Trust,20.97,1.17,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+HUMENSW,Hume Dam NSW,Hume Dam NSW,NSW1,NSW1,GSPOWER,GSPOWER,29.0,29.0,0.0,,Water,Hydro - Water,Fuel
+HUMEV,Hume Dam VIC,Hume Dam VIC,VIC1,VIC1,GSP Energy Pty Ltd,GSP Energy Pty Ltd,29.0,29.0,0.0,,Water,Hydro - Water,Fuel
+HUNTER1,Hunter Power Station,Hunter Power Station,NSW1,NSW1,Snowy Hydro Limited,Snowy Hydro Limited,375.0,375.0,0.0,,OCGT,Fossil - Natural Gas Pipeline,Fuel
+HUNTER2,Hunter Power Station,Hunter Power Station,NSW1,NSW1,Snowy Hydro Limited,Snowy Hydro Limited,375.0,375.0,0.0,,OCGT,Fossil - Natural Gas Pipeline,Fuel
+HVWWBA1,Happy Valley Reservoir,Happy Valley Reservoir,SA1,SA1,South Australian Water Corporation,South Australian Water Corporation,5.52,5.52,8.82,8.82,Battery Storage,Other - Other,Fuel
+HVWWPV1,Happy Valley Reservoir,Happy Valley Reservoir,SA1,SA1,South Australian Water Corporation,South Australian Water Corporation,11.0,2.75,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+JBUTTERS,John Butters,John Butters,TAS1,TAS1,Hydro-Electric Corporation,Hydro-Electric Corporation,144.0,144.0,0.0,,Water,Hydro - Water,Fuel
+JEMALNG1,Jemalong Solar,Jemalong Solar,NSW1,NSW1,Genex Power,Genex Power,55.0,2.75,0.0,0.0,Solar,Solar - Solar,"Capacity(MW), Fuel"
+JGULLY,Jacks Gully,Jacks Gully,NSW1,NSW1,EDL LFG NSW Pty Ltd,EDL LFG NSW Pty Ltd,2.3,1.15,0.0,,Biomass,Renewable Biomass or Waste - Landfill Gas,"Capacity(MW), Fuel"
+JLA01,Jeeralang A,Jeeralang A,VIC1,VIC1,EnergyAustralia Ecogen Py Ltd,EnergyAustralia Ecogen Py Ltd,53.0,53.0,0.0,,OCGT,Fossil - Natural Gas Pipeline,Fuel
+JLA02,Jeeralang A,Jeeralang A,VIC1,VIC1,EnergyAustralia Ecogen Py Ltd,EnergyAustralia Ecogen Py Ltd,53.0,53.0,0.0,,OCGT,Fossil - Natural Gas Pipeline,Fuel
+JLA03,Jeeralang A,Jeeralang A,VIC1,VIC1,EnergyAustralia Ecogen Py Ltd,EnergyAustralia Ecogen Py Ltd,53.0,53.0,0.0,,OCGT,Fossil - Natural Gas Pipeline,Fuel
+JLA04,Jeeralang A,Jeeralang A,VIC1,VIC1,EnergyAustralia Ecogen Py Ltd,EnergyAustralia Ecogen Py Ltd,53.0,53.0,0.0,,OCGT,Fossil - Natural Gas Pipeline,Fuel
+JLB01,Jeeralang B,Jeeralang B,VIC1,VIC1,EnergyAustralia Ecogen Pty Ltd,EnergyAustralia Ecogen Pty Ltd,76.0,76.0,0.0,,OCGT,Fossil - Natural Gas Pipeline,Fuel
+JLB02,Jeeralang B,Jeeralang B,VIC1,VIC1,EnergyAustralia Ecogen Pty Ltd,EnergyAustralia Ecogen Pty Ltd,76.0,76.0,0.0,,OCGT,Fossil - Natural Gas Pipeline,Fuel
+JLB03,Jeeralang B,Jeeralang B,VIC1,VIC1,EnergyAustralia Ecogen Pty Ltd,EnergyAustralia Ecogen Pty Ltd,76.0,76.0,0.0,,OCGT,Fossil - Natural Gas Pipeline,Fuel
+JNDABNE1,Jindabyne,Jindabyne,NSW1,NSW1,Snowy Hydro Ltd,Snowy Hydro Ltd,1.1,1.1,0.0,,Water,Hydro - Water,Fuel
+JOUNAMA1,Jounama,Jounama,NSW1,NSW1,Snowy Hydro Ltd,Snowy Hydro Ltd,14.4,14.4,0.0,,Water,Hydro - Water,Fuel
+JRBATT1,Junction Rivers,Junction Rivers Wind And BESS,NSW1,NSW1,Junction Rivers Pty Ltd,Junction Rivers Pty Ltd,200.0,200.0,800.0,800.0,Battery Storage,Other - Other,"Site Name, Fuel"
+JRWF1,Junction Rivers,Junction Rivers Wind And BESS,NSW1,NSW1,Junction Rivers Pty Ltd,Junction Rivers Pty Ltd,595.2,6.2,0.0,,Wind,Wind - Wind,"Site Name, Capacity(MW), Fuel"
+JUNEESF1,Junee Solar Farm,Junee Solar Farm,NSW1,NSW1,Junee Operationsco Pty Ltd as trustee for Junee Operations Trust,Junee Operationsco Pty Ltd as trustee for Junee Operations Trust,36.01,1.64,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+KABANWF1,Kaban Wind Farm,Kaban Wind Farm,QLD1,QLD1,Kaban Wind Farm Trust,Kaban Wind Farm Trust,156.8,5.6,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+KAREEYA1,Kareeya,Kareeya,QLD1,QLD1,CleanCo Queensland Limited,CleanCo Queensland Limited,21.6,21.6,0.0,,Water,Hydro - Water,Fuel
+KAREEYA2,Kareeya,Kareeya,QLD1,QLD1,CleanCo Queensland Limited,CleanCo Queensland Limited,21.6,21.6,0.0,,Water,Hydro - Water,Fuel
+KAREEYA3,Kareeya,Kareeya,QLD1,QLD1,CleanCo Queensland Limited,CleanCo Queensland Limited,21.6,21.6,0.0,,Water,Hydro - Water,Fuel
+KAREEYA4,Kareeya,Kareeya,QLD1,QLD1,CleanCo Queensland Limited,CleanCo Queensland Limited,21.6,21.6,0.0,,Water,Hydro - Water,Fuel
+KAREEYA5,Kareeya 5,Kareeya 5,QLD1,QLD1,CleanCo Queensland Limited,CleanCo Queensland Limited,7.0,7.0,0.0,,Water,Hydro - Water,Fuel
+KARSF1,Karadoc Solar Farm,Karadoc Solar Farm,VIC1,VIC1,Iraak Sun Farm Pty Ltd,Iraak Sun Farm Pty Ltd,104.5,2.75,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+KEEPIT,Keepit,Keepit,NSW1,NSW1,GSP Energy Pty Ltd,GSP Energy Pty Ltd,7.2,7.2,0.0,0.0,Water,Hydro - Water,Fuel
+KEPBG1,Kennedy Energy Park - Phase 1 - Storage,Kennedy Energy Park - Phase 1 - Storage,QLD1,QLD1,Windlab/Eurus,Windlab/Eurus,2.0,0.5,4.0,4.0,Battery Storage,Other - Other,"Capacity(MW), Fuel"
+KEPSF1,Kennedy Energy Park - Phase 1 - Solar,Kennedy Energy Park - Phase 1 - Solar,QLD1,QLD1,Windlab / Eurus,Windlab / Eurus,15.0,2.5,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+KEPWF1,Kennedy Energy Park - Phase 1 - Wind,Kennedy Energy Park - Phase 1 - Wind,QLD1,QLD1,Windlab / Eurus,Windlab / Eurus,43.2,3.6,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+KESSB1,Koorangie Energy Storage System,Koorangie Energy Storage System,VIC1,VIC1,Edify Energy,Shell Energy,185.0,185.0,370.0,370.0,Battery Storage,Other - Other,"Owner, Fuel"
+KIAMBE,Kiamal BESS,Kiamal BESS,VIC1,VIC1,TotalEnergies Renewables Australia,TotalEnergies Renewables Australia,238.59,3.73,880.0,880.0,Battery Storage,Other - Other,"Capacity(MW), Fuel"
+KIAMSF1,Kiamal Solar Farm - Stage 1,Kiamal Solar Farm - Stage 1,VIC1,VIC1,KSF Project Nominees Pty Ltd ATF KSF Project Trust,KSF Project Nominees Pty Ltd ATF KSF Project Trust,199.95,1.33,0.0,0.0,Solar,Solar - Solar,"Capacity(MW), Fuel"
+KIATAWF1,Kiata Wind Farm,Kiata Wind Farm,VIC1,VIC1,Kiata ProjectCo Pty Ltd atf Kiata Project Trust,Kiata ProjectCo Pty Ltd atf Kiata Project Trust,31.05,3.45,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+KINGASF1,Kingaroy Solar Farm,Kingaroy Solar Farm,QLD1,QLD1,Kingaroy PropertyCo Pty Ltd as trustee for Kingaroy Property Trust,Kingaroy PropertyCo Pty Ltd as trustee for Kingaroy Property Trust,40.0,4.44,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+KPP_1,Kogan Creek,Kogan Creek,QLD1,QLD1,Kogan Creek Power Station Pty Ltd,Kogan Creek Power Station Pty Ltd,744.0,744.0,0.0,,Coal,Fossil - Black Coal,Fuel
+KSP1,Kidston Solar Project Phase One 50MW,Kidston Solar Project Phase One 50MW,QLD1,QLD1,Genex Power Limited,Genex Power Limited,50.0,2.5,0.0,0.0,Solar,Solar - Solar,"Capacity(MW), Fuel"
+LADBROK1,Ladbroke Grove,Ladbroke Grove,SA1,SA1,Origin Energy Power Limited,Origin Energy Power Limited,40.0,40.0,0.0,,OCGT,Fossil - Natural Gas Pipeline,Fuel
+LADBROK2,Ladbroke Grove,Ladbroke Grove,SA1,SA1,Origin Energy Power Limited,Origin Energy Power Limited,40.0,40.0,0.0,,OCGT,Fossil - Natural Gas Pipeline,Fuel
+LBB1,Lake Bonney Battery Energy Storage,Lake Bonney Battery Energy Storage,SA1,SA1,Lake Bonney BESS Pty Limited ,Lake Bonney BESS Pty Limited ,25.0,25.0,52.0,52.0,Battery Storage,Other - Other,Fuel
+LEM_WIL,Lemonthyme / Wilmot,Lemonthyme / Wilmot,TAS1,TAS1,Hydro-Electric Corporation,Hydro-Electric Corporation,81.6,30.6,0.0,,Water,Hydro - Water,"Capacity(MW), Fuel"
+LGAPBS1,LINCOLN GAP BESSBDU,LINCOLN GAP BESSBDU,SA1,SA1,Lincoln Gap Wind Farm (Operations) Pty Ltd,Lincoln Gap Wind Farm (Operations) Pty Ltd,10.0,10.0,10.0,10.0,Battery Storage,Other - Other,Fuel
+LGAPWF1,Lincoln Gap Wind Farm - stage 1,Lincoln Gap Wind Farm - stage 1,SA1,SA1,Lincoln Gap Wind Farm Pty Ltd,Lincoln Gap Wind Farm Pty Ltd,126.0,3.6,0.0,0.0,Wind,Wind - Wind,"Capacity(MW), Fuel"
+LGAPWF2,Lincoln Gap Wind Farm - Stage 2,Lincoln Gap Wind Farm - Stage 2,SA1,SA1,Lincoln Gap Wind Farm Pty Ltd,Lincoln Gap Wind Farm Pty Ltd,86.4,3.6,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+LILYSF1,Lilyvale Solar Farm,Lilyvale Solar Farm,QLD1,QLD1,Lilyvale Asset Co Pty Ltd ATF Lilyvale Asset Trust,Lilyvale Asset Co Pty Ltd ATF Lilyvale Asset Trust,118.4,1.6,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+LIMOSF11,Limondale Solar Farm 1,Limondale Solar Farm 1,NSW1,NSW1,Limondale Sun Farm Pty Ltd,Limondale Sun Farm Pty Ltd,230.0,2.3,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+LIMOSF21,Limondale Solar Farm 2,Limondale Solar Farm 2,NSW1,NSW1,Limondale Sun Farm Pty Ltd,Limondale Sun Farm Pty Ltd,28.98,2.07,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+LI_WY_CA,Catagunya / Liapootah / Wayatinah,Catagunya / Liapootah / Wayatinah,TAS1,TAS1,Hydro-Electric Corporation,Hydro-Electric Corporation,176.70000000000002,24.0,0.0,,Water,Hydro - Water,"Capacity(MW), Fuel"
+LKBONNY1,Lake Bonney 1 Wind Farm,Lake Bonney 1 Wind Farm,SA1,SA1,Lake Bonney Wind Power Pty Ltd,Lake Bonney Wind Power Pty Ltd,80.5,1.75,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+LKBONNY2,Lake Bonney 2 Wind Farm,Lake Bonney 2 Wind Farm,SA1,SA1,Lake Bonney Wind Power Pty Ltd,Lake Bonney Wind Power Pty Ltd,159.0,3.0,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+LKBONNY3,Lake Bonney 3 Wind Farm,Lake Bonney 3 Wind Farm,SA1,SA1,Lake Bonney Wind Power Pty Ltd,Lake Bonney Wind Power Pty Ltd,39.0,3.0,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+LK_ECHO,Lake Echo,Lake Echo,TAS1,TAS1,Hydro-Electric Corporation,Hydro-Electric Corporation,32.4,32.4,0.0,,Water,Hydro - Water,Fuel
+LNGS1,Laverton North,Laverton North,VIC1,VIC1,Snowy Hydro Ltd,Snowy Hydro Ltd,156.0,156.0,0.0,,OCGT,Fossil - Natural Gas Pipeline,Fuel
+LNGS2,Laverton North,Laverton North,VIC1,VIC1,Snowy Hydro Ltd,Snowy Hydro Ltd,156.0,156.0,0.0,,OCGT,Fossil - Natural Gas Pipeline,Fuel
+LONSDALE,Lonsdale,Lonsdale,SA1,SA1,Lumo Generation SA Pty Ltd,Lumo Generation SA Pty Ltd,20.16,1.12,0.0,,Other,Fossil - Diesel,"Capacity(MW), Fuel"
+LOYYB1,Loy Yang B,Loy Yang B,VIC1,VIC1,Gippsland Power Pty Ltd ABN 30 077 851 079 / LYB Ventures Australia Pty Ltd ABN 57 055 984 499 / Traralgon Power Pty Ltd ABN 64 056 292 623 / Latrobe Power Pty Ltd ABN 42 055 983 563 / LYB Australia Limited ABN 87 055 563 785,Gippsland Power Pty Ltd ABN 30 077 851 079 / LYB Ventures Australia Pty Ltd ABN 57 055 984 499 / Traralgon Power Pty Ltd ABN 64 056 292 623 / Latrobe Power Pty Ltd ABN 42 055 983 563 / LYB Australia Limited ABN 87 055 563 785,580.0,580.0,0.0,,Coal,Fossil - Brown Coal,Fuel
+LOYYB2,Loy Yang B,Loy Yang B,VIC1,VIC1,Gippsland Power Pty Ltd ABN 30 077 851 079 / LYB Ventures Australia Pty Ltd ABN 57 055 984 499 / Traralgon Power Pty Ltd ABN 64 056 292 623 / Latrobe Power Pty Ltd ABN 42 055 983 563 / LYB Australia Limited ABN 87 055 563 785,Gippsland Power Pty Ltd ABN 30 077 851 079 / LYB Ventures Australia Pty Ltd ABN 57 055 984 499 / Traralgon Power Pty Ltd ABN 64 056 292 623 / Latrobe Power Pty Ltd ABN 42 055 983 563 / LYB Australia Limited ABN 87 055 563 785,580.0,580.0,0.0,,Coal,Fossil - Brown Coal,Fuel
+LRSF1,Longreach Solar Farm,Longreach Solar Farm,QLD1,QLD1,Longreach Asset Company,Longreach Asset Company,15.0,2.14,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+LUCAS2S2,Lucas Heights 2,Lucas Heights 2,NSW1,NSW1,EDL LFG NSW Pty Ltd,EDL LFG NSW Pty Ltd,4.6,1.15,0.0,,Biomass,Renewable Biomass or Waste - Landfill Gas,"Capacity(MW), Fuel"
+LUCASHGT,Lucas Heights 2,Lucas Heights 2,NSW1,NSW1,EDL LFG NSW Pty Ltd,EDL LFG NSW Pty Ltd,12.65,1.15,0.0,,Biomass,Renewable Biomass or Waste - Landfill Gas,"Capacity(MW), Fuel"
+LVES1,LaTrobe Valley BESS,LaTrobe Valley BESS,VIC1,VIC1,Tilt Renewables Australia Pty Ltd,Tilt Renewables Australia Pty Ltd,100.0,100.0,200.0,200.0,Battery Storage,Other - Other,Fuel
+LYA1,Loy Yang A Power Station,Loy Yang A Power Station,VIC1,VIC1,AGL Loy Yang Marketing Pty Ltd,AGL Loy Yang Marketing Pty Ltd,560.0,560.0,0.0,,Coal,Fossil - Brown Coal,Fuel
+LYA2,Loy Yang A Power Station,Loy Yang A Power Station,VIC1,VIC1,AGL Loy Yang Marketing Pty Ltd,AGL Loy Yang Marketing Pty Ltd,530.0,530.0,0.0,,Coal,Fossil - Brown Coal,Fuel
+LYA3,Loy Yang A Power Station,Loy Yang A Power Station,VIC1,VIC1,AGL Loy Yang Marketing Pty Ltd,AGL Loy Yang Marketing Pty Ltd,560.0,560.0,0.0,,Coal,Fossil - Brown Coal,Fuel
+LYA4,Loy Yang A Power Station,Loy Yang A Power Station,VIC1,VIC1,AGL Loy Yang Marketing Pty Ltd,AGL Loy Yang Marketing Pty Ltd,560.0,560.0,0.0,,Coal,Fossil - Brown Coal,Fuel
+MACARTH1,Macarthur Wind Farm,Macarthur Wind Farm,VIC1,VIC1,Macarthur Wind Farm Pty Ltd and Meridian Wind Macarthur Pty Ltd,Macarthur Wind Farm Pty Ltd and Meridian Wind Macarthur Pty Ltd,420.0,3.0,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+MACKNTSH,Mackintosh,Mackintosh,TAS1,TAS1,Hydro-Electric Corporation,Hydro-Electric Corporation,79.9,79.9,0.0,,Water,Hydro - Water,Fuel
+MANNSF2,Mannum Solar Farm 2,Mannum Solar Farm 2,SA1,SA1,Mannum Stage 2 SubCo Pty Ltd as trustee for the Mannum Stage 2 Unit Trust,Mannum Stage 2 SubCo Pty Ltd as trustee for the Mannum Stage 2 Unit Trust,29.99,2.73,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+MANSLR1,Manildra Solar Farm,Manildra Solar Farm,NSW1,NSW1,Manildra Prop Pty Ltd as trustee for the Manildra Asset Trust,Manildra Prop Pty Ltd as trustee for the Manildra Asset Trust,50.0,2.5,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+MAPS2PV1,Mannum Adelaide Pumping Station No 2 - MAPL2 (Palmer),Mannum Adelaide Pumping Station No 2 - MAPL2 (Palmer),SA1,SA1,South Australian Water Corporation,South Australian Water Corporation,16.5,2.75,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+MAPS3PV1,Mannum Adelaide Pumping Station No 3 - MAPL3 (Tungkillo),Mannum Adelaide Pumping Station No 3 - MAPL3 (Tungkillo),SA1,SA1,South Australian Water Corporation,South Australian Water Corporation,16.5,2.75,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+MARYRSF1,Maryrorough Solar Farm,Maryrorough Solar Farm,QLD1,QLD1,Maryrorough Solar Pty Ltd,Maryrorough Solar Pty Ltd,34.5,34.5,0.0,,Solar,Solar - Solar,Fuel
+MBAHNTH,Moranbah North,Moranbah North,QLD1,QLD1,EDL Projects Australia Pty Ltd,EDL Projects Australia Pty Ltd,63.84,3.04,0.0,,Gas other,Fossil - Waste Coal Mine Gas,"Capacity(MW), Fuel"
+MBPS2PV1,Murray Bridge - Onkaparinga Pipeline Pump 2,Murray Bridge - Onkaparinga Pipeline Pump 2,SA1,SA1,South Australian Water Corporation,South Australian Water Corporation,13.75,2.75,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+MCINTYR1,MacIntyre Wind Farm,MacIntyre Wind Farm,QLD1,QLD1,Macintyre Windfarm Pty Ltd and Arc Energy Macintyre Pty Ltd,Macintyre Windfarm Pty Ltd and Arc Energy Macintyre Pty Ltd,923.4,5.7,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+MCKAY1,Bogong / Mackay,Bogong / Mackay,VIC1,VIC1,AGL Hydro Partnership,AGL Hydro Partnership,300.02,70.0,0.0,,Water,Hydro - Water,"Capacity(MW), Fuel"
+MEADOWBK,Meadowbank,Meadowbank,TAS1,TAS1,Hydro-Electric Corporation,Hydro-Electric Corporation,40.0,40.0,0.0,,Water,Hydro - Water,Fuel
+MERCER01,Mt Mercer Wind Farm,Mt Mercer Wind Farm,VIC1,VIC1,Mt Mercer Windfarm Pty Ltd,Mt Mercer Windfarm Pty Ltd,131.2,2.05,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+METZSF1,Metz Solar Farm,Metz Solar Farm,NSW1,NSW1,Metz ProjectCo Pty Ltd as trustee for Metz ProjectCo Trust ,Metz ProjectCo Pty Ltd as trustee for Metz ProjectCo Trust ,135.0,2.5,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+MEWF1,Mount Emerald,Mount Emerald,QLD1,QLD1,Ratch Australia,Ratch Australia,180.52,3.41,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+MIDDLSF1,Middlemount Solar Farm,Middlemount Solar Farm,QLD1,QLD1,Capricorn SF No1 Pty Ltd,Capricorn SF No1 Pty Ltd,26.0,26.0,0.0,,Solar,Solar - Solar,Fuel
+MINTARO,Mintaro GT,Mintaro GT,SA1,SA1,Synergen Power Pty Ltd,Synergen Power Pty Ltd,90.0,90.0,0.0,,OCGT,Fossil - Natural Gas Pipeline,Fuel
+MLLFRHF1,Mugga Lane Renewable Hybrid,Mugga Lane Renewable Hybrid,NSW1,NSW1,LGIGEN,LGIGEN,6.39,1.07,0.0,,,Renewable Biomass or Waste - Landfill Gas,"Capacity(MW), Fuel"
+MLWF1,Mortons Lane Wind Farm,Mortons Lane Wind Farm,VIC1,VIC1,Mortons Lane Windfarm Pty Ltd,Mortons Lane Windfarm Pty Ltd,19.5,1.5,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+MOKOSF1,Mokoan Solar Farm,Mokoan Solar Farm (LightsourceBP),VIC1,VIC1,EE Solar 6 Pty Ltd as trustee for EE Solar 6 Trust,EE Solar 6 Pty Ltd as trustee for EE Solar 6 Trust,46.0,46.0,0.0,,Solar,Solar - Solar,"Site Name, Fuel"
+MOLNGSF1,Molong Solar Farm,Molong Solar Farm,NSW1,NSW1,Molong Operations co Pty Ltd ATF Molong Operations Trust,Molong Operations co Pty Ltd ATF Molong Operations Trust,36.08,1.64,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+MOORAWF1,Moorabool Wind Farm,Moorabool Wind Farm,VIC1,VIC1,Moorabool Wind Farm Interface Company Pty Ltd,Moorabool Wind Farm Interface Company Pty Ltd,312.0,3.0,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+MOORBESS,Moorabool BESS,Moorabool BESS,VIC1,VIC1,Neoen Australia Pty Ltd,Neoen Australia Pty Ltd,300.0,300.0,1200.0,1200.0,Battery Storage,Other - Other,Fuel
+MOREESF1,Moree Solar Farm,Moree Solar Farm,NSW1,NSW1,Moree Solar Farm Pty Ltd,Moree Solar Farm Pty Ltd,56.0,1.0,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+MORTLK11,Mortlake,Mortlake,VIC1,VIC1,Origin Energy Power Limited,Origin Energy Power Limited,292.0,292.0,0.0,,OCGT,Fossil - Natural Gas Pipeline,Fuel
+MORTLK12,Mortlake,Mortlake,VIC1,VIC1,Origin Energy Power Limited,Origin Energy Power Limited,292.0,292.0,0.0,,OCGT,Fossil - Natural Gas Pipeline,Fuel
+MOUSF1,Moura Solar Farm,Moura Solar Farm,QLD1,QLD1,Moura Solar Farm SPV Pty Ltd as the Trustee for Moura Solar Farm Unit Trust,Moura Solar Farm SPV Pty Ltd as the Trustee for Moura Solar Farm Unit Trust,99.0,2.75,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+MP1,Mt Piper,Mt Piper,NSW1,NSW1,EnergyAustralia NSW Pty Ltd,EnergyAustralia NSW Pty Ltd,730.0,730.0,0.0,,Coal,Fossil - Black Coal,Fuel
+MP2,Mt Piper,Mt Piper,NSW1,NSW1,EnergyAustralia NSW Pty Ltd,EnergyAustralia NSW Pty Ltd,660.0,660.0,0.0,,Coal,Fossil - Black Coal,Fuel
+MPP_1,Millmerran Power Plant,Millmerran Power Plant,QLD1,QLD1,Millmerran Power Partners,Millmerran Power Partners,426.0,426.0,0.0,,Coal,Fossil - Black Coal,Fuel
+MPP_2,Millmerran Power Plant,Millmerran Power Plant,QLD1,QLD1,Millmerran Power Partners,Millmerran Power Partners,426.0,426.0,0.0,,Coal,Fossil - Black Coal,Fuel
+MRTLSWF1,Mortlake South Wind Farm,Mortlake South Wind Farm,VIC1,VIC1,Mortlake South Wind Farm Pty Ltd,Mortlake South Wind Farm Pty Ltd,157.5,4.5,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+MSTUART1,Mt Stuart,Mt Stuart,QLD1,QLD1,Origin Energy Mt Stuart,Origin Energy Mt Stuart,146.0,146.0,0.0,,OCGT,Fossil - Diesel,Fuel
+MSTUART2,Mt Stuart,Mt Stuart,QLD1,QLD1,Origin Energy Mt Stuart,Origin Energy Mt Stuart,146.0,146.0,0.0,,OCGT,Fossil - Diesel,Fuel
+MSTUART3,Mt Stuart,Mt Stuart,QLD1,QLD1,Origin Energy Mt Stuart,Origin Energy Mt Stuart,131.5,131.5,0.0,,OCGT,Fossil - Diesel,Fuel
+MTGELWF1,Mt Gellibrand Wind Farm,Mt Gellibrand Wind Farm,VIC1,VIC1,ACCIONA Energy,ACCIONA Energy,138.6,3.15,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+MTMILLAR,Mt Millar Wind Farm,Mt Millar Wind Farm,SA1,SA1,MT MILLAR WIND FARM PTY LTD,MT MILLAR WIND FARM PTY LTD,72.28,2.07,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+MURRAY,Murray 1,Murray 1,VIC1,VIC1,Snowy Hydro Ltd,Snowy Hydro Ltd,1550.0,95.0,0.0,,Water,Hydro - Water,"Capacity(MW), Fuel"
+MUSSELR1,Musselroe Wind Farm,Musselroe Wind Farm,TAS1,TAS1,Musselroe Wind Farm Pty Ltd,Musselroe Wind Farm Pty Ltd,168.0,3.0,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+MUWAWF1,Murra Warra Wind Farm - stage 1,Murra Warra Wind Farm - stage 1,VIC1,VIC1,Murra Warra Project Co Pty Ltd,Murra Warra Project Co Pty Ltd,225.7,3.7,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+MUWAWF2,Murra Warra Wind Farm - stage 2,Murra Warra Wind Farm - stage 2,VIC1,VIC1,Murra Warra II Project Co Pty Ltd as Trustee for the Murra Warra II Project Trust,Murra Warra II Project Co Pty Ltd as Trustee for the Murra Warra II Project Trust,209.0,5.5,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+MWPS1PV1,Morgan To Whyalla Pipeline No 1 PS And Water Filtration Plant,Morgan To Whyalla Pipeline No 1 PS And Water Filtration Plant,SA1,SA1,South Australian Water Corporation,South Australian Water Corporation,5.5,2.75,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+MWPS2PV1,Morgan To Whyalla Pipeline No 2 PS,Morgan To Whyalla Pipeline No 2 PS,SA1,SA1,South Australian Water Corporation,South Australian Water Corporation,5.5,2.75,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+MWPS3PV1,Morgan To Whyalla Pipeline No 3 PS,Morgan To Whyalla Pipeline No 3 PS,SA1,SA1,South Australian Water Corporation,South Australian Water Corporation,7.5,2.5,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+MWPS4PV1,Morgan To Whyalla Pipeline No 4 PS,Morgan To Whyalla Pipeline No 4 PS,SA1,SA1,South Australian Water Corporation,South Australian Water Corporation,5.5,2.75,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+NASF1,Narromine Solar Farm,Narromine Solar Farm,NSW1,NSW1,Dubbo Solar Hub Pty Ltd,Dubbo Solar Hub Pty Ltd,9.2,2.3,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+NBHWF1,Hallett 4 North Brown Hill,Hallett 4 North Brown Hill,SA1,SA1,Brown Hill North Pty Ltd,Brown Hill North Pty Ltd,132.3,2.1,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+NEVERSF1,Nevertire Solar Farm,Nevertire Solar Farm,NSW1,NSW1,Nevertire Solar Pty Ltd as Trustee for the Nevertire Solar Trust,Nevertire Solar Pty Ltd as Trustee for the Nevertire Solar Trust,104.64,2.18,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+NEWENSF1,New England Solar Farm,New England Solar Farm,NSW1,NSW1,ACEN AUSTRALIA,ACEN AUSTRALIA,200.0,200.0,0.0,,Solar,Solar - Solar,Fuel
+NEWENSF2,New England Solar Farm,New England Solar Farm,NSW1,NSW1,ACEN AUSTRALIA,ACEN AUSTRALIA,200.0,200.0,0.0,,Solar,Solar - Solar,Fuel
+NPS,Newport,Newport,VIC1,VIC1,EnergyAustralia Ecogen Pty Ltd,EnergyAustralia Ecogen Pty Ltd,500.0,500.0,0.0,,Gas other,Fossil - Natural Gas Pipeline,Fuel
+NUMURSF1,Numurkah Solar Farm,Numurkah Solar Farm,VIC1,VIC1,Numurkah Solar Farm Pty Ltd,Numurkah Solar Farm Pty Ltd,101.08,1.81,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+NYNGAN1,Nyngan Solar Plant,Nyngan Solar Plant,NSW1,NSW1,PARF Company 6 Pty Limited,PARF Company 6 Pty Limited,102.03,1.33,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+OAKEY1,Oakey Power Station,Oakey Power Station,QLD1,QLD1,Oakey Power Holdings Pty Ltd,Oakey Power Holdings Pty Ltd,173.0,173.0,0.0,,OCGT,Fossil - Natural Gas Pipeline,Fuel
+OAKEY1SF,Oakey Solar Farm,Oakey Solar Farm,QLD1,QLD1,Oakey1 Asset Co Pty Ltd,Oakey1 Asset Co Pty Ltd,25.0,25.0,0.0,,Solar,Solar - Solar,Fuel
+OAKEY2,Oakey Power Station,Oakey Power Station,QLD1,QLD1,Oakey Power Holdings Pty Ltd,Oakey Power Holdings Pty Ltd,173.0,173.0,0.0,,OCGT,Fossil - Natural Gas Pipeline,Fuel
+OAKEY2SF,Oakey 2 Solar Farm,Oakey 2 Solar Farm,QLD1,QLD1,RE Oakey Pty Ltd,RE Oakey Pty Ltd,55.64,2.14,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+OAKLAND1,Oaklands Hill Wind Farm,Oaklands Hill Wind Farm,VIC1,VIC1,Oaklands Hill Wind farm pty ltd,Oaklands Hill Wind farm pty ltd,67.2,2.1,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+OAKY2,Oaky Creek 2,Oaky Creek 2,QLD1,QLD1,EDL OCI PTY LTD,EDL OCI PTY LTD,15.0,3.0,0.0,,Gas other,Fossil - Waste Coal Mine Gas,"Capacity(MW), Fuel"
+OAKYCREK,Oaky Creek,Oaky Creek,QLD1,QLD1,EDL OCI Pty Ltd,EDL OCI Pty Ltd,21.0,3.04,0.0,,Gas other,Fossil - Waste Coal Mine Gas,"Capacity(MW), Fuel"
+ORANA,Orana BESS,Orana BESS,NSW1,NSW1,Wellington Battery ProjectCo Pty Ltd,Wellington Battery ProjectCo Pty Ltd,414.85,0.93,1660.0,1660.0,Battery Storage,Other - Other,"Capacity(MW), Fuel"
+OSB-AG,Osborne,Osborne,SA1,SA1,Osborne Cogeneration Pty Ltd,Osborne Cogeneration Pty Ltd,118.0,62.0,0.0,,CCGT,Fossil - Natural Gas Pipeline,"Capacity(MW), Fuel"
+PALOONA,Paloona,Paloona,TAS1,TAS1,Hydro-Electric Corporation,Hydro-Electric Corporation,28.0,28.0,0.0,,Water,Hydro - Water,Fuel
+PAREPS1,Port Augusta Renewable Energy Park - Solar,Port Augusta Renewable Energy Park - Solar,SA1,SA1,PAREP 1 Pty Ltd,PAREP 1 Pty Ltd,79.2,2.75,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+PAREPW1,Port Augusta Renewable Energy Park - Wind,Port Augusta Renewable Energy Park - Wind,SA1,SA1,PAREP 1 Pty Ltd,PAREP 1 Pty Ltd,210.0,4.02,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+PARSF1,Parkes Solar Farm,Parkes Solar Farm,NSW1,NSW1,Parkes Solar Farm Pty Ltd,Parkes Solar Farm Pty Ltd,49.5,2.25,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+PIBESS1,Philip Island BESS,Philip Island BESS,VIC1,VIC1,Mondo Power,Mondo Power,5.0,5.0,10.0,10.0,Battery Storage,Other - Other,Fuel
+PINDARI,Pindari,Pindari,NSW1,NSW1,AGL Hydro Partnership,AGL Hydro Partnership,5.77,5.77,0.0,,Water,Hydro - Water,Fuel
+POAT110,Poatina,Poatina,TAS1,TAS1,Hydro-Electric Corporation,Hydro-Electric Corporation,100.0,50.0,0.0,,Water,Hydro - Water,"Capacity(MW), Fuel"
+POAT220,Poatina,Poatina,TAS1,TAS1,Hydro-Electric Corporation,Hydro-Electric Corporation,200.0,50.0,0.0,,Water,Hydro - Water,"Capacity(MW), Fuel"
+POR01,Port Lincoln GT,Port Lincoln GT,SA1,SA1,Synergen Power Pty Ltd,Synergen Power Pty Ltd,50.0,25.0,0.0,,OCGT,Fossil - Diesel,"Capacity(MW), Fuel"
+POR03,Port Lincoln GT,Port Lincoln GT,SA1,SA1,Synergen Power Pty Ltd,Synergen Power Pty Ltd,23.5,23.5,0.0,,OCGT,Fossil - Diesel,Fuel
+PORTWF,Portland Wind Farm,Portland Wind Farm,VIC1,VIC1,Pacific Hydro Portland Wind Farm Pty Ltd,Pacific Hydro Portland Wind Farm Pty Ltd,151.7,2.05,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+PPCCGT,Pelican Point,Pelican Point,SA1,SA1,Pelican Point Power Limited,Pelican Point Power Limited,529.0,171.0,0.0,,CCGT,Fossil - Natural Gas Pipeline,"Capacity(MW), Fuel"
+PTSTAN1,Port Stanvac 1,Port Stanvac 1,SA1,SA1,Snowy Hydro Ltd,Snowy Hydro Ltd,56.52,1.57,0.0,,Other,Fossil - Diesel,"Capacity(MW), Fuel"
+QBYNB1,Queanbeyan BESS,Queanbeyan BESS,NSW1,NSW1,Berrybank 2 Asset Pty Ltd as Trustee for Berrybank 2 Asset Trust,Berrybank 2 Asset Pty Ltd as Trustee for Berrybank 2 Asset Trust,10.0,10.0,20.0,20.0,Battery Storage,Other - Other,Fuel
+QPBESS,Quorn Park Hybrid,Quorn Park Solar Hybrid,NSW1,NSW1,Quorn Park Solar Farm Pty Ltd as the trustee for Quorn Park Solar Farm Trust,Quorn Park Solar Farm Pty Ltd as the trustee for Quorn Park Solar Farm Trust,25.520000000000003,3.45,40.0,40.0,Battery Storage,Other - Other,"Site Name, Capacity(MW), Fuel"
+QPS1,Quarantine,Quarantine,SA1,SA1,Origin Energy Power Limited,Origin Energy Power Limited,29.0,29.0,0.0,,OCGT,Fossil - Natural Gas Pipeline,Fuel
+QPS2,Quarantine,Quarantine,SA1,SA1,Origin Energy Power Limited,Origin Energy Power Limited,24.0,24.0,0.0,,OCGT,Fossil - Natural Gas Pipeline,Fuel
+QPS3,Quarantine,Quarantine,SA1,SA1,Origin Energy Power Limited,Origin Energy Power Limited,29.0,29.0,0.0,,OCGT,Fossil - Natural Gas Pipeline,Fuel
+QPS4,Quarantine,Quarantine,SA1,SA1,Origin Energy Power Limited,Origin Energy Power Limited,24.0,24.0,0.0,,OCGT,Fossil - Natural Gas Pipeline,Fuel
+QPS5,Quarantine,Quarantine,SA1,SA1,Origin Energy Power Limited,Origin Energy Power Limited,128.0,128.0,0.0,,OCGT,Fossil - Natural Gas Pipeline,Fuel
+QPSF,Quorn Park Hybrid,Quorn Park Solar Hybrid,NSW1,NSW1,Quorn Park Solar Farm Pty Ltd as the trustee for Quorn Park Solar Farm Trust,Quorn Park Solar Farm Pty Ltd as the trustee for Quorn Park Solar Farm Trust,91.96000000000001,4.4,0.0,,Solar,Solar - Solar,"Site Name, Capacity(MW), Fuel"
+RANGEB1,Rangebank BESS,Rangebank BESS,VIC1,VIC1,Cranbourne BESS Project Co Pty Ltd,Cranbourne BESS Project Co Pty Ltd,200.0,200.0,400.0,400.0,Battery Storage,Other - Other,Fuel
+REDBANK1,Redbank,Redbank,NSW1,NSW1,Verdant Earth Technologies Limited,Verdant Earth Technologies Limited,139.5,151.0,0.0,,Biomass,Renewable Biomass or Waste - Wood Waste,"Capacity(MW), Fuel"
+REECE1,Reece,Reece,TAS1,TAS1,Hydro-Electric Corporation,Hydro-Electric Corporation,115.6,115.6,0.0,,Water,Hydro - Water,Fuel
+REECE2,Reece,Reece,TAS1,TAS1,Hydro-Electric Corporation,Hydro-Electric Corporation,115.6,115.6,0.0,,Water,Hydro - Water,Fuel
+REPULSE,Repulse,Repulse,TAS1,TAS1,Hydro-Electric Corporation,Hydro-Electric Corporation,28.0,28.0,0.0,,Water,Hydro - Water,Fuel
+RESS1G,Riverina Energy Storage System 1,Riverina Energy Storage System 1,NSW1,NSW1,Shell New Energies Australia Pty Ltd,Shell New Energies Australia Pty Ltd,60.0,60.0,120.0,120.0,Battery Storage,Other - Other,Fuel
+RIVNB2,Riverina Energy Storage System 2,Riverina Energy Storage System 2,NSW1,NSW1,RESS 2 Pty Ltd,RESS 2 Pty Ltd,65.0,65.0,130.0,130.0,Battery Storage,Other - Other,Fuel
+ROMA_7,Roma,Roma,QLD1,QLD1,Origin Energy Power Limited,Origin Energy Power Limited,40.0,40.0,0.0,,OCGT,Fossil - Natural Gas Pipeline,Fuel
+ROMA_8,Roma,Roma,QLD1,QLD1,Origin Energy Power Limited,Origin Energy Power Limited,40.0,40.0,0.0,,OCGT,Fossil - Natural Gas Pipeline,Fuel
+ROWALLAN,Rowallan,Rowallan,TAS1,TAS1,Hydro-Electric Corporation,Hydro-Electric Corporation,10.5,10.5,0.0,,Water,Hydro - Water,Fuel
+ROYALLA1,Royalla Solar Farm,Royalla Solar Farm,NSW1,NSW1,Royalla Asset Pty Ltd ATF Royalla Asset Trust,Royalla Asset Pty Ltd ATF Royalla Asset Trust,20.0,1.0,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+RPCG,Rocky Point Sugar Mill Cogeneration Plant,Rocky Point Sugar Mill Cogeneration Plant,QLD1,QLD1,W.H.Heck and Sons Pty Ltd,W.H.Heck and Sons Pty Ltd,30.0,30.0,0.0,,Biomass,Renewable Biomass or Waste - Bagasse,Fuel
+RRSF1,Ross River Solar Farm,Ross River Solar Farm,QLD1,QLD1,Ross River Operations Pty Ltd as the Trustee for the Ross River Operations Trust,Ross River Operations Pty Ltd as the Trustee for the Ross River Operations Trust,128.0,2.0,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+RUBICON,Rubicon Mountain Streams,Rubicon Mountain Streams,VIC1,VIC1,AGL Hydro Partnership,AGL Hydro Partnership,13.5,2.7,0.0,,Water,Hydro - Water,"Capacity(MW), Fuel"
+RUGBYR1,Rugby Run Solar Farm,Rugby Run Solar Farm,QLD1,QLD1,Adani Rugby Run Pty Ltd,Adani Rugby Run Pty Ltd,65.0,65.0,0.0,,Solar,Solar - Solar,Fuel
+RYANCWF1,Ryan Corner Wind Farm,Ryan Corner Wind Farm,VIC1,VIC1,Ryan Corner Development Pty Ltd,Ryan Corner Development Pty Ltd,218.4,4.2,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+RYEPARK1,Rye Park Wind Farm,Rye Park Wind Farm,NSW1,NSW1,Tilt Renewables Australia Pty Ltd,Tilt Renewables Australia Pty Ltd,396.0,6.0,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+SALTCRK1,Salt Creek Wind Farm,Salt Creek Wind Farm,VIC1,VIC1,Salt Creek Wind Farm Pty Ltd,Salt Creek Wind Farm Pty Ltd,54.0,3.6,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+SAPHWF1,Sapphire Wind Farm,Sapphire Wind Farm,NSW1,NSW1,SWF1 Operations Holdings Pty Ltd as trustee for SWF1 Hold Trust,SWF1 Operations Holdings Pty Ltd as trustee for SWF1 Hold Trust,270.0,3.6,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+SEBSF1,Sebastopol Solar Farm,Sebastopol Solar Farm,NSW1,NSW1,Sebastopol Asset Co Pty Ltd ATF Sebastopol Asset Trust,Sebastopol Asset Co Pty Ltd ATF Sebastopol Asset Trust,90.0,2.25,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+SHBESS01,Stanhope BESS Project 01,Stanhope BESS Project 01,VIC1,VIC1,Globird Energy Pty Ltd,Globird Energy Pty Ltd,20.0,20.0,20.0,20.0,Battery Storage,Solar - Solar,Fuel
+SHGEN,Shoalhaven,Shoalhaven,NSW1,NSW1,Origin Energy Eraring Pty Ltd,Origin Energy Eraring Pty Ltd,247.0,41.0,9200.0,480.0,Water,Hydro - Water,"Capacity(MW), Storage(MWh), Fuel"
+SITHE01,Smithfield Energy Facility,Smithfield Energy Facility,NSW1,NSW1,Smithfield Power Generation Pty Ltd,Smithfield Power Generation Pty Ltd,125.7,41.9,0.0,,OCGT,Fossil - Natural Gas Pipeline,"Capacity(MW), Fuel"
+SKSF1,South Keswick Solar Farm,South Keswick Solar Farm,NSW1,NSW1,Dubbo Solar Hub Pty Ltd,Dubbo Solar Hub Pty Ltd,13.9,2.32,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+SMCSF1,Sun Metals Corporation Solar Farm,Sun Metals Corporation Solar Farm,QLD1,QLD1,Sun Metals Corporation Pty Ltd,Sun Metals Corporation Pty Ltd,143.0,2.75,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+SNAPPER1,Snapper Point Power Station,Snapper Point Power Station,SA1,SA1,Port Adelaide Energy Pty Ltd,Port Adelaide Energy Pty Ltd,154.0,30.8,0.0,,OCGT,Fossil - Natural Gas,"Capacity(MW), Fuel"
+SNB01,Supernode BESS,Supernode BESS,QLD1,QLD1,Supernode Operations Pty Ltd as the trustee for Supernode BESS 1 Project Trust,Supernode Operations Pty Ltd as the trustee for Supernode BESS 1 Project Trust,260.0,260.0,620.0,620.0,Battery Storage,Other - Other,Fuel
+SNB02,Supernode BESS,Supernode BESS,QLD1,QLD1,Supernode Operations Pty Ltd as the trustee for Supernode BESS 1 Project Trust,Supernode Operations Pty Ltd as the trustee for Supernode BESS 1 Project Trust,260.0,260.0,1240.0,1240.0,Battery Storage,Other - Other,Fuel
+SNB03,Supernode BESS,Supernode BESS,QLD1,QLD1,Supernode Operations Pty Ltd as the trustee for Supernode BESS 1 Project Trust,Supernode Operations Pty Ltd as the trustee for Supernode BESS 1 Project Trust,260.0,260.0,1240.0,1240.0,Battery Storage,Other - Other,Fuel
+SNB04,Supernode BESS,Supernode BESS,QLD1,QLD1,Supernode Operations Pty Ltd as the trustee for Supernode BESS 1 Project Trust,Supernode Operations Pty Ltd as the trustee for Supernode BESS 1 Project Trust,260.0,260.0,2480.0,2480.0,Battery Storage,Other - Other,Fuel
+SNB05,Supernode BESS,Supernode BESS,QLD1,QLD1,Supernode Operations Pty Ltd as the trustee for Supernode BESS 1 Project Trust,Supernode Operations Pty Ltd as the trustee for Supernode BESS 1 Project Trust,260.0,260.0,2480.0,2480.0,Battery Storage,Other - Other,Fuel
+SNOWNTH1,Snowtown S2 Wind Farm,Snowtown S2 Wind Farm,SA1,SA1,Snowtown Wind Farm Stage 2 Pty Ltd,Snowtown Wind Farm Stage 2 Pty Ltd,270.0,3.0,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+SNOWSTH1,Snowtown S2 Wind Farm,Snowtown S2 Wind Farm,SA1,SA1,Snowtown Wind Farm Stage 2 Pty Ltd,Snowtown Wind Farm Stage 2 Pty Ltd,126.0,3.0,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+SNOWTWN1,Snowtown Wind Farm,Snowtown Wind Farm,SA1,SA1,Snowtown Wind Farm Pty Ltd,Snowtown Wind Farm Pty Ltd,98.7,2.1,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+SNUG1,Snuggery,Snuggery,SA1,SA1,Synergen Power Pty Ltd,Synergen Power Pty Ltd,63.0,21.0,0.0,,OCGT,Fossil - Diesel,"Capacity(MW), Fuel"
+SNUGNL1,Snuggery,Snuggery,SA1,SA1,Synergen Power Pty Ltd,Synergen Power Pty Ltd,21.0,21.0,0.0,,OCGT,Fossil - Diesel,Fuel
+SOTS1,Star of the South Wind Farm,Star of the South Wind Farm,VIC1,VIC1,Star of the South Wind Farm Pty Ltd as trustee for the Star of the South Trust,Star of the South Wind Farm Pty Ltd as trustee for the Star of the South Trust,2205.0,15.0,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+SRSF1,Susan River Solar Farm,Susan River Solar Farm,QLD1,QLD1,Susan River Solar Pty Ltd as trustee for the Susan River Solar Trust,Susan River Solar Pty Ltd as trustee for the Susan River Solar Trust,85.26,1.74,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+STAN-1,Stanwell,Stanwell,QLD1,QLD1,Stanwell Corporation Limited,Stanwell Corporation Limited,365.0,365.0,0.0,,Coal,Fossil - Black Coal,Fuel
+STAN-2,Stanwell,Stanwell,QLD1,QLD1,Stanwell Corporation Limited,Stanwell Corporation Limited,365.0,365.0,0.0,,Coal,Fossil - Black Coal,Fuel
+STAN-3,Stanwell,Stanwell,QLD1,QLD1,Stanwell Corporation Limited,Stanwell Corporation Limited,365.0,365.0,0.0,,Coal,Fossil - Black Coal,Fuel
+STAN-4,Stanwell,Stanwell,QLD1,QLD1,Stanwell Corporation Limited,Stanwell Corporation Limited,365.0,365.0,0.0,,Coal,Fossil - Black Coal,Fuel
+STARHLWF,Starfish Hill,Starfish Hill,SA1,SA1,Ratch Australia,Ratch Australia,33.0,1.5,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+STOCKYD1,Stockyard Hill Wind Farm,Stockyard Hill Wind Farm,VIC1,VIC1,Stockyard Hill Wind Farm Pty Ltd,Stockyard Hill Wind Farm Pty Ltd,527.56,3.0,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+STUBSF1,Stubbo Solar Farm,Stubbo Solar Farm,NSW1,NSW1,ACEN AUSTRALIA,ACEN AUSTRALIA,202.0,198.0,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+STUBSF2,Stubbo Solar Farm,Stubbo Solar Farm,NSW1,NSW1,ACEN AUSTRALIA,ACEN AUSTRALIA,198.0,202.0,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+STWF1,Silverton Wind Farm,Silverton Wind Farm,NSW1,NSW1,PARF Company 8 Pty Ltd as trustee for the Silverton Project Trust,PARF Company 8 Pty Ltd as trustee for the Silverton Project Trust,198.94,3.43,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+SUNRSF1,Sunraysia Solar Farm,Sunraysia Solar Farm,NSW1,NSW1,Sunraysia Solar Project Pty Ltd,Sunraysia Solar Project Pty Ltd,228.8,2.2,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+SUNTPSF1,Suntop Solar Farm,Suntop Solar Farm,NSW1,NSW1,Suntop SF Pty Ltd As Trustee For The Suntop Asset,Suntop SF Pty Ltd As Trustee For The Suntop Asset,150.0,150.0,0.0,,Solar,Solar - Solar,Fuel
+SWAN_E,Swanbank E GT,Swanbank E GT,QLD1,QLD1,CleanCo Queensland Limited,CleanCo Queensland Limited,385.0,385.0,0.0,,CCGT,Fossil - Coal Seam Methane,Fuel
+TAHMOOR,Tahmoor,Tahmoor,NSW1,NSW1,EDL TT Pty Ltd,EDL TT Pty Ltd,7.46,1.07,0.0,,Gas other,Fossil - Waste Coal Mine Gas,"Capacity(MW), Fuel"
+TALWA1,Tallawarra,Tallawarra,NSW1,NSW1,EnergyAustralia Tallawarra Pty Ltd,EnergyAustralia Tallawarra Pty Ltd,400.0,400.0,0.0,,CCGT,Fossil - Natural Gas Pipeline,Fuel
+TALWB1,Tallawarra B,Tallawarra B,NSW1,NSW1,EnergyAustralia Tallawarra Pty Ltd ,EnergyAustralia Tallawarra Pty Ltd ,320.0,320.0,0.0,,OCGT,Fossil - Natural Gas Pipeline,Fuel
+TARALGA1,Taralga Wind Farm,Taralga Wind Farm,NSW1,NSW1,Energy Pacific Vic Pty Ltd,Energy Pacific Vic Pty Ltd,106.8,3.0,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+TARBESS1,Tarong BESS - Stanwell,Tarong BESS - Stanwell,QLD1,QLD1,Stanwell Corporation Limited,Stanwell Corporation Limited,300.0,300.0,600.0,600.0,Battery Storage,Other - Other,Fuel
+TARONG#1,Tarong,Tarong,QLD1,QLD1,Stanwell Corporation Limited,Stanwell Corporation Limited,350.0,350.0,0.0,,Coal,Fossil - Black Coal,Fuel
+TARONG#2,Tarong,Tarong,QLD1,QLD1,Stanwell Corporation Limited,Stanwell Corporation Limited,350.0,350.0,0.0,,Coal,Fossil - Black Coal,Fuel
+TARONG#3,Tarong,Tarong,QLD1,QLD1,Stanwell Corporation Limited,Stanwell Corporation Limited,350.0,350.0,0.0,,Coal,Fossil - Black Coal,Fuel
+TARONG#4,Tarong,Tarong,QLD1,QLD1,Stanwell Corporation Limited,Stanwell Corporation Limited,350.0,350.0,0.0,,Coal,Fossil - Black Coal,Fuel
+TARRALEA,Tarraleah,Tarraleah,TAS1,TAS1,Hydro-Electric Corporation,Hydro-Electric Corporation,90.0,15.0,0.0,,Water,Hydro - Water,"Capacity(MW), Fuel"
+TATIARA1,Tatiara Meats,Tatiara Meats,SA1,SA1,Vibe Energy Pty Ltd,Vibe Energy Pty Ltd,0.5,0.5,0.0,,Other,Fossil - Diesel,Fuel
+TB2BG1,Tailem Bend Battery Project,Tailem Bend Battery Project,SA1,SA1,Vena Energy,Vena Energy,41.5,41.5,84.0,84.0,Battery Storage,Other - Other,Fuel
+TB2SF1,Tailem Bend Stage 2 Solar Project,Tailem Bend Stage 2 Solar Project,SA1,SA1,Vena Energy,Vena Energy,105.0,105.0,0.0,,Solar,Solar - Solar,Fuel
+TBSF1,Tailem Bend - Solar,Tailem Bend - Solar,SA1,SA1,Vena Energy,Vena Energy,108.0,108.0,0.0,,Solar,Solar - Solar,Fuel
+TGNSS1,Traralgon Network Support Station,Traralgon Network Support Station,VIC1,VIC1,NovaPower Pty Ltd,NovaPower Pty Ltd,10.0,10.0,0.0,,Gas other,Fossil - Natural Gas,Fuel
+THEDROP1,The Drop,The Drop,NSW1,NSW1,Pacific Hydro Investments Pty Ltd,Pacific Hydro Investments Pty Ltd,2.5,2.5,0.0,,Water,Hydro - Water,Fuel
+TIB1,Torrens Island BESS,Torrens Island BESS,SA1,SA1,TIPSCO,TIPSCO,250.7,2.3,250.0,250.0,Battery Storage,Other - Other,"Capacity(MW), Fuel"
+TIERIBESS1,Tieri BESS,Tieri BESS,QLD1,QLD1,FRV Service Australia Pty Ltd,FRV Service Australia Pty Ltd,103.2,4.3,200.0,200.0,Battery Storage,Other - Other,"Capacity(MW), Fuel"
+TIMWEST,Timboon West Wind Farm,Timboon West Wind Farm,VIC1,VIC1,Timboon West Wind Farm Pty Ltd,Timboon West Wind Farm Pty Ltd,7.2,3.6,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+TITREE,Ti Tree Bioenergy,Ti Tree Bioenergy,QLD1,QLD1,Ti Tree Bioenergy,Ti Tree Bioenergy,4.5,1.1,0.0,,Biomass,Renewable Biomass or Waste - Landfill Gas,"Capacity(MW), Fuel"
+TNPS1,Tarong North,Tarong North,QLD1,QLD1,Stanwell Corporation Limited,Stanwell Corporation Limited,450.0,450.0,0.0,,Coal,Fossil - Black Coal,Fuel
+TOORAWF,Toora,Toora,VIC1,VIC1,Ratch Australia,Ratch Australia,21.0,1.75,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+TORRB1,Torrens Island B,Torrens Island B,SA1,SA1,AGL SA Generation Pty Limited ,AGL SA Generation Pty Limited ,200.0,200.0,0.0,,Gas other,Fossil - Natural Gas Pipeline,Fuel
+TORRB2,Torrens Island B,Torrens Island B,SA1,SA1,AGL SA Generation Pty Limited ,AGL SA Generation Pty Limited ,200.0,200.0,0.0,,Gas other,Fossil - Natural Gas Pipeline,Fuel
+TORRB3,Torrens Island B,Torrens Island B,SA1,SA1,AGL SA Generation Pty Limited ,AGL SA Generation Pty Limited ,200.0,200.0,0.0,,Gas other,Fossil - Natural Gas Pipeline,Fuel
+TORRB4,Torrens Island B,Torrens Island B,SA1,SA1,AGL SA Generation Pty Limited ,AGL SA Generation Pty Limited ,200.0,200.0,0.0,,Gas other,Fossil - Natural Gas Pipeline,Fuel
+TOWER,Tower,Tower,NSW1,NSW1,EDL CSM NSW Pty Ltd,EDL CSM NSW Pty Ltd,41.2,1.03,0.0,,Gas other,Fossil - Waste Coal Mine Gas,"Capacity(MW), Fuel"
+TREVALLN,Trevallyn,Trevallyn,TAS1,TAS1,Hydro-Electric Corporation,Hydro-Electric Corporation,93.0,20.0,0.0,,Water,Hydro - Water,"Capacity(MW), Fuel"
+TRGBESS,Terang BESS,Terang BESS,VIC1,VIC1,frv_NR,frv_NR,122.17,3.8,200.0,200.0,Battery Storage,Other - Other,"Capacity(MW), Fuel"
+TRIBUTE,Tribute,Tribute,TAS1,TAS1,Hydro-Electric Corporation,Hydro-Electric Corporation,82.8,82.8,0.0,,Water,Hydro - Water,Fuel
+TULLYSM1,Tully Sugar Mill,Tully Sugar Mill,QLD1,QLD1,Tully Sugar Limited,Tully Sugar Limited,32.0,32.0,0.0,,Biomass,Renewable Biomass or Waste - Bagasse,Fuel
+TUMUT3,Tumut 3,Tumut 3,NSW1,NSW1,Snowy Hydro Ltd,Snowy Hydro Ltd,1500.0,250.0,0.0,,Water,Hydro - Water,"Capacity(MW), Fuel"
+TUNGATIN,Tungatinah,Tungatinah,TAS1,TAS1,Hydro-Electric Corporation,Hydro-Electric Corporation,125.0,25.0,0.0,,Water,Hydro - Water,"Capacity(MW), Fuel"
+TVCC201,Tamar Valley Combined Cycle,Tamar Valley Combined Cycle,TAS1,TAS1,AETV Pty Ltd,AETV Pty Ltd,208.0,140.0,0.0,,CCGT,Fossil - Natural Gas Pipeline,"Capacity(MW), Fuel"
+TVPP104,Tamar Valley Peaking,Tamar Valley Peaking,TAS1,TAS1,AETV Pty Ltd,AETV Pty Ltd,58.0,58.0,0.0,,OCGT,Fossil - Natural Gas Pipeline,Fuel
+ULBESS1,Ulinda Park BESS,Ulinda Park BESS,QLD1,QLD1,Ulinda Park ProjectCo Pty Ltd,Ulinda Park ProjectCo Pty Ltd,154.96,2.98,298.0,298.0,Battery Storage,Other - Other,"Capacity(MW), Fuel"
+UPPTUMUT,Upper Tumut,Upper Tumut,NSW1,NSW1,Snowy Hydro Ltd,Snowy Hydro Ltd,616.0,72.0,0.0,,Water,Hydro - Water,"Capacity(MW), Fuel"
+URANQ11,Uranquinty,Uranquinty,NSW1,NSW1,Origin Energy Uranquinty Power Pty Ltd,Origin Energy Uranquinty Power Pty Ltd,173.0,173.0,0.0,,OCGT,Fossil - Natural Gas Pipeline,Fuel
+URANQ12,Uranquinty,Uranquinty,NSW1,NSW1,Origin Energy Uranquinty Power Pty Ltd,Origin Energy Uranquinty Power Pty Ltd,173.0,173.0,0.0,,OCGT,Fossil - Natural Gas Pipeline,Fuel
+URANQ13,Uranquinty,Uranquinty,NSW1,NSW1,Origin Energy Uranquinty Power Pty Ltd,Origin Energy Uranquinty Power Pty Ltd,173.0,173.0,0.0,,OCGT,Fossil - Natural Gas Pipeline,Fuel
+URANQ14,Uranquinty,Uranquinty,NSW1,NSW1,Origin Energy Uranquinty Power Pty Ltd,Origin Energy Uranquinty Power Pty Ltd,173.0,173.0,0.0,,OCGT,Fossil - Natural Gas Pipeline,Fuel
+VALDORA1,Valdora Solar Farm,Valdora Solar Farm,QLD1,QLD1,Diamond Energy Pty Ltd,Diamond Energy Pty Ltd,15.0,15.0,0.0,,Solar,Solar - Solar,Fuel
+VBB1,Victorian Big Battery,Victorian Big Battery,VIC1,VIC1,Victorian Big Battery Pty Ltd,Victorian Big Battery Pty Ltd,300.0,300.0,470.0,470.0,Battery Storage,Other - Other,Fuel
+VP5,Vales Point B,Vales Point B,NSW1,NSW1,Delta Electricity,Delta Electricity,660.0,660.0,0.0,,Coal,Fossil - Black Coal,Fuel
+VP6,Vales Point B,Vales Point B,NSW1,NSW1,Delta Electricity,Delta Electricity,660.0,660.0,0.0,,Coal,Fossil - Black Coal,Fuel
+VPGS1,Valley Power,Valley Power,VIC1,VIC1,Snowy Hydro Ltd,Snowy Hydro Ltd,50.0,50.0,0.0,,OCGT,Fossil - Natural Gas Pipeline,Fuel
+VPGS2,Valley Power,Valley Power,VIC1,VIC1,Snowy Hydro Ltd,Snowy Hydro Ltd,50.0,50.0,0.0,,OCGT,Fossil - Natural Gas Pipeline,Fuel
+VPGS3,Valley Power,Valley Power,VIC1,VIC1,Snowy Hydro Ltd,Snowy Hydro Ltd,50.0,50.0,0.0,,OCGT,Fossil - Natural Gas Pipeline,Fuel
+VPGS4,Valley Power,Valley Power,VIC1,VIC1,Snowy Hydro Ltd,Snowy Hydro Ltd,50.0,50.0,0.0,,OCGT,Fossil - Natural Gas Pipeline,Fuel
+VPGS5,Valley Power,Valley Power,VIC1,VIC1,Snowy Hydro Ltd,Snowy Hydro Ltd,50.0,50.0,0.0,,OCGT,Fossil - Natural Gas Pipeline,Fuel
+VPGS6,Valley Power,Valley Power,VIC1,VIC1,Snowy Hydro Ltd,Snowy Hydro Ltd,50.0,50.0,0.0,,OCGT,Fossil - Natural Gas Pipeline,Fuel
+W/HOE#1,Wivenhoe,Wivenhoe,QLD1,QLD1,CleanCo Queensland Limited,CleanCo Queensland Limited,285.0,285.0,3000.0,3000.0,Water,Hydro - Water,Fuel
+W/HOE#2,Wivenhoe,Wivenhoe,QLD1,QLD1,CleanCo Queensland Limited,CleanCo Queensland Limited,285.0,285.0,3000.0,3000.0,Water,Hydro - Water,Fuel
+WAGGNSF1,Wagga North Solar Farm,Wagga North Solar Farm,NSW1,NSW1,Wagga Wagga Operationsco Pty Ltd as trustree for Wagga Wagga Operations Trust,Wagga Wagga Operationsco Pty Ltd as trustree for Wagga Wagga Operations Trust,36.01,1.64,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+WALGRV1,Wallgrove Grid Battery project,Wallgrove Grid Battery project,NSW1,NSW1,TransGrid,TransGrid,50.0,50.0,75.0,75.0,Battery Storage,Other - Other,Fuel
+WAMBOWF1,Wambo Wind Farm,Wambo Wind Farm,QLD1,QLD1, Cubico Sustainable Investments Australia Pty Ltd, Cubico Sustainable Investments Australia Pty Ltd,252.0,252.0,0.0,,Wind,Wind - Wind,Fuel
+WANDB1,Wandoan South BESS,Wandoan South BESS,QLD1,QLD1,Vena Evergy,Vena Evergy,100.0,100.0,150.0,150.0,Battery Storage,Other - Other,Fuel
+WANDSF1,Wandoan South Solar Stage 1,Wandoan South Solar Stage 1,QLD1,QLD1,Vena Evergy,Vena Evergy,160.0,160.0,0.0,,Solar,Solar - Solar,Fuel
+WARWSF1,Warwick Solar Farm,Warwick Solar Farm,QLD1,QLD1,The University of Queensland,The University of Queensland,32.1,4.01,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+WARWSF2,Warwick Solar Farm,Warwick Solar Farm,QLD1,QLD1,The University of Queensland,The University of Queensland,32.1,4.01,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+WATERLWF,Waterloo Wind Farm,Waterloo Wind Farm,SA1,SA1,Waterloo Windfarm Pty Ltd,Waterloo Windfarm Pty Ltd,130.8,3.3,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+WAUBRAWF,Waubra,Waubra,VIC1,VIC1,Pyrenees Wind Energy Developments,Pyrenees Wind Energy Developments,192.0,1.5,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+WDBESS1,Western Downs Battery,Western Downs Battery - Stage 1 And 2,QLD1,QLD1,Western Downs BESS Pty Ltd as trustee for Western Downs BESS Trust,Western Downs BESS Pty Ltd as trustee for Western Downs BESS Trust,254.94,1.82,510.0,510.0,Battery Storage,Other - Other,"Site Name, Capacity(MW), Fuel"
+WDGPH1,Western Downs Green Power Hub P/L,Western Downs Green Power Hub P/L,QLD1,QLD1,Western Downs Green Power Hub Pty Ltd,Western Downs Green Power Hub Pty Ltd,399.97,2.4,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+WDLNGN01,Woodlawn Bioreactor Energy Generation,Woodlawn Bioreactor Energy Generation,NSW1,NSW1,Veolia Environmental Services Aust P/L,Veolia Environmental Services Aust P/L,7.46,1.07,0.0,,Biomass,Renewable Biomass or Waste - Biogas,"Capacity(MW), Fuel"
+WELLSF1,Wellington Solar Farm,Wellington Solar Farm,NSW1,NSW1,Lightsource Australia SPV 4 Pty Ltd,Lightsource Australia SPV 4 Pty Ltd,216.08,1.64,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+WELNSF1,Wellington North Solar Farm (Lightsource),Wellington North Solar Farm (Lightsource),NSW1,NSW1,Wellington North Solar Farm Pty Ltd,Wellington North Solar Farm Pty Ltd,436.8,4.2,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+WEMENSF1,Wemen Solar Farm,Wemen Solar Farm,VIC1,VIC1,Wemen Asset Co Pty Ltd as Trustee to Wemen Solar Unit Trust,Wemen Asset Co Pty Ltd as Trustee to Wemen Solar Unit Trust,97.5,2.5,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+WESTILL1,West Illawarra Leagues Club,West Illawarra Leagues Club,NSW1,NSW1,Western Suburbs Leagues Club,Western Suburbs Leagues Club,1.43,0.72,0.0,,Other,Fossil - Diesel,"Capacity(MW), Fuel"
+WGWF1,Willogoleche Wind Farm,Willogoleche Wind Farm,SA1,SA1,Willogoleche Power Pty Ltd,Willogoleche Power Pty Ltd,119.76,3.43,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+WHILL1,Windy Hill,Windy Hill,QLD1,QLD1,Ratch Australia,Ratch Australia,12.0,0.6,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+WHIT1,Whitwood Road,Whitwood Road,QLD1,QLD1,LMS Energy Pty Ltd,LMS Energy Pty Ltd,0.5,0.5,0.0,,Biomass,Renewable Biomass or Waste - Landfill Gas,Fuel
+WHITSF1,Whitsunday Solar Farm,Whitsunday Solar Farm,QLD1,QLD1,Whitsunday Solar Farm Pty Ltd,Whitsunday Solar Farm Pty Ltd,57.5,2.5,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+WILLHOV1,William Hovel,William Hovel,VIC1,VIC1,Pacific Hydro Investments Pty Ltd,Pacific Hydro Investments Pty Ltd,1.8,1.8,0.0,,Water,Hydro - Water,Fuel
+WINTSF1,Winton Solar Farm,Winton Solar Farm,VIC1,VIC1,Winton Asset Co. Pty Ltd as Trustee of the Winton Asset Trust,Winton Asset Co. Pty Ltd as Trustee of the Winton Asset Trust,85.0,85.0,0.0,,Solar,Solar - Solar,Fuel
+WKIEWA1,West Kiewa,West Kiewa,VIC1,VIC1,AGL Hydro Partnership,AGL Hydro Partnership,34.0,17.0,0.0,,Water,Hydro - Water,"Capacity(MW), Fuel"
+WKIEWA2,West Kiewa,West Kiewa,VIC1,VIC1,AGL Hydro Partnership,AGL Hydro Partnership,34.0,17.0,0.0,,Water,Hydro - Water,"Capacity(MW), Fuel"
+WLWLSF1,Walla Walla Solar Farm,Walla Walla Solar Farm,NSW1,NSW1,FRV Australia (Walla Walla Asset Co Pty Ltd (ACN 634 728 868) as trustee for the Walla Walla Asset Trust),FRV Australia (Walla Walla Asset Co Pty Ltd (ACN 634 728 868) as trustee for the Walla Walla Asset Trust),151.97,3.17,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+WLWLSF2,Walla Walla Solar Farm,Walla Walla Solar Farm,NSW1,NSW1,FRV Australia (Walla Walla Asset Co Pty Ltd (ACN 634 728 868) as trustee for the Walla Walla Asset Trust),FRV Australia (Walla Walla Asset Co Pty Ltd (ACN 634 728 868) as trustee for the Walla Walla Asset Trust),151.97,3.17,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+WOLARSF1,Wollar Solar Farm,Wollar Solar Farm,NSW1,NSW1,Wollar Solar Development Pty Ltd,Wollar Solar Development Pty Ltd,280.0,280.0,0.0,,Solar,Solar - Solar,Fuel
+WONWP,Wonthaggi Wind Farm,Wonthaggi Wind Farm,VIC1,VIC1,Vision Super Pty Ltd,Vision Super Pty Ltd,12.0,2.0,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+WOODLWN1,Woodlawn Wind Farm,Woodlawn Wind Farm,NSW1,NSW1,Woodlawn Wind Pty Ltd,Woodlawn Wind Pty Ltd,48.3,2.1,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+WOOLGSF1,Woolooga Solar Farm,Woolooga Solar Farm,QLD1,QLD1,Woolooga Fund Pty Ltd,Woolooga Fund Pty Ltd,222.5,2.5,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+WOOLNTH1,Woolnorth Studland Bay / Bluff Point,Woolnorth Studland Bay / Bluff Point,TAS1,TAS1,Woolnorth Wind Farm Finance Pty Ltd,Woolnorth Wind Farm Finance Pty Ltd,138.0,1.75,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+WPWF,Wattle Point,Wattle Point,SA1,SA1,Infrastructure Capital Group,Infrastructure Capital Group,90.75,1.65,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+WRSF1,White Rock Solar Farm,White Rock Solar Farm,NSW1,NSW1,White Rock Wind Farm Pty Ltd,White Rock Wind Farm Pty Ltd,20.0,2.5,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+WRWF1,White Rock Wind Farm - Stage 1,White Rock Wind Farm - Stage 1,NSW1,NSW1,CECEP Wind Power Australia Pty Ltd,CECEP Wind Power Australia Pty Ltd,175.0,2.5,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+WSTWYSF1,West Wyalong Solar Farm,West Wyalong Solar Farm,NSW1,NSW1,West Wyalong Fund Pty Ltd,West Wyalong Fund Pty Ltd,105.27,3.63,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+WTAHB1,Waratah Super Battery,Waratah Super Battery,NSW1,NSW1,Munmorah Battery ProjectCo Pty Ltd,Munmorah Battery ProjectCo Pty Ltd,850.18,2.95,1680.0,1680.0,Battery Storage,Other - Other,"Capacity(MW), Fuel"
+WUNUSF1,Wunghnu Solar Farm,Wunghnu Solar Farm,VIC1,VIC1,Sun Spot 3 Pty Ltd,Sun Spot 3 Pty Ltd,93.5,2.75,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+WYANGALA,Wyangala A,Wyangala A,NSW1,NSW1,Hydro Power Pty Ltd,Hydro Power Pty Ltd,20.0,20.0,0.0,,Water,Hydro - Water,Fuel
+WYANGALB,Wyangala B,Wyangala B,NSW1,NSW1,AGL,AGL,4.0,4.0,0.0,,Water,Hydro - Water,Fuel
+WYASF1,Wyalong Solar Farm,Wyalong Solar Farm,NSW1,NSW1,Wyalong Solar Farm Pty Ltd as the trustee for the Wyalong Solar Farm Unit Trust,Wyalong Solar Farm Pty Ltd as the trustee for the Wyalong Solar Farm Unit Trust,62.32,1.64,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+YABULU,Townsville Power Station,Townsville Power Station,QLD1,QLD1,RATCH-Australia,RATCH-Australia,160.0,160.0,0.0,,CCGT,Fossil - Natural Gas Pipeline,Fuel
+YABULU2,Townsville Power Station,Townsville Power Station,QLD1,QLD1,RATCH-Australia,RATCH-Australia,84.0,84.0,0.0,,CCGT,Fossil - Natural Gas Pipeline,Fuel
+YAMBUKWF,Yambuk,Yambuk,VIC1,VIC1,Energy Pacific Vic Pty Ltd,Energy Pacific Vic Pty Ltd,30.0,1.5,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+YARANSF1,Yarranlea Solar Farm,Yarranlea Solar Farm,QLD1,QLD1,Yarranlea Solar Pty Ltd,Yarranlea Solar Pty Ltd,121.0,2.75,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+YARWUN_1,Yarwun 1,Yarwun 1,QLD1,QLD1,RTA Yarwun Pty Ltd,RTA Yarwun Pty Ltd,180.0,180.0,0.0,,CCGT,Fossil - Natural Gas Pipeline,Fuel
+YATSF1,Yatpool Solar Farm,Yatpool Solar Farm,VIC1,VIC1,Yatpool Sun Farm Pty Ltd,Yatpool Sun Farm Pty Ltd,94.0,2.75,0.0,,Solar,Solar - Solar,"Capacity(MW), Fuel"
+YAWWF1,Yawong Wind Farm,Yawong Wind Farm,VIC1,VIC1,Yawong Wind Farm Pty Ltd,Yawong Wind Farm Pty Ltd,7.2,3.6,0.0,,Wind,Wind - Wind,"Capacity(MW), Fuel"
+YENDWF1,Yendon Wind Farm,Yendon Wind Farm,VIC1,VIC1,Northleaf /InfraRed/Macquarie Capital,Northleaf /InfraRed/Macquarie Capital,144.4,3.8,0.0,0.0,Wind,Wind - Wind,"Capacity(MW), Fuel"
+YWPS1,Yallourn W,Yallourn W,VIC1,VIC1,EnergyAustralia Yallourn Pty Ltd,EnergyAustralia Yallourn Pty Ltd,350.0,350.0,0.0,,Coal,Fossil - Brown Coal,Fuel
+YWPS2,Yallourn W,Yallourn W,VIC1,VIC1,EnergyAustralia Yallourn Pty Ltd,EnergyAustralia Yallourn Pty Ltd,350.0,350.0,0.0,,Coal,Fossil - Brown Coal,Fuel
+YWPS3,Yallourn W,Yallourn W,VIC1,VIC1,EnergyAustralia Yallourn Pty Ltd,EnergyAustralia Yallourn Pty Ltd,375.0,375.0,0.0,,Coal,Fossil - Brown Coal,Fuel
+YWPS4,Yallourn W,Yallourn W,VIC1,VIC1,EnergyAustralia Yallourn Pty Ltd,EnergyAustralia Yallourn Pty Ltd,375.0,375.0,0.0,,Coal,Fossil - Brown Coal,Fuel
