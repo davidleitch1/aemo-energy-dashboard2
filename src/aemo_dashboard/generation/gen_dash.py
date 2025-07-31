@@ -2635,8 +2635,25 @@ class EnergyDashboard(param.Parameterized):
             
             logger.info("Tab setup complete")
             
+            # Add JavaScript auto-refresh for reliability - 5 minutes for production
+            auto_refresh_script = pn.pane.HTML(
+                """
+                <div style="position: fixed; top: 5px; right: 5px; background: rgba(40,42,54,0.8); color: #50fa7b; padding: 5px 10px; border-radius: 5px; font-size: 11px; z-index: 9999;">
+                    Auto-refresh: 5min
+                </div>
+                <script>
+                console.log('Auto-refresh enabled: Page will reload every 5 minutes');
+                setTimeout(function(){
+                    console.log('Refreshing page...');
+                    window.location.reload(true);
+                }, 300000);  // 300000ms = 5 minutes
+                </script>
+                """
+            )
+            
             # Complete dashboard layout
             dashboard = pn.Column(
+                auto_refresh_script,  # Add auto-refresh script
                 self.header_section,
                 tabs,
                 sizing_mode='stretch_width'
@@ -3950,6 +3967,7 @@ def main():
     print("Starting Interactive Energy Generation Dashboard...")
     print(f"Navigate to: http://localhost:{port}")
     print("Press Ctrl+C to stop the server")
+    print("Auto-refresh: Page will reload every 5 minutes")
     
     # Serve the app with dark theme and proper session handling
     pn.serve(

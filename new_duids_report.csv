@@ -1,0 +1,14 @@
+DUID,Region,Site Name,Owner,Capacity(MW),Storage(MWh),Fuel
+ BROWNMT,NSW1,Brown Mountain Hydro Power Station,Cochrane Dam Pty Ltd,5,,Water
+CUSF1,NSW1,Culcairn Solar Farm,Culcairn Solar Farm Pty Ltd as trustee for Culcairn Solar Farm Trust,0.22 - 349.98,,Solar
+JGULLY,NSW1,Jacks Gully,EDL LFG NSW Pty Ltd,2.3,,Biomass
+MLLFRHF1,NSW1,Mugga Lane Renewable Hybrid,LGIGEN,3.21 - 6.39,,
+RESS1G,NSW1,Riverina Energy Storage System 1,Shell New Energies Australia Pty Ltd,60,120.0,Battery Storage
+TAHMOOR,NSW1,Tahmoor,EDL TT Pty Ltd,7.46,,Gas other
+SNB05,QLD1,Supernode BESS,Supernode Operations Pty Ltd as the trustee for Supernode BESS 1 Project Trust,260,2480.0,Battery Storage
+ULBESS1,QLD1,Ulinda Park BESS,Ulinda Park ProjectCo Pty Ltd,154.96,298.0,Battery Storage
+WAMBOWF1,QLD1,Wambo Wind Farm, Cubico Sustainable Investments Australia Pty Ltd,252,,Wind
+ADVMH1,SA1,Adelaide Desalination Plant,South Australian Water Corporation,1,,Water
+SNOWSTH1,SA1,Snowtown S2 Wind Farm,Snowtown Wind Farm Stage 2 Pty Ltd,126,,Wind
+TB2BG1,SA1,Tailem Bend Battery Project,Vena Energy,41.5,84.0,Battery Storage
+KiataWF1,VIC1,Kiata Wind Farm,Kiata ProjectCo Pty Ltd atf Kiata Project Trust,31.05,,Wind
