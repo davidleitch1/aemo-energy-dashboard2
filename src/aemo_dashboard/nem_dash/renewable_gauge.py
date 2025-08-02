@@ -200,8 +200,15 @@ def update_records(current_percentage):
         timestamp = current_time.isoformat()
         records_updated = False
         
-        # Check all-time record
-        if current_percentage > records['all_time']['value']:
+        # Check all-time record (handle both old and new formats)
+        if isinstance(records['all_time'], dict) and 'renewable_pct' in records['all_time']:
+            # New format
+            all_time_value = records['all_time']['renewable_pct']['value']
+        else:
+            # Old format
+            all_time_value = records['all_time']['value']
+            
+        if current_percentage > all_time_value:
             records['all_time'] = {
                 'value': current_percentage,
                 'timestamp': timestamp
@@ -228,7 +235,12 @@ def update_records(current_percentage):
         if records_updated:
             save_renewable_records(records)
         
-        all_time_record = records['all_time']['value']
+        # Get values (handle both formats)
+        if isinstance(records['all_time'], dict) and 'renewable_pct' in records['all_time']:
+            all_time_record = records['all_time']['renewable_pct']['value']
+        else:
+            all_time_record = records['all_time']['value']
+            
         hour_record = records['hourly'][hour_key]['value']
         
         return all_time_record, hour_record, records_updated
