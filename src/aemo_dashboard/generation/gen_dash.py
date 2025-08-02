@@ -2635,18 +2635,99 @@ class EnergyDashboard(param.Parameterized):
             
             logger.info("Tab setup complete")
             
-            # Add JavaScript auto-refresh for reliability - 5 minutes for production
+            # Add JavaScript auto-refresh for reliability - 9 minutes for production (2 collector cycles)
             auto_refresh_script = pn.pane.HTML(
                 """
                 <div style="position: fixed; top: 5px; right: 5px; background: rgba(40,42,54,0.8); color: #50fa7b; padding: 5px 10px; border-radius: 5px; font-size: 11px; z-index: 9999;">
-                    Auto-refresh: 5min
+                    Auto-refresh: 9min
                 </div>
                 <script>
-                console.log('Auto-refresh enabled: Page will reload every 5 minutes');
+                // State preservation for dashboard refresh
+                function saveDashboardState() {
+                    const state = {
+                        // Save active tab index
+                        activeTab: document.querySelector('.bk-tabs').getElementsByClassName('bk-tab-active')[0]?.getAttribute('data-index') || '0',
+                        
+                        // Save date range selections if they exist
+                        dateRangeSelections: {},
+                        
+                        // Save region selections if they exist
+                        regionSelections: {},
+                        
+                        // Timestamp for validation
+                        savedAt: new Date().toISOString()
+                    };
+                    
+                    // Try to save date picker values
+                    const dateInputs = document.querySelectorAll('input[type="date"], input[type="datetime-local"]');
+                    dateInputs.forEach((input, index) => {
+                        if (input.value) {
+                            state.dateRangeSelections['date_' + index] = input.value;
+                        }
+                    });
+                    
+                    // Try to save select/multiselect values
+                    const selects = document.querySelectorAll('select');
+                    selects.forEach((select, index) => {
+                        if (select.value) {
+                            state.regionSelections['select_' + index] = select.value;
+                        }
+                    });
+                    
+                    localStorage.setItem('aemo_dashboard_state', JSON.stringify(state));
+                    console.log('Dashboard state saved:', state);
+                }
+                
+                function restoreDashboardState() {
+                    try {
+                        const savedState = localStorage.getItem('aemo_dashboard_state');
+                        if (!savedState) return;
+                        
+                        const state = JSON.parse(savedState);
+                        
+                        // Only restore if saved within last 15 minutes
+                        const savedTime = new Date(state.savedAt);
+                        const now = new Date();
+                        const diffMinutes = (now - savedTime) / (1000 * 60);
+                        
+                        if (diffMinutes > 15) {
+                            localStorage.removeItem('aemo_dashboard_state');
+                            return;
+                        }
+                        
+                        // Restore active tab after a short delay to ensure tabs are loaded
+                        setTimeout(function() {
+                            const tabIndex = parseInt(state.activeTab);
+                            const tabs = document.querySelector('.bk-tabs');
+                            if (tabs && tabIndex > 0) {
+                                const tabHeaders = tabs.querySelectorAll('.bk-tab');
+                                if (tabHeaders[tabIndex]) {
+                                    tabHeaders[tabIndex].click();
+                                    console.log('Restored to tab:', tabIndex);
+                                }
+                            }
+                        }, 1000);
+                        
+                        // Clear the saved state after restoration
+                        localStorage.removeItem('aemo_dashboard_state');
+                        
+                    } catch (e) {
+                        console.error('Error restoring dashboard state:', e);
+                    }
+                }
+                
+                // Set up auto-refresh with state preservation
+                console.log('Auto-refresh enabled: Page will reload every 9 minutes (2 data collector cycles)');
                 setTimeout(function(){
-                    console.log('Refreshing page...');
+                    console.log('Saving state and refreshing page...');
+                    saveDashboardState();
                     window.location.reload(true);
-                }, 300000);  // 300000ms = 5 minutes
+                }, 540000);  // 540000ms = 9 minutes
+                
+                // Try to restore state on page load
+                window.addEventListener('load', function() {
+                    restoreDashboardState();
+                });
                 </script>
                 """
             )
@@ -3967,7 +4048,7 @@ def main():
     print("Starting Interactive Energy Generation Dashboard...")
     print(f"Navigate to: http://localhost:{port}")
     print("Press Ctrl+C to stop the server")
-    print("Auto-refresh: Page will reload every 5 minutes")
+    print("Auto-refresh: Page will reload every 9 minutes (2 data collector cycles)")
     
     # Serve the app with dark theme and proper session handling
     pn.serve(
