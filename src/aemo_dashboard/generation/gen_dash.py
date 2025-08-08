@@ -2131,6 +2131,15 @@ class EnergyDashboard(param.Parameterized):
         while True:
             try:
                 await asyncio.sleep(270)  # 4.5 minutes
+                
+                # FIX for midnight rollover bug: Refresh date ranges for preset time ranges
+                # This ensures the dashboard continues updating after midnight
+                if self.time_range in ['1', '7', '30']:
+                    old_end_date = self.end_date
+                    self._update_date_range_from_preset()
+                    if old_end_date != self.end_date:
+                        logger.info(f"Date rollover detected: updated end_date from {old_end_date} to {self.end_date}")
+                
                 # Update plots in both tabs
                 self.update_plot()
                 logger.info("Auto-update completed")
@@ -2203,7 +2212,18 @@ class EnergyDashboard(param.Parameterized):
         self.end_date = end_date
     
     def _get_effective_date_range(self):
-        """Get the effective start and end datetime for data filtering"""
+        """Get the effective start and end datetime for data filtering
+        
+        IMPORTANT: This method includes a fix for the midnight rollover issue.
+        
+        Problem: When the dashboard runs past midnight, if end_date is set to "today"
+        (which becomes yesterday after midnight), the dashboard would query for 
+        yesterday's data only, causing the display to freeze at 11:55 PM (the last
+        data point before midnight).
+        
+        Solution: If the selected end_date is today or in the future, cap the query
+        at the current time to prevent querying stale data after date rollover.
+        """
         if self.time_range == 'All':
             # For all data, return full available range for auto resolution selection
             # This allows the enhanced adapters to choose 30-minute data for better performance
@@ -2213,7 +2233,22 @@ class EnergyDashboard(param.Parameterized):
         else:
             # Convert dates to datetime for filtering
             start_datetime = datetime.combine(self.start_date, datetime.min.time())
-            end_datetime = datetime.combine(self.end_date, datetime.max.time())
+            
+            # MIDNIGHT ROLLOVER FIX: Cap end_datetime at current time if end_date is today or future
+            now = datetime.now()
+            end_date_midnight = datetime.combine(self.end_date, datetime.max.time())
+            
+            # Check if the end_date is today or in the future
+            if end_date_midnight >= now:
+                # End date is today or future - cap at current time to avoid stale data
+                end_datetime = now
+                logger.info(f"Date range capped at current time: {now.strftime('%Y-%m-%d %H:%M:%S')} "
+                           f"(requested end_date was {self.end_date})")
+            else:
+                # End date is in the past - use the full day as requested
+                end_datetime = end_date_midnight
+                logger.debug(f"Using full historical date range up to {end_date_midnight.strftime('%Y-%m-%d %H:%M:%S')}")
+            
             return start_datetime, end_datetime
     
     
