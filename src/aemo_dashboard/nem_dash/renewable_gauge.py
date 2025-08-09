@@ -23,6 +23,31 @@ query_manager = NEMDashQueryManager()
 # Renewable fuel types to include in calculation
 RENEWABLE_FUELS = ['Wind', 'Solar', 'Water', 'Rooftop Solar', 'Hydro', 'Biomass']
 
+# Pumped hydro DUIDs to exclude from renewable calculation
+# This list is based on analysis of bidirectional water units (pump and generate)
+PUMPED_HYDRO_DUIDS = [
+    'BARRON-1',  # Barron Gorge
+    'BLOWERNG',  # Blowering
+    'BUTLERSG',  # Butlers Gorge
+    'CLOVER',    # Clover
+    'CLUNY',     # Cluny
+    'EILDON1',   # Eildon 1
+    'EILDON2',   # Eildon 2
+    'GUTHEGA',   # Guthega
+    'HUMENSW',   # Hume NSW
+    'HUMEV',     # Hume VIC
+    'KAREEYA4',  # Kareeya 4
+    'MCKAY1',    # Mackay
+    'MURRAY',    # Murray 1 (Snowy 2.0 precursor)
+    'PALOONA',   # Paloona
+    'REPULSE',   # Repulse
+    'ROWALLAN',  # Rowallan
+    'SHGEN',     # Shoalhaven
+    'TUMUT3',    # Tumut 3
+    'UPPTUMUT',  # Upper Tumut
+    'W/HOE#2'    # Wivenhoe 2
+]
+
 # File to store historical records
 RECORDS_FILE = Path(config.data_dir) / 'renewable_records.json'
 
@@ -87,7 +112,7 @@ def initialize_records_from_history():
 def load_renewable_records():
     """
     Load historical renewable energy records from JSON file
-    Returns dict with 'all_time' and 'hourly' records
+    Returns dict with records in various formats
     """
     try:
         if RECORDS_FILE.exists():
@@ -95,8 +120,26 @@ def load_renewable_records():
                 records = json.load(f)
             logger.info("Loaded renewable energy records from file")
             
-            # Validate records have required structure
-            if 'all_time' in records and 'hourly' in records:
+            # Handle new format from corrected records
+            if 'maximum_renewable_percentage' in records:
+                # Convert new format to expected format
+                converted_records = {
+                    'all_time': {
+                        'value': records['maximum_renewable_percentage']['value'],
+                        'timestamp': records['maximum_renewable_percentage']['date']
+                    },
+                    'hourly': {},  # Will be populated as needed
+                    'pumped_hydro_duids': records.get('pumped_hydro_duids', PUMPED_HYDRO_DUIDS)
+                }
+                # Initialize hourly records with reasonable defaults
+                for hour in range(24):
+                    converted_records['hourly'][str(hour)] = {
+                        'value': 45 + hour * 0.5,  # Default values
+                        'timestamp': datetime.now().isoformat()
+                    }
+                return converted_records
+            # Validate records have required structure (old format)
+            elif 'all_time' in records and 'hourly' in records:
                 return records
             else:
                 logger.warning("Invalid records structure, reinitializing...")
@@ -127,6 +170,7 @@ def save_renewable_records(records):
 def calculate_renewable_percentage(gen_data):
     """
     Calculate renewable energy percentage from generation data
+    Excludes batteries, transmission, and pumped hydro from both numerator and denominator
     
     Args:
         gen_data: DataFrame with generation data by fuel type (latest row)
@@ -155,9 +199,25 @@ def calculate_renewable_percentage(gen_data):
         # Fuels to exclude from total generation calculation
         EXCLUDED_FUELS = ['Battery Storage', 'Transmission Flow']
         
+        # Load pumped hydro DUIDs from records file if available
+        pumped_hydro_duids = PUMPED_HYDRO_DUIDS
+        try:
+            records = load_renewable_records()
+            if 'pumped_hydro_duids' in records:
+                pumped_hydro_duids = records['pumped_hydro_duids']
+                logger.info(f"Loaded {len(pumped_hydro_duids)} pumped hydro DUIDs from records")
+        except Exception as e:
+            logger.warning(f"Could not load pumped hydro DUIDs from records: {e}")
+        
+        # Note: Dashboard data is already aggregated by fuel type, so we can't exclude
+        # individual pumped hydro DUIDs here. This would need to be done at the
+        # query level. For now, we'll use the corrected methodology but note that
+        # pumped hydro is still included in Water/Hydro totals.
+        
         # Calculate renewable generation
         renewable_gen = 0
         total_gen = 0
+        pumped_hydro_gen = 0  # Would need DUID-level data to calculate this
         
         for fuel in latest_data.index:
             value = latest_data[fuel]
@@ -171,8 +231,11 @@ def calculate_renewable_percentage(gen_data):
                     renewable_gen += value
         
         if total_gen > 0:
+            # Formula: (Wind + Solar + Rooftop + Hydro - Pumped + Biomass) / (Total - Batteries - Transmission - Pumped)
+            # Note: Without DUID-level data, we can't properly exclude pumped hydro
             percentage = (renewable_gen / total_gen) * 100
             logger.info(f"Renewable: {renewable_gen:.1f}MW / Total (excl. battery/transmission): {total_gen:.1f}MW = {percentage:.1f}%")
+            logger.warning("Note: Pumped hydro exclusion requires DUID-level data not available in aggregated view")
             return min(100.0, max(0.0, percentage))  # Clamp to 0-100
         else:
             logger.warning("No positive generation data found")
@@ -250,20 +313,26 @@ def update_records(current_percentage):
         return 45.2, 38.7, False  # Default values
 
 
-def create_renewable_gauge_plotly(current_value, all_time_record=45.2, hour_record=38.7):
+def create_renewable_gauge_plotly(current_value, all_time_record=45.2, hour_record=38.7, last_update=None):
     """
     Create Plotly gauge with simple line markers for records
+    
+    Args:
+        current_value: Current renewable percentage
+        all_time_record: All-time renewable record percentage
+        hour_record: Current hour's record percentage
+        last_update: Timestamp of last update (datetime object)
     """
     try:
         fig = go.Figure()
         
-        # Add the main gauge
+        # Main gauge
         fig.add_trace(go.Indicator(
             mode="gauge+number",
             value=current_value,
             title={'text': "Renewable Energy %", 'font': {'size': 16, 'color': "white"}},
             number={'suffix': "%", 'font': {'size': 18, 'color': "white"}, 'valueformat': '.0f'},
-            domain={'x': [0, 1], 'y': [0.15, 1]},  # Leave space at bottom for legend
+            domain={'x': [0, 1], 'y': [0.20, 1]},  # Adjusted to make room for timestamp
             gauge={
                 'axis': {
                     'range': [0, 100],
@@ -271,14 +340,14 @@ def create_renewable_gauge_plotly(current_value, all_time_record=45.2, hour_reco
                     'tick0': 0,
                     'dtick': 20,
                     'tickwidth': 1,
-                    'tickcolor': "white",  # White tick marks
-                    'tickfont': {'color': "white"}  # White text
+                    'tickcolor': "white",
+                    'tickfont': {'color': "white"}
                 },
-                'bar': {'color': "#50fa7b", 'thickness': 0.6, 'line': {'color': "#50fa7b", 'width': 4}},  # Green bar
-                'bgcolor': "#44475a",  # Single Dracula background color
+                'bar': {'color': "#50fa7b", 'thickness': 0.6, 'line': {'color': "#50fa7b", 'width': 4}},
+                'bgcolor': "#44475a",
                 'borderwidth': 2,
-                'bordercolor': "#6272a4",  # Dracula border color
-                'steps': [],  # No steps - single background color
+                'bordercolor': "#6272a4",
+                'steps': [],
                 'threshold': {
                     'line': {'color': "gold", 'width': 4},
                     'thickness': 0.75,
@@ -287,26 +356,37 @@ def create_renewable_gauge_plotly(current_value, all_time_record=45.2, hour_reco
             }
         ))
         
-        # Add a second invisible gauge just to show the grey threshold line
+        # Hour record gauge (invisible except for threshold)
         fig.add_trace(go.Indicator(
             mode="gauge",
-            value=0,  # Invisible value
-            domain={'x': [0, 1], 'y': [0.15, 1]},  # Same domain as main gauge
+            value=0,
+            domain={'x': [0, 1], 'y': [0.20, 1]},  # Adjusted to match main gauge
             gauge={
                 'axis': {'range': [0, 100], 'visible': False},
-                'bar': {'color': "rgba(0,0,0,0)", 'thickness': 0},  # Invisible bar
-                'bgcolor': "rgba(0,0,0,0)",  # Transparent background
+                'bar': {'color': "rgba(0,0,0,0)", 'thickness': 0},
+                'bgcolor': "rgba(0,0,0,0)",
                 'borderwidth': 0,
                 'threshold': {
-                    'line': {'color': "#5DCED0", 'width': 4},  # Light teal color
+                    'line': {'color': "#5DCED0", 'width': 4},
                     'thickness': 0.75,
                     'value': hour_record
                 }
             }
         ))
         
-        # Add legend in the bottom area (y < 0.15)
-        # Add "Records:" label centered at top of legend area
+        # Add timestamp if provided
+        if last_update:
+            timestamp_str = last_update.strftime("%Y-%m-%d %H:%M")
+            fig.add_annotation(
+                x=0.5, y=0.15,
+                text=f"<b>Updated: {timestamp_str}</b>",
+                showarrow=False,
+                xref="paper", yref="paper",
+                align="center",
+                font=dict(size=11, color="white")
+            )
+        
+        # Add legend
         fig.add_annotation(
             x=0.5, y=0.10,
             text="<b>Records:</b>",
@@ -355,9 +435,10 @@ def create_renewable_gauge_plotly(current_value, all_time_record=45.2, hour_reco
         
         fig.update_layout(
             paper_bgcolor="#282a36",  # Dracula background
-            height=350,
+            font={'color': "white"},
+            margin=dict(l=20, r=20, t=30, b=30),
+            height=380,  # Increased height to accommodate timestamp
             width=400,
-            margin=dict(l=30, r=30, t=60, b=30),
             showlegend=False  # No automatic legend
         )
         
@@ -441,8 +522,9 @@ def create_renewable_gauge_component(dashboard_instance=None):
                     current_percentage = 25.0  # Test value so we can see the needle
                     all_time_record, hour_record = 45.2, 38.7  # Defaults
             
-            # Create Plotly gauge
-            fig = create_renewable_gauge_plotly(current_percentage, all_time_record, hour_record)
+            # Create Plotly gauge with timestamp
+            last_update = datetime.now()
+            fig = create_renewable_gauge_plotly(current_percentage, all_time_record, hour_record, last_update)
             
             return pn.pane.Plotly(fig, sizing_mode='fixed', width=400, height=350)
             

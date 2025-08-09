@@ -143,7 +143,19 @@ def create_nem_dash_tab_with_updates(dashboard_instance=None, auto_update=True):
                     top_row = tab[0]      # Row with price section and gauge
                     bottom_row = tab[1]   # Row with spacer and generation chart
                     
-                    # Get current date range from dashboard
+                    # FIX for midnight rollover: First refresh dashboard dates if using preset time ranges
+                    if dashboard_instance and hasattr(dashboard_instance, 'time_range'):
+                        time_range = getattr(dashboard_instance, 'time_range', None)
+                        if time_range in ['1', '7', '30']:
+                            # Refresh the dashboard's date range to current values
+                            old_end_date = getattr(dashboard_instance, 'end_date', None)
+                            if hasattr(dashboard_instance, '_update_date_range_from_preset'):
+                                dashboard_instance._update_date_range_from_preset()
+                                new_end_date = getattr(dashboard_instance, 'end_date', None)
+                                if old_end_date != new_end_date:
+                                    logger.info(f"NEM dash: Date rollover detected, updated end_date from {old_end_date} to {new_end_date}")
+                    
+                    # Get current date range from dashboard (now refreshed!)
                     start_date = getattr(dashboard_instance, 'start_date', None) if dashboard_instance else None
                     end_date = getattr(dashboard_instance, 'end_date', None) if dashboard_instance else None
                     
