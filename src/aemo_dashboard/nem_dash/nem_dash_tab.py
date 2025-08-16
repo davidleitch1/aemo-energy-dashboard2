@@ -144,15 +144,30 @@ def create_nem_dash_tab_with_updates(dashboard_instance=None, auto_update=True):
                     bottom_row = tab[1]   # Row with spacer and generation chart
                     
                     # FIX for midnight rollover: First refresh dashboard dates if using preset time ranges
+                    date_range_changed = False
                     if dashboard_instance and hasattr(dashboard_instance, 'time_range'):
                         time_range = getattr(dashboard_instance, 'time_range', None)
                         if time_range in ['1', '7', '30']:
-                            # Refresh the dashboard's date range to current values
+                            # Store old date range
+                            old_start_date = getattr(dashboard_instance, 'start_date', None)
                             old_end_date = getattr(dashboard_instance, 'end_date', None)
+                            old_range = (old_start_date, old_end_date)
+                            
+                            # Refresh the dashboard's date range to current values
                             if hasattr(dashboard_instance, '_update_date_range_from_preset'):
                                 dashboard_instance._update_date_range_from_preset()
+                                new_start_date = getattr(dashboard_instance, 'start_date', None)
                                 new_end_date = getattr(dashboard_instance, 'end_date', None)
-                                if old_end_date != new_end_date:
+                                new_range = (new_start_date, new_end_date)
+                                
+                                if old_range != new_range:
+                                    date_range_changed = True
+                                    logger.info(f"NEM dash: Date RANGE changed from {old_range} to {new_range}")
+                                    
+                                    # CRITICAL FIX: Force component refresh when date range changes
+                                    if hasattr(dashboard_instance, '_force_component_refresh'):
+                                        dashboard_instance._force_component_refresh()
+                                elif old_end_date != new_end_date:
                                     logger.info(f"NEM dash: Date rollover detected, updated end_date from {old_end_date} to {new_end_date}")
                     
                     # Get current date range from dashboard (now refreshed!)

@@ -2128,6 +2128,9 @@ class EnergyDashboard(param.Parameterized):
     
     async def auto_update_loop(self):
         """Automatic update loop every 4.5 minutes with better error handling"""
+        # Track last date range to detect changes
+        last_date_range = None
+        
         while True:
             try:
                 await asyncio.sleep(270)  # 4.5 minutes
@@ -2135,10 +2138,28 @@ class EnergyDashboard(param.Parameterized):
                 # FIX for midnight rollover bug: Refresh date ranges for preset time ranges
                 # This ensures the dashboard continues updating after midnight
                 if self.time_range in ['1', '7', '30']:
+                    # Store old date range
+                    old_start_date = self.start_date
                     old_end_date = self.end_date
+                    old_range = (old_start_date, old_end_date)
+                    
+                    # Update to new date range
                     self._update_date_range_from_preset()
-                    if old_end_date != self.end_date:
-                        logger.info(f"Date rollover detected: updated end_date from {old_end_date} to {self.end_date}")
+                    new_start_date = self.start_date
+                    new_end_date = self.end_date
+                    new_range = (new_start_date, new_end_date)
+                    
+                    # CRITICAL FIX: Check if date RANGE changed (not just dates)
+                    if old_range != new_range and last_date_range is not None:
+                        logger.info(f"Date RANGE changed: {old_range} → {new_range}")
+                        logger.info("Forcing Panel component refresh for display update")
+                        
+                        # Force component recreation to update display
+                        self._force_component_refresh()
+                    elif old_end_date != new_end_date:
+                        logger.info(f"Date rollover detected: updated end_date from {old_end_date} to {new_end_date}")
+                    
+                    last_date_range = new_range
                 
                 # Update plots in both tabs
                 self.update_plot()
@@ -2149,6 +2170,64 @@ class EnergyDashboard(param.Parameterized):
             except Exception as e:
                 logger.error(f"Error in auto-update loop: {e}")
                 await asyncio.sleep(60)  # Wait 1 minute before retrying
+    
+    def _force_component_refresh(self):
+        """
+        Force Panel components to refresh when date range changes.
+        This is the critical fix for the midnight display freeze bug.
+        """
+        try:
+            logger.info("Starting forced component refresh due to date range change")
+            
+            # Find all Panel panes and force them to refresh
+            components_refreshed = []
+            
+            # List of known pane attributes in the dashboard
+            pane_attrs = [
+                'generation_plot',
+                'price_plot',
+                'renewable_gauge',
+                'transmission_plot',
+                'today_generation_plot',
+                'today_price_plot'
+            ]
+            
+            for attr_name in pane_attrs:
+                if hasattr(self, attr_name):
+                    pane = getattr(self, attr_name)
+                    
+                    # Check if it's a Panel pane with an object property
+                    if hasattr(pane, 'object') and hasattr(pane, 'param'):
+                        try:
+                            # Method 1: Use param.trigger to force refresh
+                            if hasattr(pane.param, 'trigger'):
+                                pane.param.trigger('object')
+                                components_refreshed.append(f"{attr_name} (param.trigger)")
+                                logger.debug(f"Triggered refresh for {attr_name}")
+                            
+                            # Method 2: Reassign object to force update
+                            else:
+                                current_object = pane.object
+                                pane.object = None  # Clear first
+                                pane.object = current_object  # Reassign
+                                components_refreshed.append(f"{attr_name} (reassign)")
+                                logger.debug(f"Reassigned object for {attr_name}")
+                                
+                        except Exception as e:
+                            logger.warning(f"Could not refresh {attr_name}: {e}")
+            
+            # Also refresh any tabs that might exist
+            if hasattr(self, 'tabs') and hasattr(self.tabs, 'param'):
+                try:
+                    self.tabs.param.trigger('objects')
+                    components_refreshed.append("tabs")
+                except Exception as e:
+                    logger.debug(f"Could not refresh tabs: {e}")
+            
+            logger.info(f"Forced refresh completed for {len(components_refreshed)} components: {', '.join(components_refreshed)}")
+            
+        except Exception as e:
+            logger.error(f"Error in _force_component_refresh: {e}")
     
     def start_auto_update(self):
         """Start the auto-update task - only when event loop is running"""
