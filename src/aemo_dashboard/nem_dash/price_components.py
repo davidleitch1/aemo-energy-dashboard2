@@ -271,38 +271,36 @@ def create_price_section(start_date=None, end_date=None):
     refresh_logger.info(f"Panel state: {hasattr(pn.state, 'curdoc')}")
     refresh_logger.info("="*60)
     
-    def update_price_components():
-        refresh_logger.debug(f"update_price_components called with dates: {start_date} to {end_date}")
-        start_time = time.time()
+    # FIX for midnight rollover bug: Create and return components directly
+    # without pn.pane.panel wrapper so they can be refreshed via object property
+    start_time = time.time()
+    
+    try:
+        refresh_logger.debug("Loading price data with date filtering...")
+        prices = load_price_data(start_date, end_date)
         
-        try:
-            refresh_logger.debug("Loading price data with date filtering...")
-            prices = load_price_data(start_date, end_date)
-            
-            refresh_logger.debug(f"Creating price table with {len(prices) if not prices.empty else 0} records...")
-            table = create_price_table(prices)
-            
-            refresh_logger.debug("Creating price chart...")
-            chart = create_price_chart(prices)
-            
-            refresh_logger.debug(f"Components created in {time.time() - start_time:.2f}s")
-            
-            return pn.Column(
-                table,
-                chart,
-                sizing_mode='fixed',
-                width=550,
-                margin=(5, 5)
-            )
-        except Exception as e:
-            refresh_logger.error(f"Error in update_price_components: {e}", exc_info=True)
-            raise
-    
-    refresh_logger.debug("Wrapping with pn.pane.panel...")
-    result = pn.pane.panel(update_price_components)
-    refresh_logger.debug(f"create_price_section returning: {type(result)}")
-    
-    return result
+        refresh_logger.debug(f"Creating price table with {len(prices) if not prices.empty else 0} records...")
+        table = create_price_table(prices)
+        
+        refresh_logger.debug("Creating price chart...")
+        chart = create_price_chart(prices)
+        
+        refresh_logger.debug(f"Components created in {time.time() - start_time:.2f}s")
+        
+        result = pn.Column(
+            table,
+            chart,
+            sizing_mode='fixed',
+            width=550,
+            margin=(5, 5)
+        )
+        
+        refresh_logger.debug(f"create_price_section returning: {type(result)}")
+        return result
+        
+    except Exception as e:
+        refresh_logger.error(f"Error in create_price_section: {e}", exc_info=True)
+        raise
 
 
 def create_price_chart_component(start_date=None, end_date=None):
@@ -313,11 +311,10 @@ def create_price_chart_component(start_date=None, end_date=None):
         start_date: Start date for price data
         end_date: End date for price data
     """
-    def update_chart():
-        prices = load_price_data(start_date, end_date)
-        return create_price_chart(prices)
-    
-    return pn.pane.panel(update_chart)
+    # FIX for midnight rollover bug: Return pane directly without pn.pane.panel wrapper
+    # This allows the component to be refreshed via the object property
+    prices = load_price_data(start_date, end_date)
+    return create_price_chart(prices)
 
 
 def create_price_table_component(start_date=None, end_date=None):
@@ -328,11 +325,10 @@ def create_price_table_component(start_date=None, end_date=None):
         start_date: Start date for price data
         end_date: End date for price data
     """
-    def update_table():
-        prices = load_price_data(start_date, end_date)
-        return create_price_table(prices)
-    
-    return pn.pane.panel(update_table)
+    # FIX for midnight rollover bug: Return pane directly without pn.pane.panel wrapper
+    # This allows the component to be refreshed via the object property
+    prices = load_price_data(start_date, end_date)
+    return create_price_table(prices)
 
 
 if __name__ == "__main__":
