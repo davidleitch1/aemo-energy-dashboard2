@@ -331,6 +331,112 @@ def create_price_table_component(start_date=None, end_date=None):
     return create_price_table(prices)
 
 
+class PriceDisplay:
+    """
+    Persistent price display components that update via object properties.
+    This pattern fixes the midnight rollover bug by maintaining persistent panes
+    and updating their content rather than replacing components.
+    
+    Based on the working pattern from display_spot.py
+    """
+    
+    def __init__(self):
+        """Initialize with persistent panes"""
+        refresh_logger.info("PriceDisplay: Creating persistent panes")
+        
+        # Load initial data (last 48 hours by default)
+        initial_prices = load_price_data()
+        
+        # Create panes ONCE - these will persist throughout the session
+        if not initial_prices.empty:
+            self.chart_pane = create_price_chart(initial_prices)
+            self.table_pane = create_price_table(initial_prices)
+            refresh_logger.info(f"PriceDisplay: Created panes with {len(initial_prices)} price records")
+        else:
+            # Fallback if no data available
+            self.chart_pane = pn.pane.HTML("<div>No price data available</div>", width=550, height=400)
+            self.table_pane = pn.pane.HTML("<div>No price data available</div>", width=550, height=350)
+            refresh_logger.warning("PriceDisplay: No initial price data available")
+        
+        # Store last update info for debugging
+        self.last_update_time = pd.Timestamp.now()
+        self.last_date_range = (None, None)
+    
+    def update(self, start_date=None, end_date=None):
+        """
+        Update the price displays by replacing the object property.
+        This is the key pattern that fixes the midnight rollover bug.
+        
+        Args:
+            start_date: Start date for price data
+            end_date: End date for price data
+        """
+        update_start = time.time()
+        refresh_logger.info(f"PriceDisplay.update called with dates: {start_date} to {end_date}")
+        
+        # Load fresh data
+        prices = load_price_data(start_date, end_date)
+        
+        if not prices.empty:
+            # Create new chart and table with fresh data
+            new_chart = create_price_chart(prices)
+            new_table = create_price_table(prices)
+            
+            # UPDATE OBJECT PROPERTIES - This is the critical fix!
+            # We update the content of existing panes rather than replacing them
+            if hasattr(new_chart, 'object'):
+                self.chart_pane.object = new_chart.object
+                refresh_logger.debug("PriceDisplay: Updated chart_pane.object")
+            else:
+                # If new_chart is already a figure, assign directly
+                self.chart_pane.object = new_chart
+                refresh_logger.debug("PriceDisplay: Updated chart_pane.object (direct)")
+            
+            if hasattr(new_table, 'object'):
+                self.table_pane.object = new_table.object
+                refresh_logger.debug("PriceDisplay: Updated table_pane.object")
+            else:
+                # If new_table is already styled data, assign directly
+                self.table_pane.object = new_table
+                refresh_logger.debug("PriceDisplay: Updated table_pane.object (direct)")
+            
+            # Log successful update
+            self.last_update_time = pd.Timestamp.now()
+            self.last_date_range = (start_date, end_date)
+            
+            # Check for midnight rollover
+            if start_date and end_date:
+                refresh_logger.info(f"PriceDisplay: Updated with {len(prices)} records for {start_date} to {end_date}")
+                if hasattr(self, '_last_end_date') and self._last_end_date:
+                    if self._last_end_date.date() != end_date.date() if hasattr(end_date, 'date') else end_date != self._last_end_date:
+                        refresh_logger.info(f"PriceDisplay: MIDNIGHT ROLLOVER DETECTED - Date changed from {self._last_end_date} to {end_date}")
+                self._last_end_date = end_date
+            
+            refresh_logger.info(f"PriceDisplay: Update completed in {time.time() - update_start:.2f}s")
+        else:
+            refresh_logger.warning("PriceDisplay: No price data available for update")
+            # Update with empty message
+            self.chart_pane.object = pn.pane.HTML("<div>No price data available</div>", width=550, height=400).object
+            self.table_pane.object = pn.pane.HTML("<div>No price data available</div>", width=550, height=350).object
+    
+    def get_chart(self):
+        """Get the persistent chart pane"""
+        return self.chart_pane
+    
+    def get_table(self):
+        """Get the persistent table pane"""
+        return self.table_pane
+    
+    def get_status(self):
+        """Get update status for debugging"""
+        return {
+            'last_update': self.last_update_time.strftime('%Y-%m-%d %H:%M:%S'),
+            'date_range': self.last_date_range,
+            'chart_type': type(self.chart_pane).__name__,
+            'table_type': type(self.table_pane).__name__
+        }
+
+
 if __name__ == "__main__":
     # Test the components
     pn.extension()

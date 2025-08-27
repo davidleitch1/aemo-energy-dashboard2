@@ -5,7 +5,7 @@ Combines price section, renewable energy gauge, and 24-hour generation overview
 
 import panel as pn
 from ..shared.logging_config import get_logger
-from .price_components import create_price_section, create_price_chart_component, create_price_table_component
+from .price_components import create_price_section, create_price_chart_component, create_price_table_component, PriceDisplay
 from .renewable_gauge import create_renewable_gauge_component
 from .generation_overview import create_generation_overview_component
 from .daily_summary import create_daily_summary_component
@@ -120,7 +120,7 @@ def create_nem_dash_tab(dashboard_instance=None):
 
 def create_nem_dash_tab_with_updates(dashboard_instance=None, auto_update=True):
     """
-    Create Nem-dash tab with auto-update functionality
+    Create Nem-dash tab with auto-update functionality using PriceDisplay pattern
     
     Args:
         dashboard_instance: Reference to main dashboard for data sharing
@@ -130,18 +130,76 @@ def create_nem_dash_tab_with_updates(dashboard_instance=None, auto_update=True):
         Panel component with auto-update capability
     """
     try:
-        # Create the basic tab
-        tab = create_nem_dash_tab(dashboard_instance)
+        logger.info("Creating Nem-dash tab with PriceDisplay pattern")
+        
+        # Get initial date range from dashboard instance if available
+        start_date = getattr(dashboard_instance, 'start_date', None) if dashboard_instance else None
+        end_date = getattr(dashboard_instance, 'end_date', None) if dashboard_instance else None
+        
+        # Convert date objects to datetime objects for compatibility
+        if start_date is not None:
+            from datetime import datetime
+            if not hasattr(start_date, 'hour'):  # It's a date object, not datetime
+                start_date = datetime.combine(start_date, datetime.min.time())
+                logger.info(f"Initial: Converted start_date to datetime: {start_date}")
+        
+        if end_date is not None:
+            from datetime import datetime
+            if not hasattr(end_date, 'hour'):  # It's a date object, not datetime
+                end_date = datetime.combine(end_date, datetime.max.time())
+                logger.info(f"Initial: Converted end_date to datetime: {end_date}")
+        
+        # FIX: Create PriceDisplay instance with persistent panes
+        price_display = PriceDisplay()
+        
+        # Initialize with current date range
+        price_display.update(start_date, end_date)
+        
+        # Get persistent panes from PriceDisplay
+        price_chart = price_display.get_chart()
+        price_table = price_display.get_table()
+        
+        # Create other components (these will still use the old pattern for now)
+        renewable_gauge = create_renewable_gauge_component(dashboard_instance)
+        generation_overview = create_generation_overview_component(dashboard_instance)
+        daily_summary = create_daily_summary_component()
+        
+        # Create the layout with 2x3 grid
+        # Top row: Price chart and Generation chart side by side
+        # Bottom row: Price table, Renewable gauge, and Daily summary
+        tab = pn.Column(
+            # Top row: Two main charts side by side
+            pn.Row(
+                price_chart,            # Persistent price chart pane
+                generation_overview,    # Generation chart (will be updated later)
+                sizing_mode='stretch_width',
+                margin=(5, 5),
+                name='top_row'
+            ),
+            # Bottom row: Price table, gauge, and daily summary
+            pn.Row(
+                price_table,            # Persistent price table pane
+                renewable_gauge,        # Renewable gauge (will be updated later)
+                daily_summary,          # Daily summary (will be updated later)
+                sizing_mode='stretch_width',
+                margin=(5, 5),
+                name='bottom_row'
+            ),
+            sizing_mode='stretch_width',
+            margin=(10, 10),
+            name="Nem-dash",  # Tab name
+            stylesheets=[CUSTOM_CSS]  # Apply custom CSS
+        )
         
         if auto_update:
             def update_all_components():
                 """Update all components in the tab"""
                 try:
-                    logger.info("Updating Nem-dash tab components")
+                    logger.info("Updating Nem-dash tab components with PriceDisplay")
                     
-                    # Get the current components with 2x2 grid layout
-                    top_row = tab[0]      # Row with price section and gauge
-                    bottom_row = tab[1]   # Row with spacer and generation chart
+                    # Get the current row references
+                    top_row = tab[0]
+                    bottom_row = tab[1]
                     
                     # FIX for midnight rollover: First refresh dashboard dates if using preset time ranges
                     date_range_changed = False
@@ -164,7 +222,7 @@ def create_nem_dash_tab_with_updates(dashboard_instance=None, auto_update=True):
                                     date_range_changed = True
                                     logger.info(f"NEM dash: Date RANGE changed from {old_range} to {new_range}")
                                     
-                                    # CRITICAL FIX: Force component refresh when date range changes
+                                    # Force component refresh when date range changes
                                     if hasattr(dashboard_instance, '_force_component_refresh'):
                                         dashboard_instance._force_component_refresh()
                                 elif old_end_date != new_end_date:
@@ -189,21 +247,21 @@ def create_nem_dash_tab_with_updates(dashboard_instance=None, auto_update=True):
                             end_date = datetime.combine(end_date, datetime.max.time())
                             logger.info(f"Update: Converted end_date to datetime: {end_date}")
                     
-                    # Update price chart (index 0 of top row)
-                    new_price_chart = create_price_chart_component(start_date, end_date)
-                    top_row[0] = new_price_chart
+                    # CRITICAL FIX: Update PriceDisplay via object properties (not replacement!)
+                    price_display.update(start_date, end_date)
+                    logger.info("PriceDisplay updated successfully via object properties")
                     
-                    # Update generation overview (index 1 of top row)
+                    # For other components, still need to replace (will be fixed in future)
                     new_overview = create_generation_overview_component(dashboard_instance)
-                    top_row[1] = new_overview
-                    
-                    # Update price table (index 0 of bottom row)
-                    new_price_table = create_price_table_component(start_date, end_date)
-                    bottom_row[0] = new_price_table
-                    
-                    # Update renewable gauge (index 1 of bottom row)
                     new_gauge = create_renewable_gauge_component(dashboard_instance)
-                    bottom_row[1] = new_gauge
+                    new_daily_summary = create_daily_summary_component()
+                    
+                    # Update only the non-price components in the rows
+                    # Price components are already updated via PriceDisplay.update()
+                    top_row[1] = new_overview  # Only replace generation overview
+                    
+                    bottom_row[1] = new_gauge  # Replace gauge
+                    bottom_row[2] = new_daily_summary  # Replace daily summary
                     
                     logger.info("Nem-dash tab components updated successfully")
                     
@@ -214,6 +272,7 @@ def create_nem_dash_tab_with_updates(dashboard_instance=None, auto_update=True):
             pn.state.add_periodic_callback(update_all_components, 270000)
             logger.info("Auto-update enabled for Nem-dash tab (4.5 minute intervals)")
         
+        logger.info("Nem-dash tab with PriceDisplay created successfully")
         return tab
         
     except Exception as e:
