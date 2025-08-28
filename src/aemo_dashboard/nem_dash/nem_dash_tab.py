@@ -51,18 +51,27 @@ def create_nem_dash_tab(dashboard_instance=None):
         # Add detailed logging about date types
         logger.info(f"Raw date values from dashboard - start: {start_date} (type: {type(start_date)}), end: {end_date} (type: {type(end_date)})")
         
-        # Convert date objects to datetime objects for compatibility
+        # FIX: Convert both date AND datetime objects to proper day boundaries
+        # This fixes the midnight bug where datetime.now() was passed instead of date objects
         if start_date is not None:
             from datetime import datetime
             if not hasattr(start_date, 'hour'):  # It's a date object, not datetime
                 start_date = datetime.combine(start_date, datetime.min.time())
-                logger.info(f"Converted start_date to datetime: {start_date}")
+                logger.info(f"Converted start_date from date to datetime: {start_date}")
+            else:
+                # It's a datetime - convert to start of day
+                start_date = datetime.combine(start_date.date(), datetime.min.time())
+                logger.info(f"Reset start_date to start of day: {start_date}")
         
         if end_date is not None:
             from datetime import datetime
             if not hasattr(end_date, 'hour'):  # It's a date object, not datetime
                 end_date = datetime.combine(end_date, datetime.max.time())
-                logger.info(f"Converted end_date to datetime: {end_date}")
+                logger.info(f"Converted end_date from date to datetime: {end_date}")
+            else:
+                # It's a datetime - convert to end of day
+                end_date = datetime.combine(end_date.date(), datetime.max.time())
+                logger.info(f"Reset end_date to end of day: {end_date}")
         
         logger.info(f"Creating price components with date range: {start_date} to {end_date}")
         
@@ -136,18 +145,27 @@ def create_nem_dash_tab_with_updates(dashboard_instance=None, auto_update=True):
         start_date = getattr(dashboard_instance, 'start_date', None) if dashboard_instance else None
         end_date = getattr(dashboard_instance, 'end_date', None) if dashboard_instance else None
         
-        # Convert date objects to datetime objects for compatibility
+        # FIX: Convert both date AND datetime objects to proper day boundaries
+        # This fixes the midnight bug where datetime.now() was passed instead of date objects
         if start_date is not None:
             from datetime import datetime
             if not hasattr(start_date, 'hour'):  # It's a date object, not datetime
                 start_date = datetime.combine(start_date, datetime.min.time())
-                logger.info(f"Initial: Converted start_date to datetime: {start_date}")
+                logger.info(f"Initial: Converted start_date from date to datetime: {start_date}")
+            else:
+                # It's a datetime - convert to start of day
+                start_date = datetime.combine(start_date.date(), datetime.min.time())
+                logger.info(f"Initial: Reset start_date to start of day: {start_date}")
         
         if end_date is not None:
             from datetime import datetime
             if not hasattr(end_date, 'hour'):  # It's a date object, not datetime
                 end_date = datetime.combine(end_date, datetime.max.time())
-                logger.info(f"Initial: Converted end_date to datetime: {end_date}")
+                logger.info(f"Initial: Converted end_date from date to datetime: {end_date}")
+            else:
+                # It's a datetime - convert to end of day
+                end_date = datetime.combine(end_date.date(), datetime.max.time())
+                logger.info(f"Initial: Reset end_date to end of day: {end_date}")
         
         # FIX: Create PriceDisplay instance with persistent panes
         price_display = PriceDisplay()
@@ -234,18 +252,27 @@ def create_nem_dash_tab_with_updates(dashboard_instance=None, auto_update=True):
                     
                     logger.info(f"Update: Raw dates - start: {start_date} (type: {type(start_date)}), end: {end_date} (type: {type(end_date)})")
                     
-                    # Convert date objects to datetime objects for compatibility
+                    # FIX: Convert both date AND datetime objects to proper day boundaries
+                    # This fixes the midnight bug where datetime.now() was passed instead of date objects
                     if start_date is not None:
                         from datetime import datetime
                         if not hasattr(start_date, 'hour'):  # It's a date object, not datetime
                             start_date = datetime.combine(start_date, datetime.min.time())
-                            logger.info(f"Update: Converted start_date to datetime: {start_date}")
+                            logger.info(f"Update: Converted start_date from date to datetime: {start_date}")
+                        else:
+                            # It's a datetime - convert to start of day
+                            start_date = datetime.combine(start_date.date(), datetime.min.time())
+                            logger.info(f"Update: Reset start_date to start of day: {start_date}")
                     
                     if end_date is not None:
                         from datetime import datetime
                         if not hasattr(end_date, 'hour'):  # It's a date object, not datetime
                             end_date = datetime.combine(end_date, datetime.max.time())
-                            logger.info(f"Update: Converted end_date to datetime: {end_date}")
+                            logger.info(f"Update: Converted end_date from date to datetime: {end_date}")
+                        else:
+                            # It's a datetime - convert to end of day
+                            end_date = datetime.combine(end_date.date(), datetime.max.time())
+                            logger.info(f"Update: Reset end_date to end of day: {end_date}")
                     
                     # CRITICAL FIX: Update PriceDisplay via object properties (not replacement!)
                     price_display.update(start_date, end_date)

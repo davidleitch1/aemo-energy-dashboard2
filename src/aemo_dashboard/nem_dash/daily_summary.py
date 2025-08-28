@@ -433,14 +433,20 @@ def create_daily_summary_component():
     try:
         logger.info("Creating daily summary component")
         
-        # Calculate time periods
+        # Calculate time periods using proper day boundaries
+        # FIX: Use day boundaries instead of rolling 24-hour windows to avoid midnight truncation
         now = datetime.now()
-        today_end = now
-        today_start = now - timedelta(hours=24)
-        yesterday_start = now - timedelta(hours=48)
-        yesterday_end = now - timedelta(hours=24)
-        last_year_start = now - timedelta(days=365, hours=24)
-        last_year_end = now - timedelta(days=365)
+        today = now.date()
+        yesterday = today - timedelta(days=1)
+        last_year = today - timedelta(days=365)
+        
+        # Use full day boundaries
+        today_start = datetime.combine(yesterday, datetime.min.time())  # Yesterday 00:00
+        today_end = datetime.combine(today, datetime.max.time())  # Today 23:59:59
+        yesterday_start = datetime.combine(yesterday - timedelta(days=1), datetime.min.time())
+        yesterday_end = datetime.combine(yesterday, datetime.max.time())
+        last_year_start = datetime.combine(last_year - timedelta(days=1), datetime.min.time())
+        last_year_end = datetime.combine(last_year, datetime.max.time())
         
         # Get metrics for all periods
         today_metrics = calculate_daily_metrics(today_start, today_end)

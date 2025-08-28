@@ -130,17 +130,47 @@ hv.extension('bokeh')
 
 # Logging is set up in imports
 
-# Configure dark theme with grid enabled
+# Configure Dracula dark theme with proper colors
+DRACULA_COLORS = {
+    'bg': '#282a36',        # Background
+    'current': '#44475a',   # Current Line
+    'fg': '#f8f8f2',        # Foreground
+    'comment': '#6272a4',   # Comment
+    'cyan': '#8be9fd',
+    'green': '#50fa7b',
+    'orange': '#ffb86c',
+    'pink': '#ff79c6',
+    'purple': '#bd93f9',
+    'red': '#ff5555',
+    'yellow': '#f1fa8c'
+}
+
 hv.opts.defaults(
     hv.opts.Area(
         width=1200,  # Use larger fixed width
         height=500,
         alpha=0.8,
-        show_grid=False,
+        show_grid=True,
+        gridstyle={'grid_line_color': DRACULA_COLORS['current'], 'grid_line_alpha': 0.3},
+        bgcolor=DRACULA_COLORS['bg'],
+        toolbar='above'
+    ),
+    hv.opts.Bars(
+        bgcolor=DRACULA_COLORS['bg'],
+        show_grid=True,
+        gridstyle={'grid_line_color': DRACULA_COLORS['current'], 'grid_line_alpha': 0.3},
+        toolbar='above'
+    ),
+    hv.opts.Curve(
+        bgcolor=DRACULA_COLORS['bg'],
+        show_grid=True,
+        gridstyle={'grid_line_color': DRACULA_COLORS['current'], 'grid_line_alpha': 0.3},
         toolbar='above'
     ),
     hv.opts.Overlay(
-        show_grid=False,
+        bgcolor=DRACULA_COLORS['bg'],
+        show_grid=True,
+        gridstyle={'grid_line_color': DRACULA_COLORS['current'], 'grid_line_alpha': 0.3},
         toolbar='above'
     )
 )
@@ -2182,14 +2212,16 @@ class EnergyDashboard(param.Parameterized):
             # Find all Panel panes and force them to refresh
             components_refreshed = []
             
-            # List of known pane attributes in the dashboard
+            # List of ACTUAL pane attributes in the dashboard
             pane_attrs = [
-                'generation_plot',
-                'price_plot',
-                'renewable_gauge',
-                'transmission_plot',
-                'today_generation_plot',
-                'today_price_plot'
+                'plot_pane',              # Main generation plot
+                'price_plot_pane',        # Price plot
+                'transmission_pane',      # Transmission plot
+                'utilization_pane',       # Utilization plot
+                'bands_plot_pane',        # Price bands plot
+                'tod_plot_pane',          # Time of day plot
+                'renewable_gauge',        # Renewable gauge (if exists)
+                'loading_indicator'       # Loading indicator
             ]
             
             for attr_name in pane_attrs:
@@ -3079,12 +3111,69 @@ class EnergyDashboard(param.Parameterized):
                         color: #50fa7b;  /* Green color for emphasis */
                         background-color: #383a46;  /* Slightly different background */
                     }
+                    /* Add light line after Min row (3rd row) */
+                    .tabulator-row:nth-child(3) {
+                        border-bottom: 1px solid #6272a4;
+                        padding-bottom: 8px;
+                    }
                 """],
                 configuration={
                     'columnDefaults': {
                         'headerFilter': False,
                         'tooltip': True
                     }
+                }
+            )
+            
+            # Create fuel-weighted prices table
+            self.fuel_prices_pane = pn.widgets.Tabulator(
+                value=pd.DataFrame(),  # Start with empty DataFrame
+                theme='fast',
+                layout='fit_data_table',
+                height=250,  # Compact height for 6 fuel rows
+                show_index=False,
+                sizing_mode='stretch_width',
+                stylesheets=["""
+                    .tabulator {
+                        background-color: #282a36;
+                        color: #f8f8f2;
+                        margin-top: -10px;  /* Bring closer to stats table */
+                    }
+                    .tabulator-header {
+                        background-color: #44475a;
+                        color: #f8f8f2;
+                        font-weight: bold;
+                        padding-top: 8px;  /* Add some padding at top */
+                    }
+                    .tabulator-row {
+                        background-color: #282a36;
+                        color: #f8f8f2;
+                    }
+                    .tabulator-row:nth-child(even) {
+                        background-color: #383a46;
+                    }
+                    .tabulator-row:hover {
+                        background-color: #44475a;
+                    }
+                    .tabulator-cell {
+                        padding: 4px 8px;
+                    }
+                    /* Make first column (Fuel Type) bold */
+                    .tabulator-row .tabulator-cell:first-child {
+                        font-weight: bold;
+                        color: #8be9fd;  /* Cyan for fuel names */
+                    }
+                """],
+                configuration={
+                    'columnDefaults': {
+                        'headerFilter': False,
+                        'tooltip': True,
+                        'headerHozAlign': 'center',
+                        'hozAlign': 'right'  # Right-align numbers
+                    },
+                    'columns': [
+                        {'title': 'Fuel Type', 'field': 'Fuel Type', 'hozAlign': 'left', 'frozen': True}
+                    ]
                 }
             )
             
@@ -3258,18 +3347,65 @@ class EnergyDashboard(param.Parameterized):
                 sizing_mode='stretch_width'
             )
             
-            # Right content area with 2x2 layout
-            content_area = pn.Column(
-                top_row,
+            # Create sub-tabs for price analysis
+            # Sub-tab 1: Price Analysis (statistics, fuel-weighted prices, time series, time of day)
+            price_analysis_content = pn.Column(
+                pn.Row(
+                    pn.Column(
+                        "## Price Statistics ($)",
+                        self.stats_pane,
+                        sizing_mode='stretch_width',
+                        width=550
+                    ),
+                    pn.Spacer(width=20),
+                    pn.Column(
+                        "## Time of Day Pattern",
+                        self.tod_plot_pane,
+                        sizing_mode='stretch_width',
+                        width=400
+                    ),
+                    sizing_mode='stretch_width',
+                    height=600  # Increased height to accommodate both tables
+                ),
                 pn.Spacer(height=20),
-                bottom_row,
+                pn.Column(
+                    "## Price Time Series",
+                    self.price_plot_pane,
+                    sizing_mode='stretch_both',
+                    width_policy='max'
+                ),
                 sizing_mode='stretch_both'
             )
             
-            # Complete tab layout - controls on left, content on right
+            # Sub-tab 2: Price Bands (bands chart and high price events)
+            price_bands_content = pn.Column(
+                pn.Column(
+                    "## Price Band Distribution",
+                    self.bands_plot_pane,
+                    sizing_mode='stretch_width',
+                    height=400
+                ),
+                pn.Spacer(height=20),
+                pn.Column(
+                    "## High Price Events",
+                    self.high_price_events_pane,
+                    sizing_mode='stretch_width',
+                    height=400
+                ),
+                sizing_mode='stretch_both'
+            )
+            
+            # Create sub-tabs
+            price_subtabs = pn.Tabs(
+                ('Price Analysis', price_analysis_content),
+                ('Price Bands', price_bands_content),
+                sizing_mode='stretch_both'
+            )
+            
+            # Complete tab layout - controls on left, sub-tabs on right
             prices_tab = pn.Row(
                 controls_column,
-                content_area,
+                price_subtabs,
                 sizing_mode='stretch_both'
             )
             
@@ -3618,17 +3754,19 @@ class EnergyDashboard(param.Parameterized):
                         ylabel=ylabel,
                         title=f'Electricity Spot Prices by Region ({date_range_text})',
                         logy=use_log,
-                        grid=False,
+                        grid=True,
                         color=[region_colors.get(r, '#6272a4') for r in price_data['REGIONID'].unique()],
                         line_width=2,
                         hover=True,
                         hover_cols=['REGIONID', 'RRP'],  # Show original price in hover
-                        bgcolor='#282a36',  # Dracula background
+                        bgcolor=DRACULA_COLORS['bg'],  # Dracula background
                         fontsize={'title': 14, 'labels': 12, 'ticks': 10}
                     ).opts(
                         toolbar='above',
                         active_tools=['pan', 'wheel_zoom'],
-                        tools=['hover', 'pan', 'wheel_zoom', 'box_zoom', 'reset', 'save']
+                        tools=['hover', 'pan', 'wheel_zoom', 'box_zoom', 'reset', 'save'],
+                        show_grid=True,
+                        gridstyle={'grid_line_color': DRACULA_COLORS['current'], 'grid_line_alpha': 0.3}
                     )
                     
                     # Apply attribution hook to the plot
@@ -3642,21 +3780,13 @@ class EnergyDashboard(param.Parameterized):
                         region_data = original_price_data[original_price_data['REGIONID'] == region]['RRP']
                         stats = region_data.describe()
                         
-                        # Add additional statistics (Mean first, no Variance)
+                        # Simplified statistics - just Mean, Max, Min
                         stats_dict = {
-                            'Statistic': ['Mean', 'Variability', 'Std Dev', 'Max', 'Min', '25%', '50% (Median)', '75%', 
-                                         '95%', 'Count'],
+                            'Statistic': ['Mean', 'Max', 'Min'],
                             region: [
-                                f"${stats['mean']:.0f}",
-                                f"{(stats['std'] / stats['mean'] * 100) if stats['mean'] != 0 else 0:.0f}%",
-                                f"${stats['std']:.0f}",
-                                f"${stats['max']:.0f}",
-                                f"${stats['min']:.0f}",
-                                f"${stats['25%']:.0f}",
-                                f"${stats['50%']:.0f}",
-                                f"${stats['75%']:.0f}",
-                                f"${region_data.quantile(0.95):.0f}",
-                                f"{int(stats['count']):,}"
+                                f"{stats['mean']:.0f}",
+                                f"{stats['max']:.0f}",
+                                f"{stats['min']:.0f}"
                             ]
                         }
                         stats_list.append(pd.DataFrame(stats_dict))
@@ -3667,21 +3797,183 @@ class EnergyDashboard(param.Parameterized):
                         for df in stats_list[1:]:
                             stats_df = stats_df.merge(df, on='Statistic', how='outer')
                         
-                        # Ensure the rows are in the correct order with Mean first
-                        stat_order = ['Mean', 'Variability', 'Std Dev', 'Max', 'Min', '25%', '50% (Median)', '75%', '95%', 'Count']
+                        # Ensure the rows are in the correct order
+                        stat_order = ['Mean', 'Max', 'Min']
                         stats_df['Statistic'] = pd.Categorical(stats_df['Statistic'], categories=stat_order, ordered=True)
                         stats_df = stats_df.sort_values('Statistic').reset_index(drop=True)
                         
-                        # Update the statistics table
-                        logger.info(f"Updating statistics table with {len(stats_df)} rows and {len(stats_df.columns)} columns")
-                        logger.info(f"Stats DataFrame: \n{stats_df}")
-                        logger.info(f"Stats DataFrame columns: {stats_df.columns.tolist()}")
-                        
-                        # Update the Tabulator widget value
-                        self.stats_pane.value = stats_df
+                        # Store stats_df temporarily - we'll add fuel prices to it
+                        base_stats_df = stats_df.copy()
                         
                         # Update statistics title
                         self.stats_title_pane.object = f"### Price Statistics ({date_range_text})"
+                    
+                    # Calculate fuel-weighted prices
+                    try:
+                        logger.info("Calculating fuel-weighted prices...")
+                        
+                        # Load DUID mapping to get fuel types
+                        import pickle
+                        with open(GEN_INFO_FILE, 'rb') as f:
+                            duid_mapping = pickle.load(f)
+                        
+                        # Rename columns to match expected format
+                        if 'Fuel' in duid_mapping.columns:
+                            duid_mapping = duid_mapping.rename(columns={'Fuel': 'FUEL_TYPE', 'Region': 'REGIONID'})
+                        
+                        # Get generation data that's already loaded
+                        # Use the same date range as the price data
+                        if hasattr(self, 'generation_query_manager'):
+                            gen_data = self.generation_query_manager.query_generation_by_fuel(
+                                start_datetime,
+                                end_datetime,
+                                selected_regions
+                            )
+                        else:
+                            # Fall back to loading directly if query manager not available
+                            from ..shared.generation_adapter import load_generation_data
+                            gen_data = load_generation_data(
+                                start_date=start_datetime,
+                                end_date=end_datetime,
+                                region='NEM' if 'NEM' in selected_regions else selected_regions[0],
+                                resolution='auto'
+                            )
+                        
+                        if not gen_data.empty and not original_price_data.empty:
+                            # Ensure consistent column names
+                            if 'settlementdate' in gen_data.columns:
+                                gen_data = gen_data.rename(columns={'settlementdate': 'SETTLEMENTDATE'})
+                            if 'duid' in gen_data.columns:
+                                gen_data = gen_data.rename(columns={'duid': 'DUID'})
+                            if 'scadavalue' in gen_data.columns:
+                                gen_data = gen_data.rename(columns={'scadavalue': 'SCADAVALUE'})
+                            
+                            # Add region info from DUID mapping
+                            if 'REGIONID' not in gen_data.columns and 'DUID' in gen_data.columns:
+                                gen_data = gen_data.merge(
+                                    duid_mapping[['DUID', 'REGIONID', 'FUEL_TYPE']], 
+                                    on='DUID', 
+                                    how='left'
+                                )
+                            
+                            # Filter for selected regions
+                            gen_data = gen_data[gen_data['REGIONID'].isin(selected_regions)]
+                            
+                            # Map detailed fuel types to consolidated categories
+                            fuel_type_mapping = {
+                                'Battery Storage': 'Battery',
+                                'OCGT': 'Gas',
+                                'CCGT': 'Gas', 
+                                'Gas other': 'Gas',
+                                'Water': 'Hydro',
+                                'Coal': 'Coal',
+                                'Wind': 'Wind',
+                                'Solar': 'Solar',
+                                'Biomass': 'Other',
+                                'Other': 'Other',
+                                '': 'Other'
+                            }
+                            
+                            # Apply fuel type mapping to consolidate gas types
+                            gen_data['FUEL_TYPE_CONSOLIDATED'] = gen_data['FUEL_TYPE'].map(fuel_type_mapping).fillna('Other')
+                            
+                            # Define the fuel types we want to display
+                            fuel_display_order = ['Battery', 'Gas', 'Hydro', 'Coal', 'Wind', 'Solar']
+                            
+                            # Calculate fuel-weighted prices for each region
+                            fuel_price_results = []
+                            
+                            # Dictionary to store fuel prices by region
+                            fuel_prices_by_region = {}
+                            
+                            for region in selected_regions:
+                                fuel_prices_by_region[region] = {}
+                                region_gen_data = gen_data[gen_data['REGIONID'] == region].copy()
+                                region_price_data = original_price_data[original_price_data['REGIONID'] == region].copy()
+                                
+                                if not region_gen_data.empty and not region_price_data.empty:
+                                    # Ensure datetime format
+                                    region_gen_data['SETTLEMENTDATE'] = pd.to_datetime(region_gen_data['SETTLEMENTDATE'])
+                                    region_price_data['SETTLEMENTDATE'] = pd.to_datetime(region_price_data['SETTLEMENTDATE'])
+                                    
+                                    for fuel_type in fuel_display_order:
+                                        # Get generation for this consolidated fuel type
+                                        fuel_gen = region_gen_data[region_gen_data['FUEL_TYPE_CONSOLIDATED'] == fuel_type].copy()
+                                        
+                                        if not fuel_gen.empty:
+                                            # For batteries, only consider discharge (positive values)
+                                            if fuel_type == 'Battery':
+                                                original_len = len(fuel_gen)
+                                                fuel_gen = fuel_gen[fuel_gen['SCADAVALUE'] > 0].copy()
+                                                logger.info(f"Battery filtering for {region}: {original_len} records -> {len(fuel_gen)} discharge records")
+                                            
+                                            # Aggregate generation by settlement date
+                                            if not fuel_gen.empty:
+                                                fuel_gen_agg = fuel_gen.groupby('SETTLEMENTDATE')['SCADAVALUE'].sum().reset_index()
+                                            else:
+                                                fuel_gen_agg = pd.DataFrame()
+                                            
+                                            # Merge with prices if we have data
+                                            if not fuel_gen_agg.empty:
+                                                merged = pd.merge(
+                                                    fuel_gen_agg,
+                                                    region_price_data[['SETTLEMENTDATE', 'RRP']],
+                                                    on='SETTLEMENTDATE',
+                                                    how='inner'
+                                                )
+                                            else:
+                                                merged = pd.DataFrame()
+                                            
+                                            if not merged.empty and merged['SCADAVALUE'].sum() > 0:
+                                                # Determine time interval
+                                                if len(merged) > 1:
+                                                    time_diff = merged['SETTLEMENTDATE'].iloc[1] - merged['SETTLEMENTDATE'].iloc[0]
+                                                    hours_per_period = time_diff.total_seconds() / 3600
+                                                else:
+                                                    hours_per_period = 0.5  # Default to 30-min
+                                                
+                                                # Calculate revenue-weighted average price
+                                                revenue = (merged['SCADAVALUE'] * merged['RRP'] * hours_per_period).sum()
+                                                energy = (merged['SCADAVALUE'] * hours_per_period).sum()
+                                                
+                                                weighted_price = revenue / energy if energy > 0 else 0
+                                                fuel_prices_by_region[region][fuel_type] = f"{weighted_price:.0f}"
+                                            else:
+                                                fuel_prices_by_region[region][fuel_type] = "-"
+                                        else:
+                                            fuel_prices_by_region[region][fuel_type] = "-"
+                            
+                            # Add fuel prices to the main stats table
+                            if fuel_prices_by_region and 'base_stats_df' in locals():
+                                # Create rows for each fuel type
+                                fuel_rows = []
+                                for fuel_type in fuel_display_order:
+                                    fuel_row = {'Statistic': fuel_type}
+                                    for region in selected_regions:
+                                        fuel_row[region] = fuel_prices_by_region.get(region, {}).get(fuel_type, "-")
+                                    fuel_rows.append(fuel_row)
+                                
+                                # Create fuel prices DataFrame
+                                fuel_prices_df = pd.DataFrame(fuel_rows)
+                                
+                                # Combine with base stats
+                                combined_stats_df = pd.concat([base_stats_df, fuel_prices_df], ignore_index=True)
+                                
+                                # Update the main stats table with combined data
+                                self.stats_pane.value = combined_stats_df
+                                logger.info(f"Combined statistics and fuel prices: \n{combined_stats_df}")
+                            else:
+                                # Just show base stats if fuel prices couldn't be calculated
+                                if 'base_stats_df' in locals():
+                                    self.stats_pane.value = base_stats_df
+                        else:
+                            logger.warning("No generation data for selected period")
+                            
+                    except Exception as e:
+                        logger.error(f"Error calculating fuel-weighted prices: {e}", exc_info=True)
+                        # If error, just show the base stats
+                        if 'base_stats_df' in locals():
+                            self.stats_pane.value = base_stats_df
                     
                     # Calculate price band contributions using ORIGINAL unsmoothed data
                     price_bands = [
@@ -3769,12 +4061,13 @@ class EnergyDashboard(param.Parameterized):
                             ylabel='',
                             title=f'Price Band Contribution ($/MWh) and Time Distribution (%) ({date_range_text})',
                             color=band_colors,
-                            bgcolor='#282a36',
+                            bgcolor=DRACULA_COLORS['bg'],
                             legend='top',
                             toolbar='above'
                         ).opts(
                             xrotation=0,
-                            show_grid=False,
+                            show_grid=True,
+                            gridstyle={'grid_line_color': DRACULA_COLORS['current'], 'grid_line_alpha': 0.3},
                             fontsize={'ticks': 8}
                         )
                         
@@ -3924,13 +4217,14 @@ class EnergyDashboard(param.Parameterized):
                         ylabel='Average Price ($/MWh)',
                         title=f'Average Price by Hour ({date_range_text})',
                         color=tod_colors,
-                        bgcolor='#282a36',
+                        bgcolor=DRACULA_COLORS['bg'],
                         legend='top_right',
                         xticks=list(range(0, 24, 3)),  # Show every 3 hours
                         toolbar='above',
-                        grid=False
+                        grid=True
                     ).opts(
-                        show_grid=False,
+                        show_grid=True,
+                        gridstyle={'grid_line_color': DRACULA_COLORS['current'], 'grid_line_alpha': 0.3},
                         fontsize={'xlabel': 10, 'ylabel': 10, 'ticks': 9}
                     )
                     

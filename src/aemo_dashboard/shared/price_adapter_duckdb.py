@@ -62,18 +62,29 @@ def load_price_data(
             date_ranges = duckdb_data_service.get_date_ranges()
             if 'prices' in date_ranges:
                 if start_date is None:
+                    # Convert pd.Timestamp to datetime and set to start of day
                     start_date = date_ranges['prices']['start']
+                    if hasattr(start_date, 'to_pydatetime'):
+                        start_date = start_date.to_pydatetime()
+                    # Always use start of day for consistency
+                    start_date = datetime.combine(start_date.date(), datetime.min.time())
                     logger.info(f"Using DuckDB start date: {start_date}")
                 if end_date is None:
+                    # Convert pd.Timestamp to datetime and set to end of day
                     end_date = date_ranges['prices']['end']
+                    if hasattr(end_date, 'to_pydatetime'):
+                        end_date = end_date.to_pydatetime()
+                    # Always use end of day for consistency
+                    end_date = datetime.combine(end_date.date(), datetime.max.time())
                     logger.info(f"Using DuckDB end date: {end_date}")
             else:
-                # Fallback defaults
+                # Fallback defaults - use proper day boundaries
                 logger.warning("No price date ranges from DuckDB, using fallback defaults")
                 if start_date is None:
-                    start_date = datetime(2020, 1, 1)
+                    start_date = datetime(2020, 1, 1, 0, 0, 0)  # Start of day
                 if end_date is None:
-                    end_date = datetime.now()
+                    # Use end of current day, not current time
+                    end_date = datetime.combine(datetime.now().date(), datetime.max.time())
                 logger.info(f"Fallback dates - start: {start_date}, end: {end_date}")
         
         # Log the date range that will be queried

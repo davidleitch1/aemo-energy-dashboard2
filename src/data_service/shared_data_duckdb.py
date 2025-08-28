@@ -116,10 +116,17 @@ class DuckDBDataService:
             SELECT * FROM read_parquet('{trans_30_path}')
         """)
         
-        # Rooftop solar
+        # Rooftop solar - rename 'power' column to 'rooftop_solar_mw' for consistency
         self.conn.execute(f"""
             CREATE VIEW rooftop_solar AS 
-            SELECT * FROM read_parquet('{config.rooftop_solar_file}')
+            SELECT 
+                settlementdate,
+                regionid,
+                power AS rooftop_solar_mw,
+                quality_indicator,
+                type,
+                source_archive
+            FROM read_parquet('{config.rooftop_solar_file}')
         """)
         
         logger.info("All parquet files registered as views")

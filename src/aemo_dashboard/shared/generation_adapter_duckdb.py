@@ -73,8 +73,14 @@ def load_generation_data(
             date_ranges = duckdb_data_service.get_date_ranges()
             if 'generation' in date_ranges:
                 end_date = date_ranges['generation']['end']
+                # Convert pd.Timestamp to datetime if needed
+                if hasattr(end_date, 'to_pydatetime'):
+                    end_date = end_date.to_pydatetime()
+                # Always use end of day for consistency
+                end_date = datetime.combine(end_date.date(), datetime.max.time())
             else:
-                end_date = datetime.now()  # Fallback
+                # Use end of current day, not current time
+                end_date = datetime.combine(datetime.now().date(), datetime.max.time())
         
         # Determine optimal resolution
         if resolution == 'auto':

@@ -215,6 +215,8 @@ def create_price_chart(prices):
         fig.set_size_inches(5.5, 4.0)  # Increased height to match generation chart
         refresh_logger.debug("Matplotlib figure created successfully")
         
+        # Show the timestamp of the last data point
+        # The real issue is data not updating after midnight, not the display
         when = prices.index[-1].strftime("%d %b %H:%M")
         
         # Plot each region

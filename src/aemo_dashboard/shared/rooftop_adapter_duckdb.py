@@ -146,7 +146,11 @@ def load_rooftop_data(
         # Handle future projection if needed
         if df_5min['settlementdate'].max() < end_date:
             logger.info("Applying future projection for rooftop data...")
-            df_5min = handle_future_projection(df_5min, df_30min['settlementdate'].max())
+            # Set index for handle_future_projection function
+            df_5min_indexed = df_5min.set_index('settlementdate')
+            df_5min_indexed = handle_future_projection(df_5min_indexed, df_30min['settlementdate'].max())
+            # Reset index back to column
+            df_5min = df_5min_indexed.reset_index()
         
         logger.info(f"Interpolated to {len(df_5min):,} 5-minute rooftop records")
         
