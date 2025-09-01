@@ -1610,10 +1610,11 @@ class EnergyDashboard(param.Parameterized):
                 hooks=[self._get_datetime_formatter_hook()]
             )
             
-            # Create the stacked layout with linked x-axes
-            # Using shared_axes=True for HoloViews-managed linking within this tab
+            # Create the stacked layout with linked x-axes within this tab only
+            # Prices tab uses default dimension names, while Batteries tab uses 'BatteryTime'
+            # This prevents cross-tab interference
             combined_layout = (area_plot + price_plot).cols(1).opts(
-                shared_axes=True,  # Link x-axes between the two plots
+                shared_axes=True,   # Link axes within this layout
                 merge_tools=False   # Keep tools separate so each plot has its own
             )
             
@@ -3780,6 +3781,10 @@ class EnergyDashboard(param.Parameterized):
                     # Remove any NaN values that might cause rendering gaps
                     price_data = price_data.dropna(subset=[y_col])
                     
+                    # Set explicit xlim based on date pickers to prevent cross-tab interference
+                    xlim = (pd.Timestamp(start_date_picker.value), 
+                           pd.Timestamp(end_date_picker.value) + pd.Timedelta(days=1))
+                    
                     # Create hvplot
                     plot = price_data.hvplot.line(
                         x='SETTLEMENTDATE',
@@ -3799,6 +3804,7 @@ class EnergyDashboard(param.Parameterized):
                         bgcolor=DRACULA_COLORS['bg'],  # Dracula background
                         fontsize={'title': 14, 'labels': 12, 'ticks': 10}
                     ).opts(
+                        xlim=xlim,  # Set xlim in opts() for proper range control
                         toolbar='above',
                         active_tools=['pan', 'wheel_zoom'],
                         tools=['hover', 'pan', 'wheel_zoom', 'box_zoom', 'reset', 'save'],

@@ -518,6 +518,13 @@ class InsightsTab:
                                 plot_data.index = pd.to_datetime(plot_data.index)
                                 plot_data = plot_data.sort_index()
                                 
+                                # IMPORTANT: Filter to the requested date range
+                                # The outer merge may have expanded the data beyond what was requested
+                                plot_data = plot_data[
+                                    (plot_data.index >= pd.Timestamp(start_date)) & 
+                                    (plot_data.index <= pd.Timestamp(end_date) + pd.Timedelta(days=1))
+                                ]
+                                
                                 # Debug logging
                                 logger.info(f"Plot data shape: {plot_data.shape}")
                                 logger.info(f"Date range in plot: {plot_data.index.min()} to {plot_data.index.max()}")
@@ -532,12 +539,17 @@ class InsightsTab:
                                 power_df['Discharge'] = plot_data['SCADAVALUE'].where(plot_data['SCADAVALUE'] > 0, 0)
                                 power_df['Charge'] = plot_data['SCADAVALUE'].where(plot_data['SCADAVALUE'] < 0, 0)
                                 
-                                # Create bar plots (using step as bars)
+                                # Create bar plots with explicit xlim to prevent cross-tab interference
+                                # Set the xlim explicitly based on the selected date range
+                                xlim = (pd.Timestamp(start_date), pd.Timestamp(end_date) + pd.Timedelta(days=1))
+                                
                                 discharge_plot = power_df['Discharge'].hvplot.step(
                                     where='mid',
                                     color='#50fa7b',
                                     line_width=1,
                                     label='Discharge'
+                                ).redim(x='BatteryTime').opts(
+                                    xlim=xlim  # Set xlim in opts() for proper range control
                                 )
                                 
                                 charge_plot = power_df['Charge'].hvplot.step(
@@ -545,6 +557,8 @@ class InsightsTab:
                                     color='#ff5555',
                                     line_width=1,
                                     label='Charge'
+                                ).redim(x='BatteryTime').opts(
+                                    xlim=xlim  # Same xlim for linked axes within tab
                                 )
                                 
                                 # Combine the charge/discharge plots
@@ -558,7 +572,7 @@ class InsightsTab:
                                     bgcolor='#282a36',
                                     show_grid=True,
                                     gridstyle={'grid_line_alpha': 0.2, 'grid_line_color': '#44475a'},
-                                    xaxis=None  # Hide x-axis completely on top plot
+                                    xaxis='top'  # Show x-axis at the top of the first plot
                                 )
                                 
                                 # Create a horizontal line at y=0 for the price plot
@@ -567,7 +581,7 @@ class InsightsTab:
                                     color='white',
                                     line_width=0.5,
                                     alpha=0.8
-                                )
+                                )  # HLine doesn't need redim as it has no x dimension
                                 
                                 # Handle log scale for price plot
                                 use_log_scale = self.bess_log_scale.value
@@ -599,7 +613,7 @@ class InsightsTab:
                                             -symlog_threshold * (1 + np.log10(-price_data_transformed.loc[negative_mask] / symlog_threshold))
                                         )
                                     
-                                    # Create the plot with transformed data
+                                    # Create the plot with transformed data and explicit xlim
                                     price_line = price_data_transformed.hvplot.line(
                                         color='#f1fa8c',  # Yellow for price
                                         line_width=2,
@@ -608,17 +622,18 @@ class InsightsTab:
                                         label='Price (symlog)',
                                         height=280,  # Increased height for price plot
                                         width=800
-                                    ).opts(
+                                    ).redim(x='BatteryTime').opts(  # Keep unique dimension name
                                         bgcolor='#282a36',
                                         show_grid=True,
                                         gridstyle={'grid_line_alpha': 0.2, 'grid_line_color': '#44475a'},
                                         line_join='round',
-                                        line_cap='round'
+                                        line_cap='round',
+                                        xlim=xlim  # Set xlim in opts() for proper range control
                                     )
                                     
                                 else:
                                     ylabel_text = 'Price ($/MWh)'
-                                    # Create normal linear scale price plot
+                                    # Create normal linear scale price plot with explicit xlim
                                     price_line = plot_data['RRP'].hvplot.line(
                                         color='#f1fa8c',  # Yellow for price
                                         line_width=2,
@@ -627,24 +642,76 @@ class InsightsTab:
                                         label='Price',
                                         height=280,  # Increased height for price plot
                                         width=800
-                                    ).opts(
+                                    ).redim(x='BatteryTime').opts(  # Keep unique dimension name
                                         bgcolor='#282a36',
                                         show_grid=True,
                                         gridstyle={'grid_line_alpha': 0.2, 'grid_line_color': '#44475a'},
                                         line_join='round',
-                                        line_cap='round'
+                                        line_cap='round',
+                                        xlim=xlim  # Set xlim in opts() for proper range control
                                     )
                                 
                                 # Always overlay the zero line (visible in both linear and symlog)
                                 price_plot = price_line * zero_line
                                 
-                                # Stack the plots vertically with linked x-axes
-                                combined_plot = (power_plot + price_plot).cols(1).opts(
-                                    hv.opts.Layout(shared_axes=True)  # Link the x-axes
+                                # APPROACH 1: RangeXY stream for LOCAL axis linking
+                                # This creates a local link without global interference
+                                import holoviews as hv
+                                
+                                # Create RangeXY stream for local linking
+                                rangexy = hv.streams.RangeXY(source=power_plot)
+                                
+                                # Create dynamic map for price plot that follows power plot's range
+                                price_plot_linked = hv.DynamicMap(
+                                    lambda x_range, y_range: price_plot.opts(xlim=x_range) if x_range else price_plot,
+                                    streams=[rangexy]
                                 )
                                 
-                                # Update the chart pane with the stacked plots
+                                # Stack plots WITHOUT shared_axes to avoid global linking
+                                # The RangeXY stream provides the local link instead
+                                combined_plot = (power_plot + price_plot_linked).cols(1).opts(
+                                    hv.opts.Layout(
+                                        shared_axes=False,  # No global linking
+                                        merge_tools=False   # Keep tools separate  
+                                    )
+                                )
+                                
+                                # Update the chart pane
                                 self.bess_chart_pane.object = combined_plot
+                                
+                                # APPROACH 2 (ALTERNATIVE): Panel container with manual Bokeh linking
+                                # Uncomment this block and comment out APPROACH 1 to test
+                                """
+                                # Create layout without shared_axes
+                                combined_plot = (power_plot + price_plot).cols(1).opts(
+                                    hv.opts.Layout(shared_axes=False)
+                                )
+                                
+                                # Convert to Panel panes
+                                plot_container = pn.Column()
+                                power_pane = pn.pane.HoloViews(power_plot, height=300, width=800)
+                                price_pane = pn.pane.HoloViews(price_plot, height=280, width=800)
+                                
+                                # Link axes after render
+                                def link_axes():
+                                    try:
+                                        if hasattr(power_pane, '_models') and hasattr(price_pane, '_models'):
+                                            for doc in power_pane._models:
+                                                power_model = power_pane._models[doc][0]
+                                                if doc in price_pane._models:
+                                                    price_model = price_pane._models[doc][0]
+                                                    if hasattr(power_model, 'x_range') and hasattr(price_model, 'x_range'):
+                                                        price_model.x_range = power_model.x_range
+                                                        logger.info("Linked x-axes locally")
+                                                        break
+                                    except Exception as e:
+                                        logger.debug(f"Axis linking: {e}")
+                                
+                                pn.state.onload(link_axes)
+                                plot_container.clear()
+                                plot_container.extend([power_pane, price_pane])
+                                self.bess_chart_pane.object = plot_container
+                                """
                                 
                                 # Create performance metrics table
                                 metrics_html = f"""
