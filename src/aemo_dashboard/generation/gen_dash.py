@@ -3605,10 +3605,16 @@ class EnergyDashboard(param.Parameterized):
                         # Set SETTLEMENTDATE as index if it's not already
                         if 'SETTLEMENTDATE' in price_data.columns:
                             price_data = price_data.set_index('SETTLEMENTDATE')
-                        price_data = price_data.groupby('REGIONID').resample(freq).agg({
-                            y_col: 'mean',
-                            'RRP': 'mean'  # Keep original for reference
-                        }).reset_index()
+                        # Build aggregation dict based on available columns
+                        agg_dict = {}
+                        if y_col in price_data.columns:
+                            agg_dict[y_col] = 'mean'
+                        if 'RRP' in price_data.columns and y_col != 'RRP':
+                            agg_dict['RRP'] = 'mean'  # Keep original for reference
+                        # Ensure we have something to aggregate
+                        if not agg_dict:
+                            agg_dict['RRP'] = 'mean'
+                        price_data = price_data.groupby('REGIONID').resample(freq).agg(agg_dict).reset_index()
                     
                     # Keep a copy of the original data for statistics and other charts
                     original_price_data = price_data.copy()
@@ -4046,6 +4052,10 @@ class EnergyDashboard(param.Parameterized):
                     band_contributions = []
                     
                     for region in selected_regions:
+                        # Always use RRP for price bands calculation (original unmodified prices)
+                        if 'RRP' not in original_price_data.columns:
+                            logger.warning(f"RRP column not found in original_price_data. Columns: {original_price_data.columns.tolist()}")
+                            continue
                         region_data = original_price_data[original_price_data['REGIONID'] == region]['RRP']
                         mean_price = region_data.mean()
                         

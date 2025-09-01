@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test Iframe Midnight Refresh</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+        }
+        .status {
+            background: #f0f0f0;
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 5px;
+        }
+        .log-entry {
+            background: #fff;
+            padding: 5px;
+            margin: 5px 0;
+            border-left: 3px solid #008B8B;
+        }
+        iframe {
+            width: 100%;
+            height: 600px;
+            border: 2px solid #008B8B;
+        }
+    </style>
+</head>
+<body>
+    <h1>Iframe Midnight Refresh Test</h1>
+    
+    <div class="status">
+        <strong>Current Time:</strong> <span id="current-time"></span><br>
+        <strong>Last Refresh:</strong> <span id="last-refresh">Never</span><br>
+        <strong>Next Midnight Check:</strong> <span id="next-check">Calculating...</span>
+    </div>
+    
+    <button onclick="testRefresh()">Test Refresh Now</button>
+    <button onclick="simulateMidnight()">Simulate Midnight</button>
+    
+    <div id="log"></div>
+    
+    <h2>Dashboard Iframe</h2>
+    <iframe id="dashboard-iframe" src="https://nemgen.itkservices2.com" title="dashboard"></iframe>
+
+    <script>
+    // Complete working solution for Quarto iframe refresh
+    (function() {
+        // Configuration
+        const REFRESH_HOUR = 0;  // Hour to refresh (0 = midnight)
+        const REFRESH_MINUTE = 1;  // Minute to refresh (1 = 00:01)
+        const CHECK_INTERVAL = 60000;  // Check every minute
+        
+        // State
+        let lastRefreshTime = localStorage.getItem('lastDashboardRefresh') || 0;
+        let checkCount = 0;
+        
+        // Logging function for debugging
+        function log(message) {
+            const logDiv = document.getElementById('log');
+            if (logDiv) {
+                const entry = document.createElement('div');
+                entry.className = 'log-entry';
+                entry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+                logDiv.insertBefore(entry, logDiv.firstChild);
+                
+                // Keep only last 10 entries
+                while (logDiv.children.length > 10) {
+                    logDiv.removeChild(logDiv.lastChild);
+                }
+            }
+            console.log(`[Dashboard Refresh] ${message}`);
+        }
+        
+        // Update status display
+        function updateStatus() {
+            const now = new Date();
+            const currentTimeEl = document.getElementById('current-time');
+            const nextCheckEl = document.getElementById('next-check');
+            
+            if (currentTimeEl) {
+                currentTimeEl.textContent = now.toLocaleTimeString();
+            }
+            
+            if (nextCheckEl) {
+                const nextMidnight = new Date(now);
+                nextMidnight.setDate(nextMidnight.getDate() + 1);
+                nextMidnight.setHours(REFRESH_HOUR, REFRESH_MINUTE, 0, 0);
+                
+                const hoursUntil = Math.floor((nextMidnight - now) / (1000 * 60 * 60));
+                const minutesUntil = Math.floor(((nextMidnight - now) % (1000 * 60 * 60)) / (1000 * 60));
+                
+                nextCheckEl.textContent = `${hoursUntil}h ${minutesUntil}m (at ${nextMidnight.toLocaleTimeString()})`;
+            }
+        }
+        
+        // Refresh the iframe
+        function refreshIframe() {
+            const iframe = document.getElementById('dashboard-iframe') || document.querySelector('iframe');
+            
+            if (!iframe) {
+                log('No iframe found!');
+                return false;
+            }
+            
+            // Get current src without query params
+            const currentSrc = iframe.src.split('?')[0];
+            
+            // Add timestamp to force reload
+            const newSrc = currentSrc + '?t=' + Date.now();
+            
+            log(`Refreshing iframe: ${currentSrc}`);
+            
+            // Update src to trigger reload
+            iframe.src = newSrc;
+            
+            // Update last refresh time
+            lastRefreshTime = Date.now();
+            localStorage.setItem('lastDashboardRefresh', lastRefreshTime);
+            
+            const lastRefreshEl = document.getElementById('last-refresh');
+            if (lastRefreshEl) {
+                lastRefreshEl.textContent = new Date().toLocaleTimeString();
+            }
+            
+            log('Iframe refreshed successfully');
+            return true;
+        }
+        
+        // Check if it's time to refresh
+        function checkForMidnightRefresh() {
+            checkCount++;
+            const now = new Date();
+            const currentHour = now.getHours();
+            const currentMinute = now.getMinutes();
+            
+            // Update status every check
+            updateStatus();
+            
+            // Check if it's the target time
+            if (currentHour === REFRESH_HOUR && currentMinute === REFRESH_MINUTE) {
+                // Check if we haven't refreshed recently (within last 5 minutes)
+                const timeSinceLastRefresh = Date.now() - parseInt(lastRefreshTime);
+                
+                if (timeSinceLastRefresh > 300000) {  // 5 minutes
+                    log(`Midnight detected (${currentHour}:${String(currentMinute).padStart(2, '0')}), refreshing...`);
+                    refreshIframe();
+                } else {
+                    log('Midnight detected but already refreshed recently, skipping');
+                }
+            }
+            
+            // Log periodically for debugging
+            if (checkCount % 10 === 0) {
+                log(`Check #${checkCount}: ${currentHour}:${String(currentMinute).padStart(2, '0')}`);
+            }
+        }
+        
+        // Test function for immediate refresh
+        window.testRefresh = function() {
+            log('Manual refresh triggered');
+            refreshIframe();
+        };
+        
+        // Simulate midnight for testing
+        window.simulateMidnight = function() {
+            log('Simulating midnight conditions...');
+            lastRefreshTime = 0;  // Reset last refresh time
+            log(`It's midnight! (simulated at ${REFRESH_HOUR}:${String(REFRESH_MINUTE).padStart(2, '0')})`);
+            refreshIframe();
+        };
+        
+        // Initialize
+        log('Dashboard refresh monitor started');
+        log(`Will refresh daily at ${String(REFRESH_HOUR).padStart(2, '0')}:${String(REFRESH_MINUTE).padStart(2, '0')}`);
+        
+        // Initial status update
+        updateStatus();
+        
+        // Set up periodic check
+        setInterval(checkForMidnightRefresh, CHECK_INTERVAL);
+        
+        // Also update status more frequently for display
+        setInterval(updateStatus, 1000);
+        
+        // Log initial state
+        if (lastRefreshTime) {
+            const lastRefreshDate = new Date(parseInt(lastRefreshTime));
+            log(`Last refresh was at ${lastRefreshDate.toLocaleString()}`);
+        }
+    })();
+    </script>
+</body>
+</html>

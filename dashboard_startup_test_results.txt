@@ -1,0 +1,28 @@
+Dashboard Startup Test Results - 2025-08-02 10:15:12.971143
+============================================================
+
+Test 1:
+  Success: False
+  Hang: False
+  Duration: 3.43s
+
+Test 2:
+  Success: False
+  Hang: False
+  Duration: 2.41s
+
+Test 3:
+  Success: False
+  Hang: False
+  Duration: 2.47s
+
+Test 4:
+  Success: False
+  Hang: False
+  Duration: 2.40s
+
+Test 5:
+  Success: False
+  Hang: False
+  Duration: 2.41s
+
