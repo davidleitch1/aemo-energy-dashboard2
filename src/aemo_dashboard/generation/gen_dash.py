@@ -1597,19 +1597,20 @@ class EnergyDashboard(param.Parameterized):
             # Always use two-plot approach with linked x-axes for better handling of negative values
             logger.info("Using two-plot approach with linked x-axes")
             # Add a hook to link x-axes after rendering
+            # Create a local list to store x_ranges for this specific plot creation
+            x_ranges_to_link = []
+            
             def link_x_ranges_hook(plot, element):
                 """Link x-ranges between plots after rendering"""
                 try:
                     # Get the underlying bokeh figure
                     if hasattr(plot, 'state') and hasattr(plot.state, 'x_range'):
                         # Store reference to this plot's x_range for linking
-                        if not hasattr(link_x_ranges_hook, 'x_ranges'):
-                            link_x_ranges_hook.x_ranges = []
-                        link_x_ranges_hook.x_ranges.append(plot.state.x_range)
+                        x_ranges_to_link.append(plot.state.x_range)
                         
                         # If we have two x_ranges, link them
-                        if len(link_x_ranges_hook.x_ranges) == 2:
-                            x_range1, x_range2 = link_x_ranges_hook.x_ranges
+                        if len(x_ranges_to_link) == 2:
+                            x_range1, x_range2 = x_ranges_to_link
                             
                             # Create bidirectional links
                             x_range1.js_link('start', x_range2, 'start')
@@ -1618,14 +1619,8 @@ class EnergyDashboard(param.Parameterized):
                             x_range2.js_link('end', x_range1, 'end')
                             
                             logger.info("Successfully linked x-axes between generation and price plots")
-                            # Reset for next use
-                            link_x_ranges_hook.x_ranges = []
                 except Exception as e:
                     logger.error(f"Failed to link x-axes: {e}")
-            
-            # Reset the hook's state
-            if hasattr(link_x_ranges_hook, 'x_ranges'):
-                link_x_ranges_hook.x_ranges = []
             
             # Apply hooks to individual plots before combining
             area_plot = area_plot.opts(
