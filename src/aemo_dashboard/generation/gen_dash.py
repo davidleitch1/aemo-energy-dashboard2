@@ -2754,7 +2754,7 @@ class EnergyDashboard(param.Parameterized):
                 ("Pivot table", pn.pane.HTML(loading_html)),  # Lazy
                 ("Station Analysis", pn.pane.HTML(loading_html)),  # Lazy
                 ("Trends", pn.pane.HTML(loading_html)),  # Lazy
-                ("Insights", pn.pane.HTML(loading_html)),  # Lazy
+                ("Batteries", pn.pane.HTML(loading_html)),  # Lazy
                 dynamic=True,
                 closable=False,
                 sizing_mode='stretch_width'
@@ -2773,7 +2773,7 @@ class EnergyDashboard(param.Parameterized):
                 3: self._create_price_analysis_tab,  # Shifted from 2 to 3
                 4: self._create_station_analysis_tab,  # Shifted from 3 to 4
                 5: self._create_trends_tab,  # Shifted from 4 to 5
-                6: self._create_insights_tab  # NEW
+                6: self._create_batteries_tab  # Renamed from insights
             }
             
             # Watch for tab changes
@@ -2956,6 +2956,7 @@ class EnergyDashboard(param.Parameterized):
         """Create prices analysis tab with selectors and visualizations"""
         try:
             logger.info("Creating prices tab...")
+            logger.info(f"Start date: {self.start_date}, End date: {self.end_date}")
             
             # Calculate date range - actual price data available from 2020-01-01
             # prices30.parquet has 5+ years of data, prices5.parquet only has ~52 days
@@ -3177,18 +3178,44 @@ class EnergyDashboard(param.Parameterized):
                 }
             )
             
-            # Create price bands plot pane
-            self.bands_plot_pane = pn.pane.HoloViews(
-                height=400,
-                sizing_mode='stretch_width'
+            # Create price bands plot pane as a Column for two charts
+            self.bands_plot_pane = pn.Column(
+                sizing_mode='stretch_width',
+                height=550  # Height for both charts
             )
             # Initialize with instruction message
-            self.bands_plot_pane.object = hv.Text(0.5, 0.5, "Price bands will appear here").opts(
-                xlim=(0, 1), ylim=(0, 1), 
-                bgcolor='#282a36', color='#f8f8f2', fontsize=14
+            initial_message = pn.pane.HoloViews(
+                hv.Text(0.5, 0.5, "Price bands will appear here").opts(
+                    xlim=(0, 1), ylim=(0, 1), 
+                    bgcolor='#282a36', color='#f8f8f2', fontsize=14
+                ),
+                sizing_mode='stretch_width',
+                height=550
+            )
+            self.bands_plot_pane.clear()
+            self.bands_plot_pane.append(initial_message)
+            
+            # Create fuel relatives plot pane
+            self.fuel_relatives_plot_pane = pn.pane.HoloViews(
+                hv.Text(0.5, 0.5, "Select a region and click Analyze to view fuel-weighted prices").opts(
+                    xlim=(0, 1), ylim=(0, 1),
+                    bgcolor='#282a36', color='#f8f8f2', fontsize=14
+                ),
+                sizing_mode='stretch_both',
+                height=400
             )
             
-            # Create high price events table pane
+            # Create price index plot pane (normalized to flat load = 100)
+            self.price_index_plot_pane = pn.pane.HoloViews(
+                hv.Text(0.5, 0.5, "Price index will appear here after analysis").opts(
+                    xlim=(0, 1), ylim=(0, 1),
+                    bgcolor='#282a36', color='#f8f8f2', fontsize=14
+                ),
+                sizing_mode='stretch_both',
+                height=400
+            )
+            
+            # Create price band details table pane
             self.high_price_events_pane = pn.widgets.Tabulator(
                 pd.DataFrame(),
                 show_index=False,
@@ -3377,20 +3404,52 @@ class EnergyDashboard(param.Parameterized):
                 sizing_mode='stretch_both'
             )
             
-            # Sub-tab 2: Price Bands (bands chart and high price events)
-            price_bands_content = pn.Column(
+            # Sub-tab 2: Price Bands (table on left, charts on right)
+            price_bands_content = pn.Row(
+                # Left side: Price Band Details table
+                pn.Column(
+                    "## Price Band Details",
+                    self.high_price_events_pane,
+                    sizing_mode='stretch_both',
+                    width=500  # Fixed width for the table
+                ),
+                pn.Spacer(width=20),
+                # Right side: Price Band Distribution charts (stacked vertically)
                 pn.Column(
                     "## Price Band Distribution",
                     self.bands_plot_pane,
                     sizing_mode='stretch_width',
-                    height=400
+                    height=600  # Height for two stacked charts
                 ),
-                pn.Spacer(height=20),
+                sizing_mode='stretch_both'
+            )
+            
+            # Sub-tab 3: Fuel Relatives (30-day LOESS smoothed fuel-weighted prices)
+            # Create region selector for fuel relatives
+            fuel_relatives_region_selector = pn.widgets.RadioButtonGroup(
+                name='Region',
+                value='NSW1',  # Default to NSW
+                options=['NSW1', 'QLD1', 'SA1', 'TAS1', 'VIC1'],
+                button_type='primary',
+                button_style='outline'
+            )
+            
+            fuel_relatives_content = pn.Column(
+                pn.Row(
+                    pn.Column(
+                        "### Select Region",
+                        fuel_relatives_region_selector,
+                        width=150
+                    )
+                ),
+                pn.Spacer(height=10),
                 pn.Column(
-                    "## High Price Events",
-                    self.high_price_events_pane,
-                    sizing_mode='stretch_width',
-                    height=400
+                    "## Fuel-Weighted vs Flat Load Prices (90-day LOESS smoothed)",
+                    self.fuel_relatives_plot_pane,
+                    pn.Spacer(height=20),
+                    "## Price Index (Flat Load = 100)",
+                    self.price_index_plot_pane,
+                    sizing_mode='stretch_both'
                 ),
                 sizing_mode='stretch_both'
             )
@@ -3399,6 +3458,7 @@ class EnergyDashboard(param.Parameterized):
             price_subtabs = pn.Tabs(
                 ('Price Analysis', price_analysis_content),
                 ('Price Bands', price_bands_content),
+                ('Fuel Relatives', fuel_relatives_content),
                 sizing_mode='stretch_both'
             )
             
@@ -4032,34 +4092,19 @@ class EnergyDashboard(param.Parameterized):
                         # Order is: Below $0, $0-$300, $301-$1000, Above $1000
                         band_colors = ['#ff5555', '#50fa7b', '#ffb86c', '#ff79c6']
                         
-                        # Create data for dual bar chart - price contribution and time percentage
-                        # Reshape data to show both metrics
-                        contrib_df = bands_df[['Region', 'Price Band', 'Contribution']].copy()
-                        contrib_df['Metric'] = 'Price ($/MWh)'
-                        contrib_df['Value'] = contrib_df['Contribution']
+                        # Create TWO SEPARATE charts - price contribution and time percentage
                         
-                        percent_df = bands_df[['Region', 'Price Band', 'Percentage']].copy()
-                        percent_df['Metric'] = 'Time (%)'
-                        percent_df['Value'] = percent_df['Percentage']
-                        
-                        # Combine the dataframes
-                        combined_df = pd.concat([contrib_df[['Region', 'Price Band', 'Metric', 'Value']], 
-                                               percent_df[['Region', 'Price Band', 'Metric', 'Value']]])
-                        
-                        # Create combined region-metric label for x-axis
-                        combined_df['Region_Metric'] = combined_df['Region'] + '\n' + combined_df['Metric']
-                        
-                        # Create stacked bar chart with both metrics
-                        bands_plot = combined_df.hvplot.bar(
-                            x='Region_Metric',
-                            y='Value',
+                        # Chart 1: Price Contribution ($/MWh)
+                        contrib_plot = bands_df.hvplot.bar(
+                            x='Region',
+                            y='Contribution',
                             by='Price Band',
                             stacked=True,
-                            responsive=True,  # Use responsive sizing instead of fixed width
-                            height=400,
+                            responsive=True,
+                            height=250,  # Reduced height for stacking
                             xlabel='',
-                            ylabel='',
-                            title=f'Price Band Contribution ($/MWh) and Time Distribution (%) ({date_range_text})',
+                            ylabel='Price Contribution ($/MWh)',
+                            title=f'Price Band Contribution ({date_range_text})',
                             color=band_colors,
                             bgcolor=DRACULA_COLORS['bg'],
                             legend='top',
@@ -4068,42 +4113,86 @@ class EnergyDashboard(param.Parameterized):
                             xrotation=0,
                             show_grid=True,
                             gridstyle={'grid_line_color': DRACULA_COLORS['current'], 'grid_line_alpha': 0.3},
-                            fontsize={'ticks': 8}
+                            fontsize={'ticks': 10, 'title': 12, 'ylabel': 10}
                         )
                         
-                        # Add labels to the bars
-                        text_overlays = []
-                        for region_metric in combined_df['Region_Metric'].unique():
-                            metric_bands = combined_df[combined_df['Region_Metric'] == region_metric]
+                        # Add labels to contribution bars
+                        contrib_overlays = []
+                        for region in bands_df['Region'].unique():
+                            region_bands = bands_df[bands_df['Region'] == region]
                             cumulative_height = 0
                             
-                            for _, row in metric_bands.iterrows():
-                                # Format label based on metric type
-                                if 'Price' in row['Metric']:
-                                    label = f"${int(row['Value'])}"
-                                    threshold = 3  # Show price labels > $3
-                                else:
-                                    # For percentages, show with appropriate precision
-                                    if row['Value'] < 1:
-                                        label = f"{row['Value']:.2f}%"
-                                    else:
-                                        label = f"{row['Value']:.0f}%"
-                                    threshold = 5  # Show percentage labels > 5%
-                                
-                                if row['Value'] > threshold:
-                                    # Position text at the middle of this band's contribution
-                                    y_pos = cumulative_height + row['Value'] / 2
-                                    text_overlays.append(
-                                        hv.Text(row['Region_Metric'], y_pos, label)
-                                            .opts(color='white', fontsize=7, text_align='center', text_baseline='middle')
+                            for _, row in region_bands.iterrows():
+                                label = f"${int(row['Contribution'])}"
+                                if row['Contribution'] > 3:  # Show labels for contributions > $3
+                                    y_pos = cumulative_height + row['Contribution'] / 2
+                                    contrib_overlays.append(
+                                        hv.Text(region, y_pos, label)
+                                            .opts(color='white', fontsize=8, text_align='center', text_baseline='middle')
                                     )
-                                cumulative_height += row['Value']
+                                cumulative_height += row['Contribution']
                         
-                        # Combine plot with text overlays
-                        if text_overlays:
-                            bands_plot = bands_plot * hv.Overlay(text_overlays)
+                        if contrib_overlays:
+                            contrib_plot = contrib_plot * hv.Overlay(contrib_overlays)
                         
-                        # Create high price events table
+                        # Chart 2: Time Distribution (%)
+                        time_plot = bands_df.hvplot.bar(
+                            x='Region',
+                            y='Percentage',
+                            by='Price Band',
+                            stacked=True,
+                            responsive=True,
+                            height=250,  # Reduced height for stacking
+                            xlabel='Region',
+                            ylabel='Time Distribution (%)',
+                            title='Time in Each Price Band',
+                            color=band_colors,
+                            bgcolor=DRACULA_COLORS['bg'],
+                            legend='bottom',  # Different legend position
+                            toolbar='above'
+                        ).opts(
+                            xrotation=0,
+                            show_grid=True,
+                            gridstyle={'grid_line_color': DRACULA_COLORS['current'], 'grid_line_alpha': 0.3},
+                            fontsize={'ticks': 10, 'title': 12, 'ylabel': 10, 'xlabel': 10}
+                        )
+                        
+                        # Add labels to time distribution bars
+                        time_overlays = []
+                        for region in bands_df['Region'].unique():
+                            region_bands = bands_df[bands_df['Region'] == region]
+                            cumulative_height = 0
+                            
+                            for _, row in region_bands.iterrows():
+                                # Format percentage labels
+                                if row['Percentage'] < 1:
+                                    label = f"{row['Percentage']:.2f}%"
+                                else:
+                                    label = f"{row['Percentage']:.0f}%"
+                                
+                                if row['Percentage'] > 5:  # Show labels for percentages > 5%
+                                    y_pos = cumulative_height + row['Percentage'] / 2
+                                    time_overlays.append(
+                                        hv.Text(region, y_pos, label)
+                                            .opts(color='white', fontsize=8, text_align='center', text_baseline='middle')
+                                    )
+                                cumulative_height += row['Percentage']
+                        
+                        if time_overlays:
+                            time_plot = time_plot * hv.Overlay(time_overlays)
+                        
+                        # Apply attribution hook to individual plots
+                        contrib_plot = contrib_plot.opts(
+                            padding=(0.1, 0.1),
+                            hooks=[self._get_attribution_hook()]
+                        )
+                        
+                        time_plot = time_plot.opts(
+                            padding=(0.1, 0.1),
+                            hooks=[self._get_attribution_hook()]
+                        )
+                        
+                        # Create price band details table for all bands
                         high_price_rows = []
                         
                         # Calculate mean price for each region to compute contribution percentages
@@ -4131,8 +4220,8 @@ class EnergyDashboard(param.Parameterized):
                         total_hours = total_periods / periods_per_hour
                         
                         for _, row in bands_df.iterrows():
-                            # Include negative prices, high price bands, or any band < 5% of time
-                            if row['Price Band'] in ['Below $0', '$301-$1000', 'Above $1000'] or row['Percentage'] < 5:
+                            # Include all price bands in the table
+                            if True:  # Changed to include all bands including $0-$300
                                 # Calculate percentage contribution to mean
                                 mean_price = region_means[row['Region']]
                                 pct_contribution = (row['Contribution'] / mean_price) * 100 if mean_price > 0 else 0
@@ -4185,15 +4274,33 @@ class EnergyDashboard(param.Parameterized):
                             
                             self.high_price_events_pane.value = high_price_df
                         else:
-                            self.high_price_events_pane.value = pd.DataFrame({'Info': ['No high price events in selected period']})
+                            self.high_price_events_pane.value = pd.DataFrame({'Info': ['No price band data in selected period']})
                         
-                        # Update plot options with attribution hook
-                        bands_plot = bands_plot.opts(
-                            padding=(0.1, 0.1),  # Add padding to make room for attribution
-                            hooks=[self._get_attribution_hook()]  # Use reusable attribution method
+                        # Clear the column and add both charts
+                        self.bands_plot_pane.clear()
+                        
+                        # Wrap each plot in a HoloViews pane and add to column
+                        contrib_pane = pn.pane.HoloViews(contrib_plot, sizing_mode='stretch_width', height=275)
+                        time_pane = pn.pane.HoloViews(time_plot, sizing_mode='stretch_width', height=275)
+                        
+                        self.bands_plot_pane.append(contrib_pane)
+                        self.bands_plot_pane.append(time_pane)
+                    else:
+                        # No band contributions data - show message
+                        self.bands_plot_pane.clear()
+                        no_data_message = pn.pane.HoloViews(
+                            hv.Text(0.5, 0.5, 'No price band data available\nPlease select regions and click "Analyze Prices"').opts(
+                                xlim=(0, 1), ylim=(0, 1), 
+                                bgcolor='#282a36', color='#f8f8f2', fontsize=14
+                            ),
+                            sizing_mode='stretch_width',
+                            height=550
                         )
-                        
-                        self.bands_plot_pane.object = bands_plot
+                        self.bands_plot_pane.append(no_data_message)
+                        self.high_price_events_pane.value = pd.DataFrame({'Info': ['No price band data available']})
+                    
+                    # Fuel relatives are now handled independently by update_fuel_relatives()
+                    # which is triggered by the region selector change
                     
                     # Create time-of-day analysis using ORIGINAL unsmoothed data
                     # Extract hour from SETTLEMENTDATE
@@ -4263,13 +4370,375 @@ class EnergyDashboard(param.Parameterized):
             # Set up button click handler
             analyze_button.on_click(lambda event: load_and_plot_prices())
             
+            # Create standalone function for fuel relatives calculation
+            def update_fuel_relatives(event=None):
+                """Update fuel relatives plot - completely independent of other price analysis"""
+                try:
+                    # Don't auto-load on initialization - wait for user to select region
+                    if event is None:
+                        # This is the initial setup, just show instruction
+                        self.fuel_relatives_plot_pane.object = hv.Text(
+                            0.5, 0.5, 
+                            "Select a region to view 90-day LOESS smoothed fuel-weighted prices\n(Uses all available data ~5.5 years, excludes biomass, includes battery discharge)"
+                        ).opts(
+                            xlim=(0, 1), ylim=(0, 1),
+                            bgcolor='#282a36', color='#f8f8f2', fontsize=14
+                        )
+                        return
+                    
+                    selected_fuel_region = fuel_relatives_region_selector.value
+                    logger.info(f"Updating fuel relatives for region: {selected_fuel_region}")
+                    
+                    # Show loading message
+                    self.fuel_relatives_plot_pane.object = hv.Text(
+                        0.5, 0.5, 
+                        f"Loading 5.5 years of data for {selected_fuel_region}...\nThis may take 20-30 seconds"
+                    ).opts(
+                        xlim=(0, 1), ylim=(0, 1),
+                        bgcolor='#282a36', color='#50fa7b', fontsize=14
+                    )
+                    
+                    # Load ALL available data for long-term trend analysis
+                    import sys
+                    from pathlib import Path
+                    sys.path.append(str(Path(__file__).parent.parent.parent))
+                    from data_service.shared_data_duckdb import duckdb_data_service
+                    
+                    # Use full date range - approximately 5.5 years of data
+                    start_dt = pd.to_datetime('2020-01-01')
+                    end_dt = pd.to_datetime('now')
+                    
+                    logger.info(f"Loading data from {start_dt} to {end_dt} for fuel relatives")
+                    
+                    # Use DuckDB to efficiently calculate daily fuel-weighted prices
+                    # This aggregates at the database level instead of loading raw data
+                    query = f"""
+                        WITH daily_generation AS (
+                            SELECT 
+                                DATE(g.settlementdate) as date,
+                                CASE 
+                                    WHEN d.Fuel IN ('Gas', 'Gas other', 'CCGT', 'OCGT') THEN 'Gas'
+                                    ELSE d.Fuel
+                                END as fuel_type,
+                                g.duid,
+                                SUM(g.scadavalue) as daily_generation
+                            FROM generation_30min g
+                            JOIN duid_mapping d ON g.duid = d.DUID
+                            WHERE g.settlementdate >= '{start_dt.isoformat()}'
+                              AND g.settlementdate <= '{end_dt.isoformat()}'
+                              AND d.Region = '{selected_fuel_region}'
+                              AND d.Fuel IN ('Coal', 'Gas', 'Gas other', 'Wind', 'Solar', 'Water', 'CCGT', 'OCGT', 'Battery Storage')
+                              AND NOT (d.Fuel = 'Battery Storage' AND g.scadavalue < 0)  -- Exclude battery charging
+                            GROUP BY DATE(g.settlementdate), 
+                                     CASE 
+                                         WHEN d.Fuel IN ('Gas', 'Gas other', 'CCGT', 'OCGT') THEN 'Gas'
+                                         ELSE d.Fuel
+                                     END, 
+                                     g.duid
+                        ),
+                        daily_prices AS (
+                            SELECT 
+                                settlementdate,
+                                DATE(settlementdate) as date,
+                                rrp
+                            FROM prices_30min
+                            WHERE settlementdate >= '{start_dt.isoformat()}'
+                              AND settlementdate <= '{end_dt.isoformat()}'
+                              AND regionid = '{selected_fuel_region}'
+                        ),
+                        fuel_weighted AS (
+                            SELECT 
+                                dp.date,
+                                dg.fuel_type,
+                                SUM(g.scadavalue * dp.rrp) / NULLIF(SUM(g.scadavalue), 0) as weighted_price
+                            FROM generation_30min g
+                            JOIN duid_mapping d ON g.duid = d.DUID
+                            JOIN daily_prices dp ON g.settlementdate = dp.settlementdate
+                            JOIN daily_generation dg ON DATE(g.settlementdate) = dg.date 
+                                AND CASE 
+                                    WHEN d.Fuel IN ('Gas', 'Gas other', 'CCGT', 'OCGT') THEN 'Gas'
+                                    ELSE d.Fuel
+                                END = dg.fuel_type 
+                                AND g.duid = dg.duid
+                            WHERE g.settlementdate >= '{start_dt.isoformat()}'
+                              AND g.settlementdate <= '{end_dt.isoformat()}'
+                              AND d.Region = '{selected_fuel_region}'
+                              AND NOT (d.Fuel = 'Battery Storage' AND g.scadavalue < 0)  -- Exclude battery charging
+                            GROUP BY dp.date, dg.fuel_type
+                        ),
+                        flat_load AS (
+                            SELECT 
+                                DATE(settlementdate) as date,
+                                AVG(rrp) as flat_load_price
+                            FROM prices_30min
+                            WHERE settlementdate >= '{start_dt.isoformat()}'
+                              AND settlementdate <= '{end_dt.isoformat()}'
+                              AND regionid = '{selected_fuel_region}'
+                            GROUP BY DATE(settlementdate)
+                        )
+                        SELECT 
+                            COALESCE(f.date, fw.date) as date,
+                            f.flat_load_price,
+                            fw.fuel_type,
+                            fw.weighted_price
+                        FROM flat_load f
+                        FULL OUTER JOIN fuel_weighted fw ON f.date = fw.date
+                        ORDER BY date, fuel_type
+                    """
+                    
+                    logger.info("Executing optimized DuckDB query for fuel relatives...")
+                    result_df = duckdb_data_service.conn.execute(query).df()
+                    
+                    if result_df.empty:
+                        self.fuel_relatives_plot_pane.object = hv.Text(0.5, 0.5, 
+                            f'No data available for {selected_fuel_region}').opts(
+                            xlim=(0, 1), ylim=(0, 1),
+                            bgcolor='#282a36', color='#f8f8f2', fontsize=14
+                        )
+                        return
+                    
+                    logger.info(f"Query returned {len(result_df)} rows")
+                    
+                    # Process the query results into the format needed for plotting
+                    # Pivot the fuel-weighted prices
+                    fuel_pivot = result_df[result_df['fuel_type'].notna()].pivot(
+                        index='date', 
+                        columns='fuel_type', 
+                        values='weighted_price'
+                    )
+                    
+                    # Get flat load prices (one per day)
+                    flat_load = result_df[['date', 'flat_load_price']].drop_duplicates('date').set_index('date')
+                    flat_load.columns = ['Flat Load']
+                    
+                    # Combine flat load and fuel-weighted prices
+                    daily_prices = flat_load.join(fuel_pivot)
+                    
+                    # Fill any missing dates with NaN (in case there are gaps in the data)
+                    # This ensures we have a continuous date range for smoothing
+                    date_range = pd.date_range(start=daily_prices.index.min(), 
+                                              end=daily_prices.index.max(), 
+                                              freq='D')
+                    daily_prices = daily_prices.reindex(date_range)
+                    
+                    # Log data size for debugging
+                    logger.info(f"Daily prices shape: {daily_prices.shape}")
+                    logger.info(f"Date range: {daily_prices.index.min()} to {daily_prices.index.max()}")
+                    logger.info(f"Number of days: {len(daily_prices)}")
+                    
+                    # Apply 90-day LOESS smoothing
+                    # For sparse data (like OCGT, Battery Storage), we'll use interpolation first
+                    from statsmodels.nonparametric.smoothers_lowess import lowess
+                    smoothed_data = pd.DataFrame(index=daily_prices.index)
+                    
+                    for col in daily_prices.columns:
+                        y = daily_prices[col].values.copy()  # Make a copy to avoid modifying original
+                        
+                        # For Battery Storage, handle zero values as missing data
+                        if col == 'Battery Storage':
+                            # Convert zeros to NaN for battery storage (no battery = no data, not zero price)
+                            y[y == 0] = np.nan
+                        
+                        mask = ~np.isnan(y)
+                        valid_count = mask.sum()
+                        logger.info(f"Column {col}: {valid_count} valid points out of {len(y)}")
+                        
+                        # For Battery Storage, trim data to start from first valid point
+                        if col == 'Battery Storage' and valid_count > 0:
+                            first_valid_idx = np.where(mask)[0][0]
+                            # Set all values before first valid data point to NaN
+                            y[:first_valid_idx] = np.nan
+                            mask = ~np.isnan(y)
+                            valid_count = mask.sum()
+                            logger.info(f"  Battery Storage: Trimmed to start from index {first_valid_idx} ({daily_prices.index[first_valid_idx]})")
+                        
+                        if valid_count > 90:  # Need at least 90 points for meaningful smoothing
+                            # For sparse data, first interpolate to fill gaps
+                            # This helps with fuels that don't run every day
+                            series = pd.Series(y, index=daily_prices.index)
+                            
+                            # Use forward fill then backward fill for small gaps (up to 7 days)
+                            # This is especially important for Battery Storage which may have gaps
+                            filled_series = series.ffill(limit=7).bfill(limit=7)
+                            
+                            # Apply 90-day LOESS smoothing
+                            try:
+                                # Get filled values and mask
+                                filled_values = filled_series.values
+                                filled_mask = ~np.isnan(filled_values)
+                                
+                                if filled_mask.sum() > 90:
+                                    # Create numeric x values for LOESS
+                                    x_numeric = np.arange(len(filled_values))
+                                    
+                                    # Calculate fraction for 90-day window
+                                    frac = min(90.0 / filled_mask.sum(), 0.5)
+                                    logger.info(f"  Applying LOESS with frac={frac:.3f} for {col}")
+                                    
+                                    # Apply LOESS smoothing only on non-NaN values
+                                    smoothed = lowess(filled_values[filled_mask], 
+                                                    x_numeric[filled_mask], 
+                                                    frac=frac, 
+                                                    it=0)
+                                    
+                                    # Map smoothed values back to full array
+                                    smoothed_values = np.full(len(filled_values), np.nan)
+                                    smoothed_values[filled_mask] = smoothed[:, 1]
+                                    
+                                    # Final interpolation for any remaining gaps
+                                    smoothed_series = pd.Series(smoothed_values, index=daily_prices.index)
+                                    smoothed_series = smoothed_series.interpolate(method='linear', limit_direction='both')
+                                    
+                                    # For Battery Storage, ensure NaN values before first valid data are preserved
+                                    if col == 'Battery Storage':
+                                        original_mask = ~np.isnan(daily_prices[col].values.copy())
+                                        if original_mask.sum() > 0:
+                                            first_valid = np.where(original_mask)[0][0]
+                                            smoothed_series.iloc[:first_valid] = np.nan
+                                    
+                                    smoothed_data[col] = smoothed_series
+                                    logger.info(f"  Applied 90-day LOESS smoothing to {col}")
+                                else:
+                                    logger.info(f"  Not enough data after filling for {col}, using raw values")
+                                    smoothed_data[col] = filled_series
+                            except Exception as e:
+                                logger.warning(f"  LOESS failed for {col}: {e}, using interpolation only")
+                                smoothed_data[col] = filled_series
+                        elif col == 'Battery Storage' and valid_count > 0:
+                            # For Battery Storage with limited data, still include but don't smooth
+                            logger.info(f"  Battery Storage has data but not enough for smoothing ({valid_count} points)")
+                            series = pd.Series(y, index=daily_prices.index)
+                            smoothed_data[col] = series
+                        else:
+                            logger.info(f"  Insufficient data for {col} ({valid_count} points), skipping")
+                    
+                    # Create plot
+                    logger.info(f"Smoothed data shape: {smoothed_data.shape}")
+                    logger.info(f"Smoothed data columns: {smoothed_data.columns.tolist()}")
+                    logger.info(f"Smoothed data empty: {smoothed_data.empty}")
+                    logger.info(f"Smoothed data has any non-NaN: {smoothed_data.notna().any().any()}")
+                    
+                    if not smoothed_data.empty and smoothed_data.notna().any().any():
+                        
+                        # Define custom colors for fuel types - create a list in the same order as columns
+                        fuel_color_map = {
+                            'Flat Load': '#ffffff',  # White for flat load (will be dotted)
+                            'Wind': '#50fa7b',       # Green for wind
+                            'Solar': '#ffb86c',      # Orange for solar
+                            'Coal': '#b8b8b8',       # Light gray for coal (more visible)
+                            'Gas': '#ff5555',        # Red for gas
+                            'Water': '#8be9fd',      # Cyan for water/hydro
+                            'Battery Storage': '#bd93f9'  # Light purple for battery
+                        }
+                        
+                        # Create color list in the same order as columns
+                        color_list = [fuel_color_map.get(col, '#f8f8f2') for col in smoothed_data.columns]
+                        
+                        # Create line dash patterns - dotted for Flat Load, solid for others
+                        line_dash_map = {col: 'dotted' if col == 'Flat Load' else 'solid' 
+                                        for col in smoothed_data.columns}
+                        
+                        fuel_relatives_plot = smoothed_data.hvplot.line(
+                            y=smoothed_data.columns.tolist(),
+                            xlabel='Date',
+                            ylabel='Price ($/MWh)',
+                            title=f'90-Day LOESS Smoothed Fuel-Weighted Prices - {selected_fuel_region} (Gas combined, Battery discharge only)',
+                            height=400,
+                            width=900,
+                            line_width=2,
+                            legend='top_right',
+                            grid=True,
+                            color=color_list,
+                            line_dash=list(line_dash_map.values())
+                        ).opts(
+                            bgcolor='#282a36',
+                            active_tools=['pan', 'wheel_zoom'],
+                            hooks=[self._get_attribution_hook()]
+                        )
+                        
+                        self.fuel_relatives_plot_pane.object = fuel_relatives_plot
+                        
+                        # Create price index plot (normalized to Flat Load = 100)
+                        if 'Flat Load' in smoothed_data.columns:
+                            # Create indexed data where Flat Load = 100
+                            indexed_data = pd.DataFrame(index=smoothed_data.index)
+                            
+                            for col in smoothed_data.columns:
+                                # Calculate index: (fuel_price / flat_load_price) * 100
+                                # Handle division by zero or NaN
+                                flat_load_values = smoothed_data['Flat Load'].values
+                                fuel_values = smoothed_data[col].values
+                                
+                                # Create mask for valid flat load values
+                                valid_mask = (flat_load_values != 0) & ~np.isnan(flat_load_values)
+                                
+                                indexed_values = np.full(len(fuel_values), np.nan)
+                                indexed_values[valid_mask] = (fuel_values[valid_mask] / flat_load_values[valid_mask]) * 100
+                                
+                                indexed_data[col] = indexed_values
+                            
+                            # Create the index plot with same styling
+                            price_index_plot = indexed_data.hvplot.line(
+                                y=indexed_data.columns.tolist(),
+                                xlabel='Date',
+                                ylabel='Price Index (Flat Load = 100)',
+                                title=f'Price Index Relative to Flat Load - {selected_fuel_region}',
+                                height=400,
+                                width=900,
+                                line_width=2,
+                                legend='top_right',
+                                grid=True,
+                                color=color_list,
+                                line_dash=list(line_dash_map.values())
+                            ).opts(
+                                bgcolor='#282a36',
+                                active_tools=['pan', 'wheel_zoom'],
+                                hooks=[self._get_attribution_hook()]
+                            ) * hv.HLine(100).opts(color='gray', line_dash='dashed', line_width=1)
+                            
+                            self.price_index_plot_pane.object = price_index_plot
+                        else:
+                            self.price_index_plot_pane.object = hv.Text(0.5, 0.5, 
+                                'Flat Load data not available for indexing').opts(
+                                xlim=(0, 1), ylim=(0, 1),
+                                bgcolor='#282a36', color='#f8f8f2', fontsize=14
+                            )
+                    else:
+                        self.fuel_relatives_plot_pane.object = hv.Text(0.5, 0.5, 
+                            f'Insufficient data for smoothing').opts(
+                            xlim=(0, 1), ylim=(0, 1),
+                            bgcolor='#282a36', color='#f8f8f2', fontsize=14
+                        )
+                        self.price_index_plot_pane.object = hv.Text(0.5, 0.5, 
+                            f'Insufficient data for indexing').opts(
+                            xlim=(0, 1), ylim=(0, 1),
+                            bgcolor='#282a36', color='#f8f8f2', fontsize=14
+                        )
+                
+                except Exception as e:
+                    logger.error(f"Error in fuel relatives calculation: {e}", exc_info=True)
+                    self.fuel_relatives_plot_pane.object = hv.Text(0.5, 0.5, 
+                        f'Error: {str(e)}').opts(
+                        xlim=(0, 1), ylim=(0, 1),
+                        bgcolor='#282a36', color='#f8f8f2', fontsize=14
+                    )
+                    self.price_index_plot_pane.object = hv.Text(0.5, 0.5, 
+                        f'Error: {str(e)}').opts(
+                        xlim=(0, 1), ylim=(0, 1),
+                        bgcolor='#282a36', color='#f8f8f2', fontsize=14
+                    )
+            
+            # Set up callback for fuel relatives region selector - completely independent
+            fuel_relatives_region_selector.param.watch(update_fuel_relatives, 'value')
+            
             # Don't load data automatically - wait for user to click button
             
             logger.info("Prices tab created successfully")
+            logger.info(f"Returning prices_tab of type: {type(prices_tab)}")
             return prices_tab
             
         except Exception as e:
-            logger.error(f"Error creating prices tab: {e}")
+            logger.error(f"Error creating prices tab: {e}", exc_info=True)
             return pn.pane.Markdown(f"**Error loading Prices tab:** {e}")
     
     def _create_price_analysis_tab(self):
@@ -4311,19 +4780,19 @@ class EnergyDashboard(param.Parameterized):
                 sizing_mode='stretch_width'
             )
     
-    def _create_insights_tab(self):
-        """Create insights tab"""
+    def _create_batteries_tab(self):
+        """Create batteries tab"""
         try:
-            logger.info("Creating insights tab...")
+            logger.info("Creating batteries tab...")
             from aemo_dashboard.insights import InsightsTab
-            insights_instance = InsightsTab()
-            insights_tab = insights_instance.create_layout()
-            logger.info("Insights tab created successfully")
-            return insights_tab
+            batteries_instance = InsightsTab()
+            batteries_tab = batteries_instance.create_layout()
+            logger.info("Batteries tab created successfully")
+            return batteries_tab
         except Exception as e:
-            logger.error(f"Error creating insights tab: {e}")
+            logger.error(f"Error creating batteries tab: {e}")
             return pn.Column(
-                pn.pane.Markdown("# Insights"),
+                pn.pane.Markdown("# Batteries"),
                 pn.pane.Markdown(f"**Error loading tab:** {e}"),
                 sizing_mode='stretch_width'
             )
