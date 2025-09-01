@@ -640,7 +640,7 @@ class InsightsTab:
                                 
                                 # Stack the plots vertically with linked x-axes
                                 combined_plot = (power_plot + price_plot).cols(1).opts(
-                                    hv.opts.Layout(shared_axes=True)  # Link the x-axes
+                                    hv.opts.Layout(shared_axes='x')  # Link only the x-axes, not y-axes
                                 )
                                 
                                 # Update the chart pane with the stacked plots

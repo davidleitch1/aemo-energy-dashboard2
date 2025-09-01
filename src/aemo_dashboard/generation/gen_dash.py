@@ -1595,49 +1595,25 @@ class EnergyDashboard(param.Parameterized):
             )
             
             # Always use two-plot approach with linked x-axes for better handling of negative values
-            logger.info("Using two-plot approach with linked x-axes")
-            # Add a hook to link x-axes after rendering
-            # Create a local list to store x_ranges for this specific plot creation
-            x_ranges_to_link = []
-            
-            def link_x_ranges_hook(plot, element):
-                """Link x-ranges between plots after rendering"""
-                try:
-                    # Get the underlying bokeh figure
-                    if hasattr(plot, 'state') and hasattr(plot.state, 'x_range'):
-                        # Store reference to this plot's x_range for linking
-                        x_ranges_to_link.append(plot.state.x_range)
-                        
-                        # If we have two x_ranges, link them
-                        if len(x_ranges_to_link) == 2:
-                            x_range1, x_range2 = x_ranges_to_link
-                            
-                            # Create bidirectional links
-                            x_range1.js_link('start', x_range2, 'start')
-                            x_range1.js_link('end', x_range2, 'end')
-                            x_range2.js_link('start', x_range1, 'start')
-                            x_range2.js_link('end', x_range1, 'end')
-                            
-                            logger.info("Successfully linked x-axes between generation and price plots")
-                except Exception as e:
-                    logger.error(f"Failed to link x-axes: {e}")
+            logger.info("Using two-plot approach with HoloViews shared_axes")
             
             # Apply hooks to individual plots before combining
             area_plot = area_plot.opts(
                 xaxis='bottom',  # Show x-axis on area plot
                 xlabel='Time',
-                hooks=[self._get_datetime_formatter_hook(), link_x_ranges_hook]
+                hooks=[self._get_datetime_formatter_hook()]
             )
             
             price_plot = price_plot.opts(
-                xaxis='bottom',  # Ensure x-axis is visible
+                xaxis='bottom',  # Ensure x-axis is visible  
                 xlabel='Time',
-                hooks=[self._get_datetime_formatter_hook(), link_x_ranges_hook]
+                hooks=[self._get_datetime_formatter_hook()]
             )
             
-            # Create the stacked layout
+            # Create the stacked layout with shared x-axis only
+            # Using 'x' instead of True to share only x-axis, not y-axis
             combined_layout = (area_plot + price_plot).cols(1).opts(
-                shared_axes=False,  # Keep false to prevent UFuncTypeError
+                shared_axes='x',  # Share only x-axis between the two plots
                 merge_tools=False   # Keep tools separate so each plot has its own
             )
             
