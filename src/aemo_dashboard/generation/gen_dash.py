@@ -1610,10 +1610,10 @@ class EnergyDashboard(param.Parameterized):
                 hooks=[self._get_datetime_formatter_hook()]
             )
             
-            # Create the stacked layout with shared x-axis only
-            # Using 'x' instead of True to share only x-axis, not y-axis
+            # Create the stacked layout with linked x-axes
+            # Using shared_axes=True for HoloViews-managed linking within this tab
             combined_layout = (area_plot + price_plot).cols(1).opts(
-                shared_axes='x',  # Share only x-axis between the two plots
+                shared_axes=True,  # Link x-axes between the two plots
                 merge_tools=False   # Keep tools separate so each plot has its own
             )
             
