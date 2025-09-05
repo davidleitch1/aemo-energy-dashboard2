@@ -2981,8 +2981,8 @@ class EnergyDashboard(param.Parameterized):
             # Aggregate level radio buttons (compact)
             aggregate_selector = pn.widgets.RadioBoxGroup(
                 name='',
-                value='1 hour',
-                options=['5 min', '1 hour', 'Daily', 'Monthly', 'Quarterly', 'Yearly'],
+                value='30 min',
+                options=['5 min', '30 min', '1 hour', 'Daily', 'Monthly', 'Quarterly', 'Yearly'],
                 inline=False,  # Vertical for frequency options
                 width=120
             )
@@ -3468,6 +3468,30 @@ class EnergyDashboard(param.Parameterized):
             def update_date_display(event):
                 """Update the date display when date pickers change"""
                 date_display.object = f"**Selected Period:** {start_date_picker.value.strftime('%Y-%m-%d')} to {end_date_picker.value.strftime('%Y-%m-%d')}"
+                
+                # Clear the date preset selection when dates are manually changed
+                # Check if the current dates match any preset
+                current_end = end_date_picker.value
+                current_start = start_date_picker.value
+                days_diff = (current_end - current_start).days
+                
+                # Only clear if it doesn't match the current preset
+                matches_preset = False
+                if date_presets.value == '1 day' and days_diff == 1:
+                    matches_preset = True
+                elif date_presets.value == '7 days' and days_diff == 7:
+                    matches_preset = True
+                elif date_presets.value == '30 days' and days_diff == 30:
+                    matches_preset = True
+                elif date_presets.value == '90 days' and days_diff == 90:
+                    matches_preset = True
+                elif date_presets.value == '1 year' and days_diff == 365:
+                    matches_preset = True
+                elif date_presets.value == 'All data' and current_start == pd.Timestamp('2020-01-01').date():
+                    matches_preset = True
+                
+                if not matches_preset:
+                    date_presets.value = None  # Clear preset selection
             
             # Function to load and update price data
             def load_and_plot_prices(event=None):
@@ -3564,13 +3588,17 @@ class EnergyDashboard(param.Parameterized):
                     # Resample based on frequency selection
                     freq_map = {
                         '5 min': '5min',
+                        '30 min': '30min',
                         '1 hour': 'h',
                         'Daily': 'D',
                         'Monthly': 'M',
                         'Quarterly': 'Q',
                         'Yearly': 'Y'
                     }
-                    freq = freq_map.get(aggregate_selector.value, 'h')
+                    freq = freq_map.get(aggregate_selector.value, '30min')
+                    
+                    # Keep a copy of the original 30-min data BEFORE resampling for DWA calculation
+                    original_30min_price_data = price_data.copy()
                     
                     # Resample data
                     if freq != '5min':  # Only resample if not 5 minute
@@ -3588,7 +3616,7 @@ class EnergyDashboard(param.Parameterized):
                             agg_dict['RRP'] = 'mean'
                         price_data = price_data.groupby('REGIONID').resample(freq).agg(agg_dict).reset_index()
                     
-                    # Keep a copy of the original data for statistics and other charts
+                    # Keep a copy of the resampled data for statistics and other charts
                     original_price_data = price_data.copy()
                     
                     # Apply smoothing if selected (only for time series plot)
@@ -3620,6 +3648,8 @@ class EnergyDashboard(param.Parameterized):
                                 freq = aggregate_selector.value
                                 if freq == '5 min':
                                     periods_per_day = 24 * 12  # 288 periods
+                                elif freq == '30 min':
+                                    periods_per_day = 24 * 2  # 48 periods
                                 elif freq == '1 hour':
                                     periods_per_day = 24
                                 elif freq == 'Daily':
@@ -3775,7 +3805,8 @@ class EnergyDashboard(param.Parameterized):
                     elif date_presets.value == 'All data':
                         date_range_text = "All available data"
                     else:
-                        # Custom date range (including when date_presets.value is None)
+                        # Custom date range (including when date_presets.value is None or unrecognized)
+                        # This handles both None (custom dates) and any other value
                         date_range_text = f"{start_date_picker.value.strftime('%Y-%m-%d')} to {end_date_picker.value.strftime('%Y-%m-%d')}"
                     
                     # Remove any NaN values that might cause rendering gaps
@@ -3934,14 +3965,43 @@ class EnergyDashboard(param.Parameterized):
                                 region_gen_data = gen_data[gen_data['REGIONID'] == region].copy()
                                 region_price_data = original_price_data[original_price_data['REGIONID'] == region].copy()
                                 
+                                # For aggregated frequencies, we need original 30-min data for correct DWA
+                                # Don't resample generation data yet - we'll handle it during DWA calculation
+                                original_region_gen_data = region_gen_data.copy()
+                                # Use the 30-min price data that was saved before resampling
+                                original_region_price_data = original_30min_price_data[original_30min_price_data['REGIONID'] == region].copy()
+                                
+                                # Only resample for display purposes if needed (not for DWA calculation)
+                                if not region_gen_data.empty and not region_price_data.empty:
+                                    # Get the frequency of the price data
+                                    price_periods = len(region_price_data['SETTLEMENTDATE'].unique())
+                                    gen_periods = len(region_gen_data['SETTLEMENTDATE'].unique())
+                                    
+                                    # If price has fewer periods, it's been resampled - resample generation to match for display
+                                    if price_periods < gen_periods and freq != '5min' and freq != '30min':
+                                        logger.info(f"Resampling generation data to {freq} for display purposes")
+                                        # Group by FUEL_TYPE first, then resample
+                                        region_gen_data = region_gen_data.groupby(['FUEL_TYPE_CONSOLIDATED', pd.Grouper(key='SETTLEMENTDATE', freq=freq)]).agg({
+                                            'SCADAVALUE': 'sum',  # Sum generation when aggregating
+                                            'DUID': 'first',  # Keep first DUID for reference
+                                            'REGIONID': 'first'  # Keep region
+                                        }).reset_index()
+                                
                                 if not region_gen_data.empty and not region_price_data.empty:
                                     # Ensure datetime format
                                     region_gen_data['SETTLEMENTDATE'] = pd.to_datetime(region_gen_data['SETTLEMENTDATE'])
                                     region_price_data['SETTLEMENTDATE'] = pd.to_datetime(region_price_data['SETTLEMENTDATE'])
                                     
                                     for fuel_type in fuel_display_order:
-                                        # Get generation for this consolidated fuel type
-                                        fuel_gen = region_gen_data[region_gen_data['FUEL_TYPE_CONSOLIDATED'] == fuel_type].copy()
+                                        # For DWA calculation with aggregated frequencies, use original 30-min data
+                                        if freq in ['D', 'M', 'Q', 'Y']:
+                                            # Use original non-resampled data for correct DWA
+                                            fuel_gen = original_region_gen_data[original_region_gen_data['FUEL_TYPE_CONSOLIDATED'] == fuel_type].copy()
+                                            use_original_prices = True
+                                        else:
+                                            # Use resampled data for non-aggregated frequencies
+                                            fuel_gen = region_gen_data[region_gen_data['FUEL_TYPE_CONSOLIDATED'] == fuel_type].copy()
+                                            use_original_prices = False
                                         
                                         if not fuel_gen.empty:
                                             # For batteries, only consider discharge (positive values)
@@ -3958,26 +4018,46 @@ class EnergyDashboard(param.Parameterized):
                                             
                                             # Merge with prices if we have data
                                             if not fuel_gen_agg.empty:
-                                                merged = pd.merge(
-                                                    fuel_gen_agg,
-                                                    region_price_data[['SETTLEMENTDATE', 'RRP']],
-                                                    on='SETTLEMENTDATE',
-                                                    how='inner'
-                                                )
+                                                if use_original_prices:
+                                                    # For aggregated frequencies, use original 30-min prices
+                                                    # Need to get original prices before they were resampled
+                                                    merged = pd.merge(
+                                                        fuel_gen_agg,
+                                                        original_region_price_data[['SETTLEMENTDATE', 'RRP']],
+                                                        on='SETTLEMENTDATE',
+                                                        how='inner'
+                                                    )
+                                                else:
+                                                    merged = pd.merge(
+                                                        fuel_gen_agg,
+                                                        region_price_data[['SETTLEMENTDATE', 'RRP']],
+                                                        on='SETTLEMENTDATE',
+                                                        how='inner'
+                                                    )
                                             else:
                                                 merged = pd.DataFrame()
                                             
                                             if not merged.empty and merged['SCADAVALUE'].sum() > 0:
-                                                # Determine time interval
-                                                if len(merged) > 1:
-                                                    time_diff = merged['SETTLEMENTDATE'].iloc[1] - merged['SETTLEMENTDATE'].iloc[0]
-                                                    hours_per_period = time_diff.total_seconds() / 3600
-                                                else:
-                                                    hours_per_period = 0.5  # Default to 30-min
+                                                # For dispatch-weighted average:
+                                                # DWA = Total Revenue / Total Energy
                                                 
-                                                # Calculate revenue-weighted average price
-                                                revenue = (merged['SCADAVALUE'] * merged['RRP'] * hours_per_period).sum()
-                                                energy = (merged['SCADAVALUE'] * hours_per_period).sum()
+                                                if freq in ['D', 'M', 'Q', 'Y']:
+                                                    # For aggregated frequencies, we have original 30-min data
+                                                    # Calculate correctly: sum(MW * price * 0.5) / sum(MW * 0.5)
+                                                    hours_per_period = 0.5  # Original data is 30-minute
+                                                    revenue = (merged['SCADAVALUE'] * merged['RRP'] * hours_per_period).sum()
+                                                    energy = (merged['SCADAVALUE'] * hours_per_period).sum()
+                                                else:
+                                                    # For 5min, 30min, hourly - original logic
+                                                    if len(merged) > 1:
+                                                        time_diff = merged['SETTLEMENTDATE'].iloc[1] - merged['SETTLEMENTDATE'].iloc[0]
+                                                        hours_per_period = time_diff.total_seconds() / 3600
+                                                    else:
+                                                        hours_per_period = 0.5  # Default to 30-min
+                                                    
+                                                    # Calculate revenue and energy with proper time interval
+                                                    revenue = (merged['SCADAVALUE'] * merged['RRP'] * hours_per_period).sum()
+                                                    energy = (merged['SCADAVALUE'] * hours_per_period).sum()
                                                 
                                                 weighted_price = revenue / energy if energy > 0 else 0
                                                 fuel_prices_by_region[region][fuel_type] = f"{weighted_price:.0f}"
