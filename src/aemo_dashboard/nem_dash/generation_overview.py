@@ -6,8 +6,7 @@ Fixed 24-hour stacked area chart showing NEM generation by fuel type
 import pandas as pd
 import numpy as np
 import panel as pn
-import holoviews as hv
-import hvplot.pandas
+import plotly.graph_objects as go
 from datetime import datetime, timedelta
 
 from ..shared.config import config
@@ -18,9 +17,6 @@ logger = get_logger(__name__)
 
 # Initialize query manager
 query_manager = NEMDashQueryManager()
-
-# Configure HoloViews (ensure it's set up)
-hv.extension('bokeh')
 
 # Fuel colors consistent with main dashboard
 FUEL_COLORS = {
@@ -39,20 +35,29 @@ FUEL_COLORS = {
     'Transmission Flow': '#FFB6C1' # Light pink
 }
 
-# HoloViews options for consistent styling
-hv.opts.defaults(
-    hv.opts.Area(
-        width=1200,
-        height=400,
-        alpha=0.8,
-        show_grid=False,
-        toolbar='above'
-    ),
-    hv.opts.Overlay(
-        show_grid=False,
-        toolbar='above'
-    )
-)
+# Plotly template for Dracula theme
+PLOTLY_TEMPLATE = {
+    'layout': {
+        'paper_bgcolor': '#282a36',  # Dracula background
+        'plot_bgcolor': '#282a36',   # Plot area background
+        'font': {'color': '#f8f8f2', 'size': 12},  # Foreground text
+        'xaxis': {
+            'gridcolor': '#44475a',
+            'zerolinecolor': '#44475a',
+            'linecolor': '#6272a4'
+        },
+        'yaxis': {
+            'gridcolor': '#44475a',
+            'zerolinecolor': '#44475a',
+            'linecolor': '#6272a4'
+        },
+        'legend': {
+            'bgcolor': 'rgba(40, 42, 54, 0.8)',
+            'bordercolor': '#6272a4',
+            'borderwidth': 1
+        }
+    }
+}
 
 
 def load_generation_data():
@@ -323,7 +328,7 @@ def prepare_generation_for_stacking(gen_data, transmission_data=None, rooftop_da
 
 def create_24hour_generation_chart(pivot_df):
     """
-    Create 24-hour stacked area chart with proper battery handling
+    Create 24-hour stacked area chart with proper battery handling using Plotly
     """
     try:
         if pivot_df.empty:
@@ -332,88 +337,111 @@ def create_24hour_generation_chart(pivot_df):
                 "<h3>No generation data available for last 24 hours</h3></div>",
                 width=1000, height=400
             )
-        
+
         # Rename Battery Storage to Battery for consistency
         if 'Battery Storage' in pivot_df.columns:
             pivot_df = pivot_df.rename(columns={'Battery Storage': 'Battery'})
-        
+
         # Get fuel types (exclude any index columns)
         fuel_types = [col for col in pivot_df.columns if col not in ['settlementdate']]
-        
+
         if not fuel_types:
             return pn.pane.HTML(
                 "<div style='width:1000px;height:400px;display:flex;align-items:center;justify-content:center;'>"
                 "<h3>No fuel type data available</h3></div>",
                 width=1000, height=400
             )
-        
-        # Separate positive and negative values for battery
-        plot_data_positive = pivot_df.copy()
+
+        # Create Plotly figure
+        fig = go.Figure()
+
+        # Separate positive and negative battery values
         battery_col = 'Battery'
-        has_battery = battery_col in plot_data_positive.columns
-        
-        # Handle battery - only keep positive values in main plot
+        has_battery = battery_col in pivot_df.columns
+
+        # Prepare data with battery handling
+        plot_data = pivot_df.copy()
+        battery_negative = None
+
         if has_battery:
-            plot_data_positive[battery_col] = plot_data_positive[battery_col].clip(lower=0)
-        
-        # Get fuel types for positive stacking (all fuels)
-        positive_fuel_types = fuel_types
-        
-        # Create main stacked area plot with positive values
-        main_plot = plot_data_positive.hvplot.area(
-            x='settlementdate',
-            y=positive_fuel_types,
-            stacked=True,
+            # Separate negative battery values
+            battery_negative = pd.Series(
+                np.where(plot_data[battery_col].values < 0, plot_data[battery_col].values, 0),
+                index=plot_data.index
+            )
+            # Clip battery to positive for main stack
+            plot_data[battery_col] = plot_data[battery_col].clip(lower=0)
+
+        # Add stacked area traces for each fuel type
+        for fuel in fuel_types:
+            color = FUEL_COLORS.get(fuel, '#888888')
+            fig.add_trace(go.Scatter(
+                x=plot_data.index,
+                y=plot_data[fuel],
+                name=fuel,
+                mode='lines',
+                stackgroup='one',  # This creates the stacked area effect
+                fillcolor=color,
+                line=dict(color=color, width=0.5),
+                opacity=0.8,
+                hovertemplate='<b>%{fullData.name}</b><br>%{y:.0f} MW<extra></extra>'
+            ))
+
+        # Add negative battery area if exists
+        if has_battery and (battery_negative < 0).any():
+            color = FUEL_COLORS.get('Battery', '#9370DB')
+            fig.add_trace(go.Scatter(
+                x=plot_data.index,
+                y=battery_negative,
+                name='Battery (Charging)',
+                mode='lines',
+                fill='tozeroy',
+                fillcolor=color,
+                line=dict(color=color, width=0.5),
+                opacity=0.8,
+                showlegend=False,  # Already shown in main legend
+                hovertemplate='<b>Battery Charging</b><br>%{y:.0f} MW<extra></extra>'
+            ))
+
+        # Apply layout styling with Dracula theme
+        fig.update_layout(
+            title=dict(
+                text="NEM Generation - Last 24 Hours<br><sub>Design: ITK, Data: AEMO</sub>",
+                font=dict(size=14)
+            ),
+            xaxis_title="",
+            yaxis_title="Generation (MW)",
             width=1000,
             height=400,
-            ylabel='Generation (MW)',
-            xlabel='Time',
-            color=[FUEL_COLORS.get(fuel, '#888888') for fuel in positive_fuel_types],
-            alpha=0.8,
-            hover_cols=['settlementdate'] + positive_fuel_types,
-            legend='right'
+            paper_bgcolor=PLOTLY_TEMPLATE['layout']['paper_bgcolor'],
+            plot_bgcolor=PLOTLY_TEMPLATE['layout']['plot_bgcolor'],
+            font=PLOTLY_TEMPLATE['layout']['font'],
+            xaxis=dict(
+                gridcolor=PLOTLY_TEMPLATE['layout']['xaxis']['gridcolor'],
+                showgrid=False,
+                linecolor=PLOTLY_TEMPLATE['layout']['xaxis']['linecolor']
+            ),
+            yaxis=dict(
+                gridcolor=PLOTLY_TEMPLATE['layout']['yaxis']['gridcolor'],
+                showgrid=False,
+                linecolor=PLOTLY_TEMPLATE['layout']['yaxis']['linecolor']
+            ),
+            legend=dict(
+                bgcolor=PLOTLY_TEMPLATE['layout']['legend']['bgcolor'],
+                bordercolor=PLOTLY_TEMPLATE['layout']['legend']['bordercolor'],
+                borderwidth=PLOTLY_TEMPLATE['layout']['legend']['borderwidth'],
+                orientation='v',
+                yanchor='top',
+                y=1,
+                xanchor='left',
+                x=1.02
+            ),
+            hovermode='x unified',
+            margin=dict(l=60, r=150, t=60, b=40)
         )
-        
-        # Check if we have negative battery values
-        if has_battery and (pivot_df[battery_col].values < 0).any():
-            # Create negative battery data
-            plot_data_negative = pd.DataFrame(index=pivot_df.index)
-            plot_data_negative['settlementdate'] = plot_data_negative.index
-            plot_data_negative[battery_col] = pd.Series(
-                np.where(pivot_df[battery_col].values < 0, pivot_df[battery_col].values, 0),
-                index=pivot_df.index
-            )
-            
-            # Create battery negative area plot
-            battery_negative_plot = plot_data_negative.hvplot.area(
-                x='settlementdate',
-                y=battery_col,
-                stacked=False,
-                width=1000,
-                height=400,
-                color=FUEL_COLORS.get('Battery', '#9370DB'),
-                alpha=0.8,
-                hover=True,
-                legend=False  # Legend already shown in main plot
-            )
-            
-            # Combine positive and negative plots
-            area_plot = main_plot * battery_negative_plot
-        else:
-            area_plot = main_plot
-        
-        # Apply styling options
-        area_plot = area_plot.opts(
-            title="NEM Generation - Last 24 Hours",
-            show_grid=False,
-            toolbar='above',
-            fontsize={'title': 14, 'labels': 12, 'xticks': 10, 'yticks': 10}
-        )
-        
-        return pn.pane.HoloViews(area_plot, sizing_mode='fixed', width=1000, height=400, 
-                                css_classes=['chart-no-border'],
-                                linked_axes=False)  # Disable axis linking to prevent UFuncTypeError
-        
+
+        return pn.pane.Plotly(fig, sizing_mode='fixed', width=1000, height=400)
+
     except Exception as e:
         logger.error(f"Error creating generation chart: {e}")
         return pn.pane.HTML(
@@ -495,11 +523,10 @@ def create_generation_overview_component(dashboard_instance=None):
 
 if __name__ == "__main__":
     # Test the generation overview component
-    pn.extension('bokeh')
-    hv.extension('bokeh')
-    
+    pn.extension('plotly')
+
     overview = create_generation_overview_component()
-    
+
     layout = pn.Column(
         pn.pane.Markdown("## 24-Hour Generation Overview Test"),
         overview

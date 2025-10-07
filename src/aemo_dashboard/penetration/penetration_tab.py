@@ -346,107 +346,133 @@ class PenetrationTab:
         return final_plot
     
     def _create_vre_by_fuel_chart(self):
-        """Create the VRE production by fuel type chart (2018-present)."""
+        """Create the VRE production by fuel type chart (2018-present) using Plotly."""
+        import plotly.graph_objects as go
+
         # Get data from 2018 onwards
         start_year = 2018
         current_year = datetime.now().year
         years = list(range(start_year, current_year + 1))
-        
+
         logger.info(f"Creating VRE by fuel chart for years: {years}")
-        
+
         # Get generation data
         df = self._get_generation_data(years, months_only_first_year=None)
-        
+
         if df.empty:
-            # Return empty plot instead of Markdown
-            empty_df = pd.DataFrame({'x': [0], 'y': [0]})
-            return empty_df.hvplot.line(x='x', y='y', label='No data').opts(
-                width=700, height=400, bgcolor='#2B2B3B', 
+            # Return empty plot
+            fig = go.Figure()
+            fig.add_annotation(
+                text="No data available",
+                xref="paper", yref="paper",
+                x=0.5, y=0.5, showarrow=False,
+                font=dict(size=14, color='#f8f8f2')
+            )
+            fig.update_layout(
+                width=700, height=400,
+                paper_bgcolor='#2B2B3B', plot_bgcolor='#2B2B3B',
                 title='VRE production by fuel rolling 30 day avg - No data available'
             )
-        
-        # Filter for VRE fuels only and NEM-wide data (not region-specific for this chart)
+            return pn.pane.Plotly(fig, sizing_mode='fixed', width=700, height=400)
+
+        # Filter for VRE fuels only and NEM-wide data
         df_vre = df[df['fuel_type'].isin(['Wind', 'Solar', 'Rooftop'])].copy()
-        
-        # For this chart, always show NEM-wide data regardless of region selection
-        # (The data is already NEM-wide if we loaded it that way)
-        
+
         if df_vre.empty:
-            # Return empty plot instead of Markdown
-            empty_df = pd.DataFrame({'x': [0], 'y': [0]})
-            return empty_df.hvplot.line(x='x', y='y', label='No data').opts(
-                width=700, height=400, bgcolor='#2B2B3B', 
+            # Return empty plot
+            fig = go.Figure()
+            fig.add_annotation(
+                text="No VRE data available",
+                xref="paper", yref="paper",
+                x=0.5, y=0.5, showarrow=False,
+                font=dict(size=14, color='#f8f8f2')
+            )
+            fig.update_layout(
+                width=700, height=400,
+                paper_bgcolor='#2B2B3B', plot_bgcolor='#2B2B3B',
                 title='VRE production by fuel rolling 30 day avg - No VRE data available'
             )
-        
+            return pn.pane.Plotly(fig, sizing_mode='fixed', width=700, height=400)
+
         # Ensure datetime
         df_vre['settlementdate'] = pd.to_datetime(df_vre['settlementdate'])
         df_vre = df_vre.sort_values('settlementdate')
-        
+
         # Group by fuel type and timestamp
         fuel_data = df_vre.groupby(['settlementdate', 'fuel_type'])['total_generation_mw'].sum().reset_index()
-        
-        # Apply 30-day rolling average for each fuel type
-        plots = []
+
+        # Create Plotly figure
+        fig = go.Figure()
+
+        # Colors for each fuel type
         colors = {
             'Rooftop': '#5DADE2',  # Light blue
-            'Solar': '#F39C12',    # Orange  
+            'Solar': '#F39C12',    # Orange
             'Wind': '#58D68D'      # Green
         }
-        
+
+        # Add line for each fuel type
         for fuel in ['Rooftop', 'Solar', 'Wind']:
             fuel_df = fuel_data[fuel_data['fuel_type'] == fuel].copy()
-            
+
             if not fuel_df.empty:
                 # Apply 30-day rolling average (1440 periods)
                 fuel_df['mw_rolling_30d'] = fuel_df['total_generation_mw'].rolling(
                     window=1440, center=False, min_periods=720
                 ).mean()
-                
+
                 # Annualise
                 fuel_df['twh_annualised'] = fuel_df['mw_rolling_30d'] * 24 * 365 / 1_000_000
-                
-                # Create line plot
-                plot = fuel_df.hvplot.line(
-                    x='settlementdate',
-                    y='twh_annualised',
-                    label=f'nem_{fuel.lower()}',
-                    color=colors[fuel],
-                    line_width=2
-                )
-                plots.append(plot)
-        
-        if not plots:
-            # Return empty plot instead of Markdown
-            empty_df = pd.DataFrame({'x': [0], 'y': [0]})
-            return empty_df.hvplot.line(x='x', y='y', label='No data').opts(
-                width=700, height=400, bgcolor='#2B2B3B', 
-                title='VRE production by fuel rolling 30 day avg - No data to plot'
-            )
-        
-        # Combine plots
-        combined_plot = plots[0]
-        for plot in plots[1:]:
-            combined_plot = combined_plot * plot
-        
-        # Style the plot
-        final_plot = combined_plot.opts(
+
+                # Add trace
+                fig.add_trace(go.Scatter(
+                    x=fuel_df['settlementdate'],
+                    y=fuel_df['twh_annualised'],
+                    name=f'nem_{fuel.lower()}',
+                    mode='lines',
+                    line=dict(color=colors[fuel], width=2),
+                    hovertemplate='<b>%{fullData.name}</b><br>%{y:.0f} TWh<extra></extra>'
+                ))
+
+        # Apply layout styling with Dracula theme
+        fig.update_layout(
+            title=dict(
+                text=f'VRE production by fuel rolling 30 day avg - {self.region_select.value}<br><sub>© ITK</sub>',
+                font=dict(size=14, color='#f8f8f2')
+            ),
+            xaxis_title='date',
+            yaxis_title='TWh annualised',
             width=700,
             height=400,
-            bgcolor='#2B2B3B',
-            title=f'VRE production by fuel rolling 30 day avg - {self.region_select.value}',
-            xlabel='date',
-            ylabel='TWh annualised',
-            fontsize={'title': 14, 'labels': 12, 'xticks': 10, 'yticks': 10},
-            show_grid=False,
-            toolbar='above',
-            legend_position='top_left',
-            framewise=True,
-            yformatter='%.0f'
-            # ylim removed to allow auto-scaling
+            paper_bgcolor='#2B2B3B',
+            plot_bgcolor='#2B2B3B',
+            font=dict(color='#f8f8f2', size=12),
+            xaxis=dict(
+                gridcolor='#44475a',
+                showgrid=False,
+                linecolor='#6272a4'
+            ),
+            yaxis=dict(
+                gridcolor='#44475a',
+                showgrid=False,
+                linecolor='#6272a4',
+                tickformat='.0f'
+            ),
+            legend=dict(
+                bgcolor='rgba(43, 43, 59, 0.8)',
+                bordercolor='#6272a4',
+                borderwidth=1,
+                orientation='v',
+                yanchor='top',
+                y=0.98,
+                xanchor='left',
+                x=0.02
+            ),
+            hovermode='x unified',
+            margin=dict(l=60, r=20, t=60, b=40)
         )
-        
-        return final_plot
+
+        return pn.pane.Plotly(fig, sizing_mode='fixed', width=700, height=400)
     
     def _create_thermal_vs_renewables_chart(self):
         """Create the thermal vs renewables chart with 180-day moving average."""
