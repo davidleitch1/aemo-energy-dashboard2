@@ -162,7 +162,7 @@ class NEMDashQueryManager:
     def get_renewable_data(self) -> Dict[str, float]:
         """
         Get current renewable generation data for gauge.
-        
+
         Returns:
             Dictionary with renewable and total generation
         """
@@ -170,7 +170,7 @@ class NEMDashQueryManager:
             # Get last 5 minutes of data
             end_date = datetime.now()
             start_date = end_date - timedelta(minutes=5)
-            
+
             # Query generation by fuel
             generation_data = self.generation_manager.query_generation_by_fuel(
                 start_date=start_date,
@@ -178,7 +178,7 @@ class NEMDashQueryManager:
                 region='NEM',
                 resolution='5min'
             )
-            
+
             if generation_data.empty:
                 # Try last hour as fallback
                 start_date = end_date - timedelta(hours=1)
@@ -188,29 +188,82 @@ class NEMDashQueryManager:
                     region='NEM',
                     resolution='5min'
                 )
-            
+
             if generation_data.empty:
                 logger.warning("No generation data for renewable calculation")
                 return {'renewable_mw': 0, 'total_mw': 0, 'renewable_pct': 0}
-            
+
             # Get the most recent data point
             latest = generation_data.groupby('fuel_type')['total_generation_mw'].last()
-            
+
             # Define renewable fuel types
             renewable_fuels = ['Wind', 'Solar', 'Rooftop Solar', 'Water', 'Hydro', 'Biomass']
-            
+
+            # Define actual generation fuel types (excludes storage and transmission)
+            generation_fuels = ['Coal', 'CCGT', 'OCGT', 'Gas other', 'Other',
+                              'Wind', 'Solar', 'Rooftop Solar', 'Water', 'Hydro', 'Biomass']
+
             renewable_mw = latest[latest.index.isin(renewable_fuels)].sum()
-            total_mw = latest.sum()
+            # Only sum actual generation sources, not storage or transmission
+            total_mw = latest[latest.index.isin(generation_fuels)].sum()
+
+            # IMPORTANT: Add rooftop solar separately as it's not in the generation_by_fuel view
+            # The generation_by_fuel view only includes DUID-based generation from scada data
+            # Rooftop solar comes from a separate source with regionids
+            rooftop_mw = 0
+            try:
+                # Query rooftop solar directly from rooftop_30min table
+                # Note: rooftop data has 'power' column, not 'value', and is split by regionid
+                import os
+                data_dir = os.environ.get('AEMO_DATA_DIR', '/Volumes/davidleitch/aemo_production/data')
+                rooftop_path = os.path.join(data_dir, "rooftop30.parquet")
+
+                rooftop_query = """
+                    SELECT SUM(CAST(power AS DOUBLE)) as total_rooftop
+                    FROM read_parquet(?)
+                    WHERE settlementdate >= ?
+                    AND settlementdate <= ?
+                    AND settlementdate = (
+                        SELECT MAX(settlementdate)
+                        FROM read_parquet(?)
+                        WHERE settlementdate <= ?
+                    )
+                """
+
+                rooftop_result = self.query_manager.conn.execute(
+                    rooftop_query,
+                    [rooftop_path, start_date, end_date, rooftop_path, end_date]
+                ).fetchone()
+
+                if rooftop_result and rooftop_result[0]:
+                    rooftop_mw = float(rooftop_result[0])
+                    logger.info(f"Rooftop solar: {rooftop_mw:.0f}MW")
+                else:
+                    # Fallback: try last hour of rooftop data
+                    rooftop_result = self.query_manager.conn.execute(
+                        rooftop_query,
+                        [rooftop_path, end_date - timedelta(hours=1), end_date, rooftop_path, end_date]
+                    ).fetchone()
+                    if rooftop_result and rooftop_result[0]:
+                        rooftop_mw = float(rooftop_result[0])
+                        logger.info(f"Rooftop solar (fallback): {rooftop_mw:.0f}MW")
+            except Exception as e:
+                logger.warning(f"Could not get rooftop solar data: {e}")
+
+            # Add rooftop to both renewable and total
+            renewable_mw += rooftop_mw
+            total_mw += rooftop_mw
+
             renewable_pct = (renewable_mw / total_mw * 100) if total_mw > 0 else 0
-            
+
             logger.info(f"Renewable: {renewable_mw:.0f}MW / {total_mw:.0f}MW = {renewable_pct:.1f}%")
-            
+
             return {
                 'renewable_mw': renewable_mw,
                 'total_mw': total_mw,
                 'renewable_pct': renewable_pct
             }
-            
+
         except Exception as e:
             logger.error(f"Error getting renewable data: {e}")
             return {'renewable_mw': 0, 'total_mw': 0, 'renewable_pct': 0}

@@ -28,6 +28,7 @@ from ..shared.email_alerts import EmailAlertManager
 from ..analysis.price_analysis_ui import create_price_analysis_tab
 from ..station.station_analysis_ui import create_station_analysis_tab
 from ..nem_dash.nem_dash_tab import create_nem_dash_tab_with_updates
+from ..curtailment import create_curtailment_tab
 from .generation_query_manager import GenerationQueryManager
 
 # Set up logging
@@ -2726,6 +2727,7 @@ class EnergyDashboard(param.Parameterized):
                 ("Pivot table", pn.pane.HTML(loading_html)),  # Lazy
                 ("Station Analysis", pn.pane.HTML(loading_html)),  # Lazy
                 ("Trends", pn.pane.HTML(loading_html)),  # Lazy
+                ("Curtailment", pn.pane.HTML(loading_html)),  # Lazy - NEW
                 ("Batteries", pn.pane.HTML(loading_html)),  # Lazy
                 dynamic=True,
                 closable=False,
@@ -2745,7 +2747,8 @@ class EnergyDashboard(param.Parameterized):
                 3: self._create_price_analysis_tab,  # Shifted from 2 to 3
                 4: self._create_station_analysis_tab,  # Shifted from 3 to 4
                 5: self._create_trends_tab,  # Shifted from 4 to 5
-                6: self._create_batteries_tab  # Renamed from insights
+                6: self._create_curtailment_tab,  # NEW
+                7: self._create_batteries_tab  # Renamed from insights, shifted to 7
             }
             
             # Watch for tab changes
@@ -4847,6 +4850,21 @@ class EnergyDashboard(param.Parameterized):
                 sizing_mode='stretch_width'
             )
     
+    def _create_curtailment_tab(self):
+        """Create curtailment tab"""
+        try:
+            logger.info("Creating curtailment tab...")
+            curtailment_tab = create_curtailment_tab()
+            logger.info("Curtailment tab created successfully")
+            return curtailment_tab
+        except Exception as e:
+            logger.error(f"Error creating curtailment tab: {e}")
+            return pn.Column(
+                pn.pane.Markdown("# Curtailment"),
+                pn.pane.Markdown(f"**Error loading tab:** {e}"),
+                sizing_mode='stretch_width'
+            )
+
     def _create_batteries_tab(self):
         """Create batteries tab"""
         try:
