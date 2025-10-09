@@ -8,12 +8,17 @@ def create_spot_display_lightweight(query_manager):
     """Create lightweight spot price display"""
     try:
         # Load only last 2 hours of data for initial display
+        # Note: 2-hour window accounts for QLD/NSW timezone offset during DST
         end_time = datetime.now()
         start_time = end_time - timedelta(hours=2)
-        
+
         # Get price data via query manager (fast DuckDB query)
         price_data = query_manager.get_price_history(hours=2)
-        
+
+        if price_data.empty:
+            # Fallback: Try 4-hour window if 2-hour window returns no data
+            price_data = query_manager.get_price_history(hours=4)
+
         if price_data.empty:
             return pn.pane.Markdown("No recent price data available")
         

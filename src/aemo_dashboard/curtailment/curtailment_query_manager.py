@@ -357,7 +357,8 @@ class CurtailmentQueryManager:
             cache_key = f"{view}_{start_date}_{end_date}_{region}_{fuel}_{duid}"
             if cache_key in self.cache:
                 cache_time = self.cache_timestamps.get(cache_key, 0)
-                if (datetime.now() - datetime.fromtimestamp(cache_time)).seconds < self.cache_ttl:
+                # Fix: Use total_seconds() instead of .seconds to get full duration
+                if (datetime.now() - datetime.fromtimestamp(cache_time)).total_seconds() < self.cache_ttl:
                     logger.debug(f"Cache hit for {cache_key}")
                     return self.cache[cache_key].copy()
 

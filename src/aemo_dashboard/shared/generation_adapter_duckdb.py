@@ -76,11 +76,13 @@ def load_generation_data(
                 # Convert pd.Timestamp to datetime if needed
                 if hasattr(end_date, 'to_pydatetime'):
                     end_date = end_date.to_pydatetime()
-                # Always use end of day for consistency
-                end_date = datetime.combine(end_date.date(), datetime.max.time())
+                # Add 1-day buffer to handle QLD/NSW timezone offset at day boundaries
+                # During DST, NSW midnight is before QLD midnight, so add buffer to ensure all data captured
+                end_date = datetime.combine(end_date.date() + timedelta(days=1), datetime.max.time())
             else:
-                # Use end of current day, not current time
-                end_date = datetime.combine(datetime.now().date(), datetime.max.time())
+                # Add 1-day buffer to handle QLD/NSW timezone offset at day boundaries
+                # During DST, NSW midnight is before QLD midnight, so add buffer to ensure all data captured
+                end_date = datetime.combine(datetime.now().date() + timedelta(days=1), datetime.max.time())
         
         # Determine optimal resolution
         if resolution == 'auto':

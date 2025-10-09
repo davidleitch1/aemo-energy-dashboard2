@@ -44,9 +44,10 @@ class NEMDashQueryManager:
             DataFrame with columns: REGIONID, RRP, SETTLEMENTDATE
         """
         try:
-            # Get last hour of data to ensure we have the latest prices
+            # Get last 2 hours of data to account for QLD/NSW timezone offset during DST
+            # AEMO data timestamps are in QLD time (no DST), system may be NSW time (+1hr during DST)
             end_date = datetime.now()
-            start_date = end_date - timedelta(hours=1)
+            start_date = end_date - timedelta(hours=2)
             
             # Use price adapter function which handles DuckDB when enabled
             prices = adapter_selector.load_price_data(
@@ -58,10 +59,13 @@ class NEMDashQueryManager:
             if prices.empty:
                 logger.warning("No price data available")
                 return pd.DataFrame()
-            
+
+            # Reset index to access SETTLEMENTDATE as a column (adapter returns it as index)
+            prices_reset = prices.reset_index()
+
             # Get the most recent price for each region
-            latest_prices = prices.groupby('REGIONID').last()
-            latest_prices['SETTLEMENTDATE'] = prices.groupby('REGIONID')['SETTLEMENTDATE'].last()
+            latest_prices = prices_reset.groupby('REGIONID').last()
+            latest_prices['SETTLEMENTDATE'] = prices_reset.groupby('REGIONID')['SETTLEMENTDATE'].last()
             
             logger.info(f"Loaded current prices for {len(latest_prices)} regions")
             
@@ -96,9 +100,12 @@ class NEMDashQueryManager:
             if prices.empty:
                 logger.warning("No price history available")
                 return pd.DataFrame()
-            
+
+            # Reset index to access SETTLEMENTDATE as a column (adapter returns it as index)
+            prices_reset = prices.reset_index()
+
             # Pivot to match expected format
-            price_pivot = prices.pivot(
+            price_pivot = prices_reset.pivot(
                 index='SETTLEMENTDATE',
                 columns='REGIONID',
                 values='RRP'
@@ -167,9 +174,10 @@ class NEMDashQueryManager:
             Dictionary with renewable and total generation
         """
         try:
-            # Get last 5 minutes of data
+            # Get last 2 hours of data to account for QLD/NSW timezone offset during DST
+            # AEMO data timestamps are in QLD time (no DST), system may be NSW time (+1hr during DST)
             end_date = datetime.now()
-            start_date = end_date - timedelta(minutes=5)
+            start_date = end_date - timedelta(hours=2)
 
             # Query generation by fuel
             generation_data = self.generation_manager.query_generation_by_fuel(
@@ -180,8 +188,8 @@ class NEMDashQueryManager:
             )
 
             if generation_data.empty:
-                # Try last hour as fallback
-                start_date = end_date - timedelta(hours=1)
+                # Fallback: Try last 4 hours if initial query fails
+                start_date = end_date - timedelta(hours=4)
                 generation_data = self.generation_manager.query_generation_by_fuel(
                     start_date=start_date,
                     end_date=end_date,

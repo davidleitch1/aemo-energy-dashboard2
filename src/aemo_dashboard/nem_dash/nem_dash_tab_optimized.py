@@ -115,17 +115,23 @@ def create_generation_overview_minimal(dashboard_instance=None):
         from ..shared import adapter_selector
         
         # Load only last 2 hours of data initially
+        # Note: 2-hour window accounts for QLD/NSW timezone offset during DST
         end_date = datetime.now()
         start_date = end_date - timedelta(hours=2)
-        
+
         # Use query manager if available
         if dashboard_instance and hasattr(dashboard_instance, 'query_manager'):
             from .nem_dash_query_manager import NEMDashQueryManager
             query_manager = NEMDashQueryManager()
-            
+
             # Get minimal generation data
             gen_data = query_manager.get_generation_overview(hours=2)
-            
+
+            if gen_data.empty:
+                # Fallback: Try 4-hour window if 2-hour window returns no data
+                logger.warning("No data in 2hr window, trying 4hr fallback")
+                gen_data = query_manager.get_generation_overview(hours=4)
+
             if gen_data.empty:
                 return pn.pane.HTML(
                     '<div style="text-align:center; padding:50px;">'

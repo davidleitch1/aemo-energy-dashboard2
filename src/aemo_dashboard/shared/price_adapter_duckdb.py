@@ -74,8 +74,9 @@ def load_price_data(
                     end_date = date_ranges['prices']['end']
                     if hasattr(end_date, 'to_pydatetime'):
                         end_date = end_date.to_pydatetime()
-                    # Always use end of day for consistency
-                    end_date = datetime.combine(end_date.date(), datetime.max.time())
+                    # Add 1-day buffer to handle QLD/NSW timezone offset at day boundaries
+                    # During DST, NSW midnight is before QLD midnight, so add buffer to ensure all data captured
+                    end_date = datetime.combine(end_date.date() + timedelta(days=1), datetime.max.time())
                     logger.info(f"Using DuckDB end date: {end_date}")
             else:
                 # Fallback defaults - use proper day boundaries
@@ -83,8 +84,9 @@ def load_price_data(
                 if start_date is None:
                     start_date = datetime(2020, 1, 1, 0, 0, 0)  # Start of day
                 if end_date is None:
-                    # Use end of current day, not current time
-                    end_date = datetime.combine(datetime.now().date(), datetime.max.time())
+                    # Add 1-day buffer to handle QLD/NSW timezone offset at day boundaries
+                    # During DST, NSW midnight is before QLD midnight, so add buffer to ensure all data captured
+                    end_date = datetime.combine(datetime.now().date() + timedelta(days=1), datetime.max.time())
                 logger.info(f"Fallback dates - start: {start_date}, end: {end_date}")
         
         # Log the date range that will be queried
