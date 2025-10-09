@@ -223,7 +223,7 @@ class NEMDashQueryManager:
                 # Query rooftop solar directly from rooftop_30min table
                 # Note: rooftop data has 'power' column, not 'value', and is split by regionid
                 import os
-                data_dir = os.environ.get('AEMO_DATA_DIR', '/Volumes/davidleitch/aemo_production/data')
+                data_dir = os.environ.get('DATA_DIR', os.environ.get('AEMO_DATA_PATH', '/Users/davidleitch/aemo_production/data'))
                 rooftop_path = os.path.join(data_dir, "rooftop30.parquet")
 
                 rooftop_query = """
