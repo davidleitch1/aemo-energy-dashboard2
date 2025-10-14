@@ -263,7 +263,7 @@ class EnergyDashboard(param.Parameterized):
     
     time_range = param.Selector(
         default='1',
-        objects=['1', '7', '30', 'All'],
+        objects=['1', '7', '30', '90', '365', 'All'],
         doc="Select time range to display"
     )
     
@@ -305,6 +305,8 @@ class EnergyDashboard(param.Parameterized):
         self.plot_pane = None
         self.utilization_pane = None
         self.transmission_pane = None
+        self.generation_tod_pane = None
+        self.summary_table_pane = None  # Add summary table pane
         self.main_content = None
         self.header_section = None
         # Track unknown DUIDs for session reporting
@@ -344,11 +346,30 @@ class EnergyDashboard(param.Parameterized):
                 margin=(5, 5),
                 linked_axes=False  # Prevent UFuncTypeError when switching tabs
             )
-            
+
+            # Create generation TOD plot
+            tod_plot = self.create_generation_tod_plot()
+            self.generation_tod_pane = pn.pane.HoloViews(
+                tod_plot,
+                sizing_mode='stretch_width',
+                height=700,
+                margin=(5, 5),
+                linked_axes=False
+            )
+
+            # Create summary table pane
+            summary_table = self.create_generation_summary_table()
+            self.summary_table_pane = pn.Column(
+                summary_table,
+                sizing_mode='stretch_width',
+                margin=(10, 5)
+            )
+
             # Set initial visibility
             self.plot_pane.visible = True
             self.utilization_pane.visible = True
             self.transmission_pane.visible = True
+            self.generation_tod_pane.visible = True
             
         except Exception as e:
             logger.error(f"Error initializing panes: {e}")
@@ -356,6 +377,7 @@ class EnergyDashboard(param.Parameterized):
             self.plot_pane = pn.pane.HTML("Loading generation chart...", height=600)
             self.utilization_pane = pn.pane.HTML("Loading utilization chart...", height=500)
             self.transmission_pane = pn.pane.HTML("Loading transmission chart...", height=400)
+            self.generation_tod_pane = pn.pane.HTML("Loading time of day chart...", height=700)
         
     def load_reference_data(self):
         """Load DUID to fuel/region mapping from gen_info.pkl"""
@@ -1169,9 +1191,362 @@ class EnergyDashboard(param.Parameterized):
         
         # Reorder the dataframe
         pivot_df = pivot_df[final_order]
-        
+
         return pivot_df
-    
+
+    def calculate_generation_summary(self, data_df):
+        """
+        Calculate generation totals and percentages by fuel type from processed data.
+
+        Args:
+            data_df: DataFrame with datetime index and fuel types as columns (MW values)
+
+        Returns:
+            DataFrame with columns: fuel_type, total_gwh, percentage
+        """
+        if data_df.empty:
+            return pd.DataFrame(columns=['fuel_type', 'total_gwh', 'percentage'])
+
+        # Exclude storage and transmission from total generation
+        # These columns should not be counted as actual generation
+        excluded_columns = ['Battery Storage', 'Transmission Flow', 'Transmission Exports']
+
+        # Filter to only actual generation fuel types
+        generation_cols = [col for col in data_df.columns if col not in excluded_columns]
+
+        # Calculate totals for each fuel type
+        # Data is in MW at 5-minute intervals
+        # To convert to GWh: (MW * hours) / 1000
+        # 5 minutes = 5/60 hours = 0.08333 hours
+        interval_hours = 5 / 60
+
+        totals = {}
+        for fuel in generation_cols:
+            # Sum MW over all intervals and convert to GWh
+            total_mwh = data_df[fuel].sum() * interval_hours
+            total_gwh = total_mwh / 1000
+            totals[fuel] = total_gwh
+
+        # Calculate total generation (excludes storage and transmission)
+        total_generation_gwh = sum(totals.values())
+
+        # Create summary DataFrame
+        summary_data = []
+        for fuel, gwh in totals.items():
+            percentage = (gwh / total_generation_gwh * 100) if total_generation_gwh > 0 else 0
+            summary_data.append({
+                'fuel_type': fuel,
+                'total_gwh': gwh,
+                'percentage': percentage
+            })
+
+        summary_df = pd.DataFrame(summary_data)
+
+        # Sort by total_gwh descending
+        summary_df = summary_df.sort_values('total_gwh', ascending=False)
+
+        logger.info(f"Generation summary calculated: {len(summary_df)} fuel types, {total_generation_gwh:.1f} GWh total")
+
+        return summary_df
+
+    def calculate_pcp_date_range(self):
+        """
+        Calculate the Previous Corresponding Period (PCP) date range.
+        PCP is the same date range shifted back exactly 12 months (365 days).
+
+        Returns:
+            Tuple of (pcp_start_date, pcp_end_date) as datetime objects, or (None, None) if:
+            - Custom range is >= 365 days (would overlap with current period)
+            - Time range is 'All' (no meaningful PCP)
+        """
+        # Don't show PCP for 'All' data
+        if self.time_range == 'All':
+            logger.info("PCP not available for 'All' time range")
+            return None, None
+
+        # Get current period dates
+        start_datetime, end_datetime = self._get_effective_date_range()
+
+        # Calculate the duration of the selected period
+        period_duration = end_datetime - start_datetime
+
+        # If custom range >= 365 days, don't show PCP (would overlap)
+        if period_duration.days >= 365:
+            logger.info(f"PCP not shown: period duration ({period_duration.days} days) >= 365 days")
+            return None, None
+
+        # Calculate PCP dates (exactly 365 days prior)
+        pcp_start = start_datetime - timedelta(days=365)
+        pcp_end = end_datetime - timedelta(days=365)
+
+        logger.info(f"PCP date range: {pcp_start.date()} to {pcp_end.date()}")
+
+        return pcp_start, pcp_end
+
+    def get_pcp_generation_data(self):
+        """
+        Query and process generation data for the Previous Corresponding Period (PCP).
+
+        Returns:
+            DataFrame with same structure as process_data_for_region() but for PCP dates,
+            or empty DataFrame if PCP is not available
+        """
+        # Get PCP date range
+        pcp_start, pcp_end = self.calculate_pcp_date_range()
+
+        if pcp_start is None or pcp_end is None:
+            return pd.DataFrame()
+
+        try:
+            # Calculate days span to determine loading strategy (same logic as load_generation_data)
+            days_span = (pcp_end - pcp_start).total_seconds() / (24 * 3600)
+
+            # Query PCP generation data
+            if days_span > 30:
+                # Use pre-aggregated data
+                logger.info(f"Querying PCP pre-aggregated data for {days_span:.0f} day range")
+                df = self.query_manager.query_generation_by_fuel(
+                    start_date=pcp_start,
+                    end_date=pcp_end,
+                    region=self.region if self.region != 'NEM' else 'NEM'
+                )
+
+                if df.empty:
+                    logger.warning("No PCP generation data available")
+                    return pd.DataFrame()
+
+                # Ensure datetime index
+                df['settlementdate'] = pd.to_datetime(df['settlementdate'])
+
+                # Pivot to get fuel types as columns
+                pcp_df = df.pivot(
+                    index='settlementdate',
+                    columns='fuel_type',
+                    values='total_generation_mw'
+                ).fillna(0)
+
+            else:
+                # Use raw DUID data
+                logger.info(f"Querying PCP raw data for {days_span:.0f} day range")
+                from ..shared.adapter_selector import load_generation_data
+
+                df = load_generation_data(
+                    start_date=pcp_start,
+                    end_date=pcp_end,
+                    resolution='auto'
+                )
+
+                if df.empty:
+                    logger.warning("No PCP generation data available")
+                    return pd.DataFrame()
+
+                # Add fuel and region information
+                df['fuel'] = df['duid'].map(self.duid_to_fuel)
+                df['region'] = df['duid'].map(self.duid_to_region)
+                df = df.dropna(subset=['fuel', 'region'])
+
+                # Filter by region
+                if self.region != 'NEM':
+                    df = df[df['region'] == self.region]
+
+                # Group by time and fuel type
+                df['settlementdate'] = pd.to_datetime(df['settlementdate'])
+                result = df.groupby([
+                    pd.Grouper(key='settlementdate', freq='5min'),
+                    'fuel'
+                ])['scadavalue'].sum().reset_index()
+
+                # Pivot to get fuel types as columns
+                pcp_df = result.pivot(index='settlementdate', columns='fuel', values='scadavalue')
+                pcp_df = pcp_df.fillna(0)
+
+            # Add rooftop solar if available (same logic as process_data_for_region)
+            try:
+                from ..shared.rooftop_adapter import load_rooftop_data
+                rooftop_df = load_rooftop_data(
+                    start_date=pcp_start,
+                    end_date=pcp_end
+                )
+
+                if not rooftop_df.empty:
+                    rooftop_df['settlementdate'] = pd.to_datetime(rooftop_df['settlementdate'])
+                    rooftop_df.set_index('settlementdate', inplace=True)
+
+                    if self.region == 'NEM':
+                        main_regions = ['NSW1', 'QLD1', 'SA1', 'TAS1', 'VIC1']
+                        available_regions = [r for r in main_regions if r in rooftop_df.columns]
+                        if available_regions:
+                            total_rooftop = rooftop_df[available_regions].sum(axis=1)
+                            pcp_df['Rooftop Solar'] = total_rooftop.reindex(pcp_df.index).fillna(0)
+                    elif self.region.endswith('1') and self.region in rooftop_df.columns:
+                        pcp_df['Rooftop Solar'] = rooftop_df[self.region].reindex(pcp_df.index).fillna(0)
+
+                    logger.info(f"Added PCP rooftop solar data")
+            except Exception as e:
+                logger.warning(f"Could not load PCP rooftop solar: {e}")
+
+            logger.info(f"Loaded PCP generation data: {pcp_df.shape}")
+            return pcp_df
+
+        except Exception as e:
+            logger.error(f"Error loading PCP generation data: {e}")
+            return pd.DataFrame()
+
+    def create_generation_summary_table(self):
+        """
+        Create a table showing generation totals and percentages by fuel type,
+        comparing current period with Previous Corresponding Period (PCP).
+
+        Returns:
+            Panel Tabulator widget with the summary table
+        """
+        try:
+            # Get current period data
+            current_data = self.process_data_for_region()
+            if current_data.empty:
+                return pn.pane.Markdown("*No generation data available for selected period*")
+
+            # Calculate current period summary
+            current_summary = self.calculate_generation_summary(current_data)
+            if current_summary.empty:
+                return pn.pane.Markdown("*Unable to calculate generation summary*")
+
+            # Get PCP data if available
+            pcp_data = self.get_pcp_generation_data()
+            show_pcp = not pcp_data.empty
+
+            if show_pcp:
+                # Calculate PCP summary
+                pcp_summary = self.calculate_generation_summary(pcp_data)
+
+                # Merge current and PCP summaries
+                merged = current_summary.merge(
+                    pcp_summary,
+                    on='fuel_type',
+                    how='outer',
+                    suffixes=('_current', '_pcp')
+                ).fillna(0)
+
+                # Calculate change (absolute difference in GWh)
+                merged['change_gwh'] = merged['total_gwh_current'] - merged['total_gwh_pcp']
+                merged['change_pct_points'] = merged['percentage_current'] - merged['percentage_pcp']
+
+                # Sort by current generation descending (most important first)
+                merged = merged.sort_values('total_gwh_current', ascending=False)
+
+                # Calculate totals for summary row
+                total_current_gwh = merged['total_gwh_current'].sum()
+                total_pcp_gwh = merged['total_gwh_pcp'].sum()
+                total_change_gwh = total_current_gwh - total_pcp_gwh
+
+                # Format the table data (0 decimal places)
+                table_data = []
+                for _, row in merged.iterrows():
+                    table_data.append({
+                        'Fuel Type': row['fuel_type'],
+                        'Current (GWh)': int(round(row['total_gwh_current'])),
+                        'Current %': int(round(row['percentage_current'])),
+                        'PCP (GWh)': int(round(row['total_gwh_pcp'])),
+                        'PCP %': int(round(row['percentage_pcp'])),
+                        'Change (GWh)': int(round(row['change_gwh'])),
+                        'Change (% pts)': int(round(row['change_pct_points']))
+                    })
+
+                # Add totals row
+                table_data.append({
+                    'Fuel Type': 'TOTAL',
+                    'Current (GWh)': int(round(total_current_gwh)),
+                    'Current %': 100,
+                    'PCP (GWh)': int(round(total_pcp_gwh)),
+                    'PCP %': 100,
+                    'Change (GWh)': int(round(total_change_gwh)),
+                    'Change (% pts)': 0
+                })
+
+            else:
+                # No PCP data - show current period only
+                # Sort by total generation descending
+                current_summary = current_summary.sort_values('total_gwh', ascending=False)
+
+                # Calculate total
+                total_gwh = current_summary['total_gwh'].sum()
+
+                table_data = []
+                for _, row in current_summary.iterrows():
+                    table_data.append({
+                        'Fuel Type': row['fuel_type'],
+                        'Total (GWh)': int(round(row['total_gwh'])),
+                        'Percentage': int(round(row['percentage']))
+                    })
+
+                # Add totals row
+                table_data.append({
+                    'Fuel Type': 'TOTAL',
+                    'Total (GWh)': int(round(total_gwh)),
+                    'Percentage': 100
+                })
+
+            # Create Tabulator widget with right-aligned numeric columns
+            table_df = pd.DataFrame(table_data)
+
+            # Configure column alignment - numeric columns right-aligned
+            if show_pcp:
+                formatters = {
+                    'Fuel Type': {'type': 'plaintext'},
+                    'Current (GWh)': {'type': 'money', 'decimal': '', 'thousand': ',', 'symbol': '', 'precision': 0},
+                    'Current %': {'type': 'money', 'decimal': '', 'thousand': ',', 'symbol': '', 'precision': 0},
+                    'PCP (GWh)': {'type': 'money', 'decimal': '', 'thousand': ',', 'symbol': '', 'precision': 0},
+                    'PCP %': {'type': 'money', 'decimal': '', 'thousand': ',', 'symbol': '', 'precision': 0},
+                    'Change (GWh)': {'type': 'money', 'decimal': '', 'thousand': ',', 'symbol': '', 'precision': 0},
+                    'Change (% pts)': {'type': 'money', 'decimal': '', 'thousand': ',', 'symbol': '', 'precision': 0}
+                }
+            else:
+                formatters = {
+                    'Fuel Type': {'type': 'plaintext'},
+                    'Total (GWh)': {'type': 'money', 'decimal': '', 'thousand': ',', 'symbol': '', 'precision': 0},
+                    'Percentage': {'type': 'money', 'decimal': '', 'thousand': ',', 'symbol': '', 'precision': 0}
+                }
+
+            table = pn.widgets.Tabulator(
+                table_df,
+                layout='fit_data_table',
+                sizing_mode='stretch_width',
+                theme='midnight',
+                show_index=False,
+                disabled=True,  # Read-only
+                formatters=formatters,
+                configuration={
+                    'columnDefaults': {
+                        'headerSort': False  # Disable sorting to preserve descending order
+                    }
+                }
+            )
+
+            # Get date range display for title
+            time_range_display = self._get_time_range_display()
+            region_display = self.region
+
+            if show_pcp:
+                pcp_start, pcp_end = self.calculate_pcp_date_range()
+                pcp_display = f"{pcp_start.strftime('%Y-%m-%d')} to {pcp_end.strftime('%Y-%m-%d')}"
+                title = pn.pane.Markdown(
+                    f"### Generation Summary: {region_display} - {time_range_display} vs PCP ({pcp_display})\n"
+                    f"*Data: AEMO*"
+                )
+            else:
+                title = pn.pane.Markdown(
+                    f"### Generation Summary: {region_display} - {time_range_display}\n"
+                    f"*Data: AEMO*"
+                )
+
+            return pn.Column(title, table, sizing_mode='stretch_width')
+
+        except Exception as e:
+            logger.error(f"Error creating generation summary table: {e}")
+            import traceback
+            traceback.print_exc()
+            return pn.pane.Markdown(f"**Error creating summary table:** {e}")
+
     def calculate_capacity_utilization(self):
         """Calculate capacity utilization by fuel type for selected region"""
         # Check if we can use pre-computed capacity utilization from DuckDB
@@ -1999,7 +2374,222 @@ class EnergyDashboard(param.Parameterized):
                 fontsize=12
             )
 
-    
+    def create_generation_tod_plot(self):
+        """Create time-of-day generation profile with average price overlay"""
+        try:
+            # Load fresh data - following same pattern as create_plot()
+            self.load_generation_data()
+            data = self.process_data_for_region()
+
+            if data.empty:
+                return hv.Text(0.5, 0.5, 'No generation data available').opts(
+                    xlim=(0, 1), ylim=(0, 1), bgcolor='black',
+                    width=1200, height=600, color='white', fontsize=14
+                )
+
+            # Prepare data for time-of-day analysis
+            # data already has datetime index and fuel types as columns
+            df = data.copy()
+
+            # Extract hour (0-23) from the datetime index
+            df['hour'] = df.index.hour
+
+            # Group by hour and calculate mean for each fuel type
+            # This gives us the average generation profile by hour of day
+            hourly_avg = df.groupby('hour').mean()
+
+            # Drop the 'hour' column if it was included in the groupby
+            if 'hour' in hourly_avg.columns:
+                hourly_avg = hourly_avg.drop(columns=['hour'])
+
+            # Get fuel colors for consistent styling
+            fuel_colors = self.get_fuel_colors()
+
+            # Get all fuel types that have data
+            all_fuels = [col for col in hourly_avg.columns if hourly_avg[col].abs().max() > 0]
+
+            # Identify which fuels can have negative values
+            battery_col = 'Battery Storage'
+            transmission_exports_col = 'Transmission Exports'
+            has_battery = battery_col in hourly_avg.columns
+            has_transmission_exports = transmission_exports_col in hourly_avg.columns
+
+            # Check if we have negative values in the hourly averages
+            has_negative_values = (
+                (has_battery and (hourly_avg[battery_col] < 0).any()) or
+                (has_transmission_exports and (hourly_avg[transmission_exports_col] < 0).any())
+            )
+
+            plot_elements = []
+
+            # Prepare data for main positive stack (exclude transmission exports from main plot)
+            positive_fuels = [f for f in all_fuels if f != transmission_exports_col]
+            hourly_positive = hourly_avg[positive_fuels].copy()
+
+            # Handle battery storage negative values - only positive values in main plot
+            if has_battery and battery_col in positive_fuels:
+                battery_data = hourly_avg[battery_col].copy()
+                hourly_positive[battery_col] = battery_data.where(battery_data >= 0, 0)
+
+            # Create the main stacked area plot (positive values only)
+            if positive_fuels:
+                # Get time period for title
+                time_period = self._get_time_range_display()
+
+                area_plot = hourly_positive.hvplot.area(
+                    x='hour',
+                    y=positive_fuels,
+                    stacked=True,
+                    width=1200,
+                    height=400,
+                    ylabel='Average Generation (MW)',
+                    xlabel='Hour of Day',
+                    grid=True,
+                    legend='right',
+                    bgcolor='black',
+                    color=[fuel_colors.get(fuel, '#6272a4') for fuel in positive_fuels],
+                    alpha=0.8,
+                    hover=True,
+                    title=f'Average Generation by Time of Day - {self.region} ({time_period}) | data:AEMO, design ITK'
+                ).opts(
+                    xlim=(0, 23),
+                    xticks=list(range(0, 24, 2))
+                )
+
+                # Create negative values overlay if needed (battery charging, transmission exports)
+                if has_negative_values:
+                    negative_plots = []
+
+                    # Add transmission exports negative values first (bottom layer)
+                    if has_transmission_exports and (hourly_avg[transmission_exports_col] < 0).any():
+                        transmission_negative = hourly_avg[[transmission_exports_col]].copy()
+                        transmission_negative[transmission_exports_col] = transmission_negative[transmission_exports_col].where(
+                            transmission_negative[transmission_exports_col] < 0, 0
+                        )
+
+                        transmission_plot = transmission_negative.hvplot.area(
+                            x='hour',
+                            y=transmission_exports_col,
+                            stacked=False,
+                            width=1200,
+                            height=400,
+                            color='#ffb6c1',  # Light pink - same as Generation Stack
+                            alpha=0.8,
+                            hover=True,
+                            legend=False
+                        ).opts(
+                            xlim=(0, 23),
+                            xticks=list(range(0, 24, 2))
+                        )
+                        negative_plots.append(transmission_plot)
+
+                    # Add battery negative values second (top layer)
+                    if has_battery and (hourly_avg[battery_col] < 0).any():
+                        battery_negative = hourly_avg[[battery_col]].copy()
+                        battery_negative[battery_col] = battery_negative[battery_col].where(
+                            battery_negative[battery_col] < 0, 0
+                        )
+
+                        battery_plot = battery_negative.hvplot.area(
+                            x='hour',
+                            y=battery_col,
+                            stacked=False,
+                            width=1200,
+                            height=400,
+                            color='#9370db',  # Purple - same as Generation Stack
+                            alpha=0.8,
+                            hover=True,
+                            legend=False
+                        ).opts(
+                            xlim=(0, 23),
+                            xticks=list(range(0, 24, 2))
+                        )
+                        negative_plots.append(battery_plot)
+
+                    # Overlay negative plots on main plot
+                    if negative_plots:
+                        combined_area_plot = area_plot
+                        for neg_plot in negative_plots:
+                            combined_area_plot = combined_area_plot * neg_plot
+                        plot_elements.append(combined_area_plot)
+                    else:
+                        plot_elements.append(area_plot)
+                else:
+                    plot_elements.append(area_plot)
+
+            # Load and process price data
+            try:
+                # Get the same date range as the generation data
+                start_datetime, end_datetime = self._get_effective_date_range()
+
+                price_file = config.spot_hist_file
+                if os.path.exists(price_file):
+                    price_df = pd.read_parquet(price_file)
+                    price_df['settlementdate'] = pd.to_datetime(price_df['settlementdate'])
+                    price_df = price_df.set_index('settlementdate')
+
+                    # Filter by date range to match generation data
+                    if start_datetime is not None and end_datetime is not None:
+                        price_df = price_df[(price_df.index >= start_datetime) & (price_df.index <= end_datetime)]
+                        logger.info(f"TOD price data filtered to {start_datetime.date()} - {end_datetime.date()}: {len(price_df)} records")
+
+                    # Filter by region
+                    if self.region != 'NEM':
+                        if 'regionid' in price_df.columns:
+                            price_df = price_df[price_df['regionid'] == self.region]
+
+                    if not price_df.empty and 'rrp' in price_df.columns:
+                        # Extract hour and calculate average price by hour
+                        price_df['hour'] = price_df.index.hour
+                        hourly_price = price_df.groupby('hour')['rrp'].mean()
+
+                        # Get time period for title
+                        time_period = self._get_time_range_display()
+
+                        # Create price line plot
+                        price_plot = hourly_price.hvplot.line(
+                            x='hour',
+                            y='rrp',
+                            width=1200,
+                            height=250,
+                            ylabel='Average Price ($/MWh)',
+                            xlabel='Hour of Day',
+                            grid=True,
+                            color='#ffff00',
+                            line_width=3,
+                            bgcolor='black',
+                            title=f'Average Spot Price by Time of Day - {self.region} ({time_period})'
+                        ).opts(
+                            xlim=(0, 23),
+                            xticks=list(range(0, 24, 2))
+                        )
+                        plot_elements.append(price_plot)
+
+            except Exception as e:
+                logger.warning(f"Could not load price data for TOD plot: {e}")
+
+            # Combine plots vertically
+            if len(plot_elements) > 1:
+                combined_plot = (plot_elements[0] + plot_elements[1]).cols(1)
+            elif len(plot_elements) == 1:
+                combined_plot = plot_elements[0]
+            else:
+                combined_plot = hv.Text(0.5, 0.5, 'No data available for TOD analysis').opts(
+                    xlim=(0, 1), ylim=(0, 1), bgcolor='black',
+                    width=1200, height=600, color='white', fontsize=14
+                )
+
+            return combined_plot
+
+        except Exception as e:
+            logger.error(f"Error creating TOD plot: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return hv.Text(0.5, 0.5, 'Error loading TOD data').opts(
+                xlim=(0, 1), ylim=(0, 1), bgcolor='black',
+                width=1200, height=600, color='white', fontsize=12
+            )
+
     def create_utilization_plot(self):
         """Create capacity utilization line chart with proper document handling"""
         try:
@@ -2083,16 +2673,26 @@ class EnergyDashboard(param.Parameterized):
             new_generation_plot = self.create_plot()
             new_utilization_plot = self.create_utilization_plot()
             new_transmission_plot = self.create_transmission_plot()
-            
+            new_tod_plot = self.create_generation_tod_plot()
+
             # Safely update the panes
             if self.plot_pane is not None:
                 self.plot_pane.object = new_generation_plot
-            
+
             if self.utilization_pane is not None:
                 self.utilization_pane.object = new_utilization_plot
-            
+
             if self.transmission_pane is not None:
                 self.transmission_pane.object = new_transmission_plot
+
+            if self.generation_tod_pane is not None:
+                self.generation_tod_pane.object = new_tod_plot
+
+            # Update summary table
+            if self.summary_table_pane is not None:
+                new_summary_table = self.create_generation_summary_table()
+                self.summary_table_pane.clear()
+                self.summary_table_pane.append(new_summary_table)
                 
                 # Post-render formatting: Access Bokeh figure after HoloViews renders it
                 try:
@@ -2140,7 +2740,7 @@ class EnergyDashboard(param.Parameterized):
                 
                 # FIX for midnight rollover bug: Refresh date ranges for preset time ranges
                 # This ensures the dashboard continues updating after midnight
-                if self.time_range in ['1', '7', '30']:
+                if self.time_range in ['1', '7', '30', '90', '365']:
                     # Store old date range
                     old_start_date = self.start_date
                     old_end_date = self.end_date
@@ -2191,6 +2791,7 @@ class EnergyDashboard(param.Parameterized):
                 'price_plot_pane',        # Price plot
                 'transmission_pane',      # Transmission plot
                 'utilization_pane',       # Utilization plot
+                'generation_tod_pane',    # Generation time of day plot
                 'bands_plot_pane',        # Price bands plot
                 'tod_plot_pane',          # Time of day plot
                 'renewable_gauge',        # Renewable gauge (if exists)
@@ -2278,19 +2879,23 @@ class EnergyDashboard(param.Parameterized):
     def _update_date_range_from_preset(self):
         """Update start_date and end_date based on time_range preset"""
         end_date = datetime.now().date()
-        
+
         if self.time_range == '1':
             start_date = end_date - timedelta(days=1)
         elif self.time_range == '7':
             start_date = end_date - timedelta(days=7)
         elif self.time_range == '30':
             start_date = end_date - timedelta(days=30)
+        elif self.time_range == '90':
+            start_date = end_date - timedelta(days=90)
+        elif self.time_range == '365':
+            start_date = end_date - timedelta(days=365)
         elif self.time_range == 'All':
             start_date = datetime(2020, 1, 1).date()  # Approximate earliest data
         else:
             # Keep current custom dates
             return
-        
+
         # Update the date parameters
         self.start_date = start_date
         self.end_date = end_date
@@ -2341,9 +2946,13 @@ class EnergyDashboard(param.Parameterized):
         if self.time_range == '1':
             return "Last 24 Hours"
         elif self.time_range == '7':
-            return "Last 7 Days"  
+            return "Last 7 Days"
         elif self.time_range == '30':
             return "Last 30 Days"
+        elif self.time_range == '90':
+            return "Last 90 Days"
+        elif self.time_range == '365':
+            return "Last 365 Days"
         elif self.time_range == 'All':
             return "All Available Data"
         else:
@@ -2609,16 +3218,16 @@ class EnergyDashboard(param.Parameterized):
             time_range_widget = pn.widgets.RadioBoxGroup(
                 name="",  # Empty name since we add label separately
                 value=self.time_range,
-                options=['1', '7', '30', 'All'],
+                options=['1', '7', '30', '90', '365', 'All'],
                 inline=True,  # Horizontal layout
-                width=200
+                width=350
             )
             time_range_widget.link(self, value='time_range')
             
             time_range_selector = pn.Column(
                 pn.pane.HTML("<div style='color: #aaa; font-size: 11px; margin-bottom: 4px;'>Days</div>"),
                 time_range_widget,
-                width=200,
+                width=350,
                 margin=(10, 0)
             )
             
@@ -2652,6 +3261,8 @@ class EnergyDashboard(param.Parameterized):
                 ("Generation Stack", pn.Column(
                     "#### Generation by Fuel Type + Price",
                     pn.Column(self.plot_pane, max_width=1250, sizing_mode='stretch_width'),
+                    pn.layout.Divider(),
+                    self.summary_table_pane,
                     sizing_mode='stretch_width'
                 )),
                 ("Capacity Utilization", pn.Column(
@@ -2662,6 +3273,11 @@ class EnergyDashboard(param.Parameterized):
                 ("Transmission Lines", pn.Column(
                     "#### Individual Transmission Line Flows",
                     pn.Column(self.transmission_pane, max_width=1250, sizing_mode='stretch_width'),
+                    sizing_mode='stretch_width'
+                )),
+                ("Generation TOD", pn.Column(
+                    "#### Average Generation by Time of Day",
+                    pn.Column(self.generation_tod_pane, max_width=1250, sizing_mode='stretch_width'),
                     sizing_mode='stretch_width'
                 )),
                 dynamic=True,
@@ -4288,7 +4904,58 @@ class EnergyDashboard(param.Parameterized):
                             periods_per_hour = 2
                         
                         total_hours = total_periods / periods_per_hour
-                        
+
+                        # Calculate actual average demand per region from generation data
+                        # This ensures revenue calculations reflect real regional demand patterns
+                        region_avg_demand = {}
+                        try:
+                            # Query generation data for the selected time period
+                            gen_data = self.query_manager.query_generation_by_fuel(
+                                start_date=start_datetime,
+                                end_date=end_datetime,
+                                regions=selected_regions,
+                                aggregation='raw'  # Get raw data to calculate accurate averages
+                            )
+
+                            if not gen_data.empty:
+                                # Sum all generation columns (MW) for each timestamp and region
+                                # Exclude transmission and storage columns
+                                excluded_cols = ['timestamp', 'region', 'Transmission Flow',
+                                               'Transmission Exports', 'Battery Storage']
+                                gen_cols = [col for col in gen_data.columns if col not in excluded_cols]
+
+                                # Calculate total generation per timestamp per region
+                                gen_data['Total_MW'] = gen_data[gen_cols].sum(axis=1)
+
+                                # Calculate average demand (MW) for each region
+                                for region in selected_regions:
+                                    region_data = gen_data[gen_data['region'] == region]
+                                    if not region_data.empty:
+                                        region_avg_demand[region] = region_data['Total_MW'].mean()
+                                        logger.info(f"Calculated average demand for {region}: {region_avg_demand[region]:.0f} MW")
+                                    else:
+                                        # Fallback to reasonable estimate if no data
+                                        region_avg_demand[region] = 1500
+                                        logger.warning(f"No generation data for {region}, using fallback 1500 MW")
+                            else:
+                                # If no generation data, use reasonable regional estimates
+                                logger.warning("No generation data available for demand calculation, using estimates")
+                                default_demands = {
+                                    'NSW1': 7500, 'QLD1': 6500, 'VIC1': 5500,
+                                    'SA1': 1500, 'TAS1': 1000
+                                }
+                                for region in selected_regions:
+                                    region_avg_demand[region] = default_demands.get(region, 1500)
+                        except Exception as e:
+                            logger.warning(f"Error calculating regional demand: {e}, using estimates")
+                            # Fallback to reasonable regional estimates
+                            default_demands = {
+                                'NSW1': 7500, 'QLD1': 6500, 'VIC1': 5500,
+                                'SA1': 1500, 'TAS1': 1000
+                            }
+                            for region in selected_regions:
+                                region_avg_demand[region] = default_demands.get(region, 1500)
+
                         for _, row in bands_df.iterrows():
                             # Include all price bands in the table
                             if True:  # Changed to include all bands including $0-$300
@@ -4298,10 +4965,10 @@ class EnergyDashboard(param.Parameterized):
                                 
                                 # Calculate revenue in this band
                                 # Revenue = Average Price ($/MWh) * Time in band (hours) * Average demand (MW)
-                                # Using approximate average demand of 1500 MW per region
+                                # Uses actual calculated demand from generation data for each region
                                 # This correctly handles both 5-min and 30-min data by converting periods to hours
                                 hours_in_band = (row['Percentage'] / 100) * total_hours
-                                avg_demand_mw = 1500  # Average regional demand in MW
+                                avg_demand_mw = region_avg_demand.get(row['Region'], 1500)  # Use calculated demand per region
                                 revenue_millions = (row['Band Average'] * hours_in_band * avg_demand_mw) / 1_000_000
                                 
                                 # Format revenue as $Xbn or $Xm
