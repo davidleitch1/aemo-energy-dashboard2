@@ -391,11 +391,46 @@ def update_records_with_alerts(stats, records, records_file):
     
     return records, alerts_sent
 
-def create_gauge_figure(current_value, all_time_record, hour_record):
-    """Create the Plotly gauge figure"""
+def create_gauge_figure(current_value, all_time_record, hour_record, water_pct=0, wind_pct=0, solar_pct=0, rooftop_pct=0):
+    """Create the Plotly gauge figure with stacked renewable sources
+
+    Args:
+        current_value: Total renewable percentage
+        all_time_record: All-time renewable record
+        hour_record: Current hour record
+        water_pct: Hydro/water percentage
+        wind_pct: Wind percentage
+        solar_pct: Utility solar percentage
+        rooftop_pct: Rooftop solar percentage
+    """
     fig = go.Figure()
-    
-    # Main gauge
+
+    # Calculate cumulative percentages for stacking (bottom to top: hydro, wind, solar, rooftop)
+    cumulative_water = water_pct
+    cumulative_wind = cumulative_water + wind_pct
+    cumulative_solar = cumulative_wind + solar_pct
+    cumulative_total = cumulative_solar + rooftop_pct
+
+    # Create colored steps for each renewable source (stacked from bottom)
+    steps = []
+
+    # Hydro/Water (bottom layer) - cyan/blue
+    if water_pct > 0:
+        steps.append({'range': [0, cumulative_water], 'color': "#8be9fd", 'name': 'Hydro'})
+
+    # Wind (second layer) - green
+    if wind_pct > 0:
+        steps.append({'range': [cumulative_water, cumulative_wind], 'color': "#50fa7b", 'name': 'Wind'})
+
+    # Solar (third layer) - yellow
+    if solar_pct > 0:
+        steps.append({'range': [cumulative_wind, cumulative_solar], 'color': "#f1fa8c", 'name': 'Solar'})
+
+    # Rooftop (top layer) - orange
+    if rooftop_pct > 0:
+        steps.append({'range': [cumulative_solar, cumulative_total], 'color': "#ffb86c", 'name': 'Rooftop'})
+
+    # Main gauge with stacked colors
     fig.add_trace(go.Indicator(
         mode="gauge+number",
         value=current_value,
@@ -412,11 +447,11 @@ def create_gauge_figure(current_value, all_time_record, hour_record):
                 'tickcolor': "white",
                 'tickfont': {'color': "white"}
             },
-            'bar': {'color': "#50fa7b", 'thickness': 0.6, 'line': {'color': "#50fa7b", 'width': 4}},
+            'bar': {'color': "rgba(0,0,0,0)", 'thickness': 0},  # Invisible bar, we use steps instead
             'bgcolor': "#44475a",
             'borderwidth': 2,
             'bordercolor': "#6272a4",
-            'steps': [],
+            'steps': steps,
             'threshold': {
                 'line': {'color': "gold", 'width': 4},
                 'thickness': 0.75,
@@ -443,50 +478,99 @@ def create_gauge_figure(current_value, all_time_record, hour_record):
         }
     ))
     
-    # Add legend
-    fig.add_annotation(
-        x=0.5, y=0.10,
-        text="<b>Records:</b>",
-        showarrow=False,
-        xref="paper", yref="paper",
-        align="center",
-        font=dict(size=10, color="white")
+    # Fuel type legend - simple colored boxes with names only
+    y_pos = 0.10
+
+    # Hydro
+    fig.add_shape(
+        type="rect",
+        x0=0.10, y0=y_pos-0.01, x1=0.14, y1=y_pos+0.01,
+        fillcolor="#8be9fd", line=dict(color="#8be9fd", width=0),
+        xref="paper", yref="paper"
     )
-    
+    fig.add_annotation(
+        x=0.145, y=y_pos,
+        text="Hydro",
+        showarrow=False, xref="paper", yref="paper",
+        align="left", font=dict(size=8, color="white")
+    )
+
+    # Wind
+    fig.add_shape(
+        type="rect",
+        x0=0.29, y0=y_pos-0.01, x1=0.33, y1=y_pos+0.01,
+        fillcolor="#50fa7b", line=dict(color="#50fa7b", width=0),
+        xref="paper", yref="paper"
+    )
+    fig.add_annotation(
+        x=0.335, y=y_pos,
+        text="Wind",
+        showarrow=False, xref="paper", yref="paper",
+        align="left", font=dict(size=8, color="white")
+    )
+
+    # Solar
+    fig.add_shape(
+        type="rect",
+        x0=0.47, y0=y_pos-0.01, x1=0.51, y1=y_pos+0.01,
+        fillcolor="#f1fa8c", line=dict(color="#f1fa8c", width=0),
+        xref="paper", yref="paper"
+    )
+    fig.add_annotation(
+        x=0.515, y=y_pos,
+        text="Solar",
+        showarrow=False, xref="paper", yref="paper",
+        align="left", font=dict(size=8, color="white")
+    )
+
+    # Rooftop
+    fig.add_shape(
+        type="rect",
+        x0=0.64, y0=y_pos-0.01, x1=0.68, y1=y_pos+0.01,
+        fillcolor="#ffb86c", line=dict(color="#ffb86c", width=0),
+        xref="paper", yref="paper"
+    )
+    fig.add_annotation(
+        x=0.685, y=y_pos,
+        text="Rooftop",
+        showarrow=False, xref="paper", yref="paper",
+        align="left", font=dict(size=8, color="white")
+    )
+
+    # Add record markers legend below
+    fig.add_annotation(
+        x=0.5, y=0.035,
+        text="<b>Records:</b>",
+        showarrow=False, xref="paper", yref="paper",
+        align="center", font=dict(size=9, color="white")
+    )
+
     # All-time record
     fig.add_shape(
         type="line",
-        x0=0.15, y0=0.05,
-        x1=0.20, y1=0.05,
+        x0=0.15, y0=0.01, x1=0.20, y1=0.01,
         line=dict(color="gold", width=4),
         xref="paper", yref="paper"
     )
-    
     fig.add_annotation(
-        x=0.21, y=0.05,
+        x=0.21, y=0.01,
         text=f"All-time: {all_time_record:.0f}%",
-        showarrow=False,
-        xref="paper", yref="paper",
-        align="left",
-        font=dict(size=9, color="white")
+        showarrow=False, xref="paper", yref="paper",
+        align="left", font=dict(size=8, color="white")
     )
-    
+
     # Hour record
     fig.add_shape(
         type="line",
-        x0=0.55, y0=0.05,
-        x1=0.60, y1=0.05,
+        x0=0.55, y0=0.01, x1=0.60, y1=0.01,
         line=dict(color="#5DCED0", width=4),
         xref="paper", yref="paper"
     )
-    
     fig.add_annotation(
-        x=0.61, y=0.05,
+        x=0.61, y=0.01,
         text=f"Hour: {hour_record:.0f}%",
-        showarrow=False,
-        xref="paper", yref="paper",
-        align="left",
-        font=dict(size=9, color="white")
+        showarrow=False, xref="paper", yref="paper",
+        align="left", font=dict(size=8, color="white")
     )
     
     fig.update_layout(
@@ -519,14 +603,24 @@ def update_gauge_loop():
                 # Load and update records
                 records = load_renewable_records(records_file)
                 records, alerts_sent = update_records_with_alerts(stats, records, records_file)
-                
+
                 # Get values for gauge display
                 current_percentage = stats['renewable_pct']
                 all_time_record = records['all_time']['renewable_pct']['value']
                 hour_record = records['hourly'][str(stats['timestamp'].hour)]['value']
-                
-                # Create gauge figure
-                fig = create_gauge_figure(current_percentage, all_time_record, hour_record)
+
+                # Calculate individual fuel percentages
+                total_mw = stats['total_mw']
+                water_pct = (stats['water_mw'] / total_mw * 100) if total_mw > 0 else 0
+                wind_pct = (stats['wind_mw'] / total_mw * 100) if total_mw > 0 else 0
+                solar_pct = (stats['solar_mw'] / total_mw * 100) if total_mw > 0 else 0
+                rooftop_pct = (stats['rooftop_mw'] / total_mw * 100) if total_mw > 0 else 0
+
+                # Create gauge figure with stacked fuel types
+                fig = create_gauge_figure(
+                    current_percentage, all_time_record, hour_record,
+                    water_pct, wind_pct, solar_pct, rooftop_pct
+                )
                 
                 # Update the pane if it exists
                 if current_gauge_pane is not None:
@@ -557,18 +651,29 @@ def create_gauge_app():
             data_dir = os.getenv('DATA_DIR', '/tmp')
             records_file = Path(data_dir) / 'renewable_records_calculated.json'
             records = load_renewable_records(records_file)
-            
+
             # Don't send alerts on startup
             current_percentage = stats['renewable_pct']
             all_time_record = records['all_time']['renewable_pct']['value']
             hour_record = records['hourly'][str(stats['timestamp'].hour)]['value']
+
+            # Calculate individual fuel percentages
+            total_mw = stats['total_mw']
+            water_pct = (stats['water_mw'] / total_mw * 100) if total_mw > 0 else 0
+            wind_pct = (stats['wind_mw'] / total_mw * 100) if total_mw > 0 else 0
+            solar_pct = (stats['solar_mw'] / total_mw * 100) if total_mw > 0 else 0
+            rooftop_pct = (stats['rooftop_mw'] / total_mw * 100) if total_mw > 0 else 0
         else:
             current_percentage = 0
             all_time_record = 78.7
             hour_record = 45
-        
-        # Create initial gauge
-        fig = create_gauge_figure(current_percentage, all_time_record, hour_record)
+            water_pct = wind_pct = solar_pct = rooftop_pct = 0
+
+        # Create initial gauge with stacked fuel types
+        fig = create_gauge_figure(
+            current_percentage, all_time_record, hour_record,
+            water_pct, wind_pct, solar_pct, rooftop_pct
+        )
         current_gauge_pane = pn.pane.Plotly(fig, sizing_mode='fixed', width=400, height=350)
         
     except Exception as e:
