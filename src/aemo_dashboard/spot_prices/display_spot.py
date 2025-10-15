@@ -7,6 +7,10 @@ import matplotx
 import numpy as np
 import os
 import sys
+from pathlib import Path
+
+# Add parent directory to path so relative imports work when served by Panel
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from ..shared.config import config
 from ..shared.logging_config import setup_logging, get_logger
