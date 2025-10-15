@@ -9,12 +9,12 @@ import os
 import sys
 from pathlib import Path
 
-# Add parent directory to path so relative imports work when served by Panel
+# Add parent directory to path so absolute imports work when served by Panel
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from ..shared.config import config
-from ..shared.logging_config import setup_logging, get_logger
-from ..nem_dash.nem_dash_query_manager import NEMDashQueryManager
+from aemo_dashboard.shared.config import config
+from aemo_dashboard.shared.logging_config import setup_logging, get_logger
+from aemo_dashboard.nem_dash.nem_dash_query_manager import NEMDashQueryManager
 
 # Set up logging
 setup_logging()
