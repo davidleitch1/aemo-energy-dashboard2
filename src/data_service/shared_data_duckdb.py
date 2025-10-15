@@ -17,6 +17,7 @@ from functools import lru_cache
 from aemo_dashboard.shared.config import config
 from aemo_dashboard.shared.logging_config import get_logger
 from aemo_dashboard.shared.performance_logging import PerformanceLogger
+from aemo_dashboard.shared.constants import MINUTES_5_TO_HOURS, MINUTES_30_TO_HOURS
 
 logger = get_logger(__name__)
 perf_logger = PerformanceLogger(__name__)
@@ -362,77 +363,154 @@ class DuckDBDataService:
         self,
         start_date: datetime,
         end_date: datetime,
-        group_by: List[str]
+        group_by: List[str],
+        resolution: str = '30min'
     ) -> pd.DataFrame:
-        """Calculate revenue analysis with custom grouping"""
+        """
+        Calculate revenue analysis with custom grouping.
+
+        Args:
+            start_date: Start date for analysis
+            end_date: End date for analysis
+            group_by: List of fields to group by
+            resolution: Data resolution ('5min' or '30min')
+
+        Returns:
+            DataFrame with revenue calculations
+        """
         with perf_logger.timer("duckdb_revenue_query", threshold=0.5):
-            # Map group_by fields to SQL columns
+            # Select appropriate time factor and tables based on resolution
+            if resolution == '5min':
+                time_factor = MINUTES_5_TO_HOURS
+                gen_table = 'generation_5min'
+                price_table = 'prices_5min'
+                join_duid = 'LEFT JOIN duid_mapping d ON g.duid = d.DUID'
+                region_col = 'd.Region'
+            else:
+                time_factor = MINUTES_30_TO_HOURS
+                gen_table = 'generation_enriched_30min'
+                price_table = 'prices_30min'
+                join_duid = ''
+                region_col = 'g.region'
+
+            # Map group_by fields to SQL columns based on resolution
             sql_group_by = []
             select_fields = []
-            
+
             for field in group_by:
                 if field == 'fuel_type':
-                    sql_group_by.append('fuel_type')
-                    select_fields.append('fuel_type')
+                    if resolution == '5min':
+                        sql_group_by.append('d.Fuel')
+                        select_fields.append('d.Fuel as fuel_type')
+                    else:
+                        sql_group_by.append('g.fuel_type')
+                        select_fields.append('g.fuel_type')
                 elif field == 'region':
-                    sql_group_by.append('g.region')
-                    select_fields.append('g.region')
+                    sql_group_by.append(region_col)
+                    select_fields.append(f'{region_col} as region')
                 elif field == 'station_name' or field == 'site_name':
-                    sql_group_by.append('station_name')
-                    select_fields.append('station_name')
+                    if resolution == '5min':
+                        sql_group_by.append('d."Site Name"')
+                        select_fields.append('d."Site Name" as station_name')
+                    else:
+                        sql_group_by.append('g.station_name')
+                        select_fields.append('g.station_name')
                 elif field == 'duid':
                     sql_group_by.append('g.duid')
                     select_fields.append('g.duid')
-            
-            # Build the revenue query
+
+            # Build the revenue query with correct time factor
+            # Revenue = MW × $/MWh × hours
             query = f"""
-                SELECT 
+                SELECT
                     {', '.join(select_fields)},
                     SUM(g.scadavalue) as scadavalue,
-                    SUM(g.scadavalue * p.rrp / 2) as revenue,
+                    SUM(g.scadavalue * p.rrp * {time_factor}) as revenue,
                     AVG(p.rrp) as rrp
-                FROM generation_enriched_30min g
-                JOIN prices_30min p 
-                  ON g.settlementdate = p.settlementdate 
-                  AND g.region = p.regionid
+                FROM {gen_table} g
+                {join_duid}
+                JOIN {price_table} p
+                  ON g.settlementdate = p.settlementdate
+                  AND {region_col} = p.regionid
                 WHERE g.settlementdate >= '{start_date.isoformat()}'
                   AND g.settlementdate <= '{end_date.isoformat()}'
                 GROUP BY {', '.join(sql_group_by)}
                 ORDER BY revenue DESC
             """
-            
+
             # Execute query
             result = self.conn.execute(query).df()
-            
-            logger.debug(f"Revenue query returned {len(result)} rows")
+
+            logger.debug(f"Revenue query ({resolution}) returned {len(result)} rows")
             return result
     
     def get_station_data(
         self,
         station_name: str,
         start_date: datetime,
-        end_date: datetime
+        end_date: datetime,
+        resolution: str = '30min'
     ) -> pd.DataFrame:
-        """Get detailed data for a specific station"""
-        query = f"""
-            SELECT 
-                g.settlementdate,
-                g.duid,
-                g.scadavalue,
-                g.fuel_type,
-                g.region,
-                p.rrp,
-                g.scadavalue * p.rrp / 2 as revenue
-            FROM generation_enriched_30min g
-            JOIN prices_30min p 
-              ON g.settlementdate = p.settlementdate 
-              AND g.region = p.regionid
-            WHERE g.station_name = '{station_name}'
-              AND g.settlementdate >= '{start_date.isoformat()}'
-              AND g.settlementdate <= '{end_date.isoformat()}'
-            ORDER BY g.settlementdate
         """
-        
+        Get detailed data for a specific station.
+
+        Args:
+            station_name: Name of the station
+            start_date: Start date
+            end_date: End date
+            resolution: Data resolution ('5min' or '30min')
+
+        Returns:
+            DataFrame with station data including revenue
+        """
+        # Select appropriate time factor and tables based on resolution
+        if resolution == '5min':
+            time_factor = MINUTES_5_TO_HOURS
+            gen_table = 'generation_5min'
+            price_table = 'prices_5min'
+            # For 5min, need to join with duid_mapping
+            query = f"""
+                SELECT
+                    g.settlementdate,
+                    g.duid,
+                    g.scadavalue,
+                    d.Fuel as fuel_type,
+                    d.Region as region,
+                    p.rrp,
+                    g.scadavalue * p.rrp * {time_factor} as revenue
+                FROM {gen_table} g
+                LEFT JOIN duid_mapping d ON g.duid = d.DUID
+                JOIN {price_table} p
+                  ON g.settlementdate = p.settlementdate
+                  AND d.Region = p.regionid
+                WHERE d."Site Name" = '{station_name}'
+                  AND g.settlementdate >= '{start_date.isoformat()}'
+                  AND g.settlementdate <= '{end_date.isoformat()}'
+                ORDER BY g.settlementdate
+            """
+        else:
+            time_factor = MINUTES_30_TO_HOURS
+            gen_table = 'generation_enriched_30min'
+            price_table = 'prices_30min'
+            query = f"""
+                SELECT
+                    g.settlementdate,
+                    g.duid,
+                    g.scadavalue,
+                    g.fuel_type,
+                    g.region,
+                    p.rrp,
+                    g.scadavalue * p.rrp * {time_factor} as revenue
+                FROM {gen_table} g
+                JOIN {price_table} p
+                  ON g.settlementdate = p.settlementdate
+                  AND g.region = p.regionid
+                WHERE g.station_name = '{station_name}'
+                  AND g.settlementdate >= '{start_date.isoformat()}'
+                  AND g.settlementdate <= '{end_date.isoformat()}'
+                ORDER BY g.settlementdate
+            """
+
         return self.conn.execute(query).df()
     
     def get_transmission_flows(

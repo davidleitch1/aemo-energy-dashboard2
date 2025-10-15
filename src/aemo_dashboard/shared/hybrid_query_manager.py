@@ -17,6 +17,7 @@ from functools import wraps
 
 from .logging_config import get_logger
 from .performance_logging import PerformanceLogger, performance_monitor
+from .constants import MINUTES_5_TO_HOURS, MINUTES_30_TO_HOURS
 from data_service.shared_data_duckdb import duckdb_data_service
 
 logger = get_logger(__name__)
@@ -195,11 +196,12 @@ class HybridQueryManager:
             select_columns = ", ".join(columns)
         
         # Build query based on resolution
+        # Revenue = MW × $/MWh × hours
         if resolution == '5min':
             query = f"""
             SELECT {select_columns}
             FROM (
-                SELECT 
+                SELECT
                     g.settlementdate,
                     g.duid,
                     g.scadavalue,
@@ -209,11 +211,11 @@ class HybridQueryManager:
                     d.Region as region,
                     d."Capacity(MW)" as nameplate_capacity,
                     p.rrp,
-                    g.scadavalue * p.rrp * (5.0/60.0) as revenue
+                    g.scadavalue * p.rrp * {MINUTES_5_TO_HOURS} as revenue
                 FROM generation_5min g
                 LEFT JOIN duid_mapping d ON g.duid = d.DUID
-                LEFT JOIN prices_5min p 
-                    ON g.settlementdate = p.settlementdate 
+                LEFT JOIN prices_5min p
+                    ON g.settlementdate = p.settlementdate
                     AND d.Region = p.regionid
                 WHERE g.settlementdate >= '{start_date.strftime('%Y-%m-%d %H:%M:%S')}'
                   AND g.settlementdate <= '{end_date.strftime('%Y-%m-%d %H:%M:%S')}'
@@ -223,7 +225,7 @@ class HybridQueryManager:
             query = f"""
             SELECT {select_columns}
             FROM (
-                SELECT 
+                SELECT
                     g.settlementdate,
                     g.duid,
                     g.scadavalue,
@@ -233,11 +235,11 @@ class HybridQueryManager:
                     d.Region as region,
                     d."Capacity(MW)" as nameplate_capacity,
                     p.rrp,
-                    g.scadavalue * p.rrp / 2 as revenue
+                    g.scadavalue * p.rrp * {MINUTES_30_TO_HOURS} as revenue
                 FROM generation_30min g
                 LEFT JOIN duid_mapping d ON g.duid = d.DUID
-                LEFT JOIN prices_30min p 
-                    ON g.settlementdate = p.SETTLEMENTDATE 
+                LEFT JOIN prices_30min p
+                    ON g.settlementdate = p.SETTLEMENTDATE
                     AND d.Region = p.REGIONID
                 WHERE g.settlementdate >= '{start_date.strftime('%Y-%m-%d %H:%M:%S')}'
                   AND g.settlementdate <= '{end_date.strftime('%Y-%m-%d %H:%M:%S')}'

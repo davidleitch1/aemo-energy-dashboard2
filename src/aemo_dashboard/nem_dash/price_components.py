@@ -143,14 +143,34 @@ def create_price_table(prices):
     """
     if prices.empty:
         return pn.pane.HTML("<div>No price data available</div>", width=550, height=350)
-    
+
     try:
         display = prices.copy()
+
+        # Detect data resolution from timestamps (before converting to string format)
+        if len(display) >= 2:
+            time_diff = display.index[-1] - display.index[-2]
+            periods_per_hour = pd.Timedelta(hours=1) / time_diff
+            periods_per_day = int(periods_per_hour * 24)
+        else:
+            # Fallback for insufficient data
+            periods_per_hour = 12  # Assume 5-min
+            periods_per_day = 288
+
+        # Calculate averages with dynamic periods
+        # Handle edge cases: not enough data for full periods
+        hour_periods = min(int(periods_per_hour), len(display))
+        day_periods = min(periods_per_day, len(display))
+
+        # Convert index to time strings for display
         display.index = display.index.strftime('%H:%M')
 
-        # Calculate averages
-        display.loc["Last hour average"] = display.tail(12).mean()
-        display.loc["Last 24 hr average"] = display.tail(24*12).mean()
+        # Calculate averages using detected resolution
+        if hour_periods > 0:
+            display.loc["Last hour average"] = display.tail(hour_periods).mean()
+        if day_periods > 0:
+            display.loc["Last 24 hr average"] = display.tail(day_periods).mean()
+
         display.rename_axis(None, inplace=True)
         display.rename_axis(None, axis=1, inplace=True)
         

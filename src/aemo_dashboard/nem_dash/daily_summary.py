@@ -10,6 +10,11 @@ from typing import Dict, List, Tuple, Optional
 
 from ..shared.logging_config import get_logger
 from ..shared import adapter_selector
+from ..shared.fuel_categories import (
+    RENEWABLE_FUELS,
+    EXCLUDED_FROM_GENERATION,
+    THERMAL_FUELS
+)
 from ..generation.generation_query_manager import GenerationQueryManager
 
 logger = get_logger(__name__)
@@ -135,15 +140,17 @@ def calculate_daily_metrics(start_time: datetime, end_time: datetime) -> Dict:
                     avg_mw_by_fuel = region_gen.groupby('fuel_type')['total_generation_mw'].mean()
                     total_avg_mw = avg_mw_by_fuel.sum()
                     total_gwh = total_avg_mw * 24 / 1000
-                    
-                    # Calculate fuel shares
-                    renewable_fuels = ['Wind', 'Solar', 'Water']  # Water = Hydro
-                    gas_fuels = ['Gas', 'Gas (CCGT)', 'Gas (OCGT)', 'Gas (Steam)', 'CCGT', 'OCGT', 'Gas other']
-                    coal_fuels = ['Black Coal', 'Brown Coal', 'Coal']
-                    
+
+                    # Calculate fuel shares using centralized categories
+                    # Note: RENEWABLE_FUELS and THERMAL_FUELS imported from fuel_categories
+
                     # Get average MW for each fuel category
-                    renewable_mw = avg_mw_by_fuel[avg_mw_by_fuel.index.isin(renewable_fuels)].sum()
+                    renewable_mw = avg_mw_by_fuel[avg_mw_by_fuel.index.isin(RENEWABLE_FUELS)].sum()
+                    # Gas fuels - subset of THERMAL_FUELS
+                    gas_fuels = ['Gas', 'Gas (CCGT)', 'Gas (OCGT)', 'Gas (Steam)', 'CCGT', 'OCGT', 'Gas other']
                     gas_mw = avg_mw_by_fuel[avg_mw_by_fuel.index.isin(gas_fuels)].sum()
+                    # Coal fuels - subset of THERMAL_FUELS
+                    coal_fuels = ['Black Coal', 'Brown Coal', 'Coal']
                     coal_mw = avg_mw_by_fuel[avg_mw_by_fuel.index.isin(coal_fuels)].sum()
                     
                     # Add rooftop solar

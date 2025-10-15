@@ -12,6 +12,7 @@ from typing import List, Dict, Any, Optional
 
 from .logging_config import get_logger
 from .performance_logging import PerformanceLogger, performance_monitor
+from .constants import MINUTES_5_TO_HOURS, MINUTES_30_TO_HOURS
 from data_service.shared_data_duckdb import duckdb_data_service
 
 logger = get_logger(__name__)
@@ -51,9 +52,10 @@ class DuckDBViewManager:
         """Create views that integrate generation, price, and DUID data"""
         
         # 30-minute integrated data view
-        self.conn.execute("""
+        # Revenue = MW × $/MWh × 0.5 hours
+        self.conn.execute(f"""
             CREATE OR REPLACE VIEW integrated_data_30min AS
-            SELECT 
+            SELECT
                 g.settlementdate,
                 g.duid,
                 g.scadavalue,
@@ -65,26 +67,27 @@ class DuckDBViewManager:
                 p.SETTLEMENTDATE as price_settlementdate,
                 p.REGIONID as price_region,
                 p.RRP as rrp,
-                g.scadavalue * p.RRP / 2 as revenue_30min,
+                g.scadavalue * p.RRP * {MINUTES_30_TO_HOURS} as revenue_30min,
                 -- Additional calculated fields
-                CASE 
-                    WHEN d."Capacity(MW)" > 0 
+                CASE
+                    WHEN d."Capacity(MW)" > 0
                     THEN g.scadavalue / d."Capacity(MW)" * 100
-                    ELSE 0 
+                    ELSE 0
                 END as capacity_factor_pct,
                 date_trunc('hour', g.settlementdate) as hour,
                 date_trunc('day', g.settlementdate) as date
             FROM generation_30min g
             LEFT JOIN duid_mapping d ON g.duid = d.DUID
-            LEFT JOIN prices_30min p 
-                ON g.settlementdate = p.SETTLEMENTDATE 
+            LEFT JOIN prices_30min p
+                ON g.settlementdate = p.SETTLEMENTDATE
                 AND d.Region = p.REGIONID
         """)
         
         # 5-minute integrated data view
-        self.conn.execute("""
+        # Revenue = MW × $/MWh × (5/60) hours
+        self.conn.execute(f"""
             CREATE OR REPLACE VIEW integrated_data_5min AS
-            SELECT 
+            SELECT
                 g.settlementdate,
                 g.duid,
                 g.scadavalue,
@@ -96,19 +99,19 @@ class DuckDBViewManager:
                 p.settlementdate as price_settlementdate,
                 p.regionid as price_region,
                 p.rrp as rrp,
-                g.scadavalue * p.rrp * (5.0/60.0) as revenue_5min,
+                g.scadavalue * p.rrp * {MINUTES_5_TO_HOURS} as revenue_5min,
                 -- Additional calculated fields
-                CASE 
-                    WHEN d."Capacity(MW)" > 0 
+                CASE
+                    WHEN d."Capacity(MW)" > 0
                     THEN g.scadavalue / d."Capacity(MW)" * 100
-                    ELSE 0 
+                    ELSE 0
                 END as capacity_factor_pct,
                 date_trunc('hour', g.settlementdate) as hour,
                 date_trunc('day', g.settlementdate) as date
             FROM generation_5min g
             LEFT JOIN duid_mapping d ON g.duid = d.DUID
-            LEFT JOIN prices_5min p 
-                ON g.settlementdate = p.settlementdate 
+            LEFT JOIN prices_5min p
+                ON g.settlementdate = p.settlementdate
                 AND d.Region = p.regionid
         """)
         
@@ -239,14 +242,15 @@ class DuckDBViewManager:
         logger.debug("Creating station analysis views...")
         
         # Station time series for detailed analysis (5min)
-        self.conn.execute("""
+        # Revenue = MW × $/MWh × (5/60) hours
+        self.conn.execute(f"""
             CREATE OR REPLACE VIEW station_time_series_5min AS
-            SELECT 
+            SELECT
                 g.settlementdate,
                 g.duid,
                 g.scadavalue,
                 p.rrp as price,
-                g.scadavalue * p.rrp * 0.0833 as revenue_5min,
+                g.scadavalue * p.rrp * {MINUTES_5_TO_HOURS} as revenue_5min,
                 d."Site Name" as station_name,
                 d."Owner" as owner,
                 d."Region" as region,
@@ -254,19 +258,20 @@ class DuckDBViewManager:
                 d."Capacity(MW)" as capacity_mw
             FROM generation_5min g
             JOIN duid_mapping d ON g.duid = d.duid
-            JOIN prices_5min p ON g.settlementdate = p.settlementdate 
+            JOIN prices_5min p ON g.settlementdate = p.settlementdate
                 AND d."Region" = p.regionid
         """)
         
         # Station time series (30min version)
-        self.conn.execute("""
+        # Revenue = MW × $/MWh × 0.5 hours
+        self.conn.execute(f"""
             CREATE OR REPLACE VIEW station_time_series_30min AS
-            SELECT 
+            SELECT
                 g.settlementdate,
                 g.duid,
                 g.scadavalue,
                 p.rrp as price,
-                g.scadavalue * p.rrp * 0.5 as revenue_30min,
+                g.scadavalue * p.rrp * {MINUTES_30_TO_HOURS} as revenue_30min,
                 d."Site Name" as station_name,
                 d."Owner" as owner,
                 d."Region" as region,
@@ -274,19 +279,20 @@ class DuckDBViewManager:
                 d."Capacity(MW)" as capacity_mw
             FROM generation_30min g
             JOIN duid_mapping d ON g.duid = d.duid
-            JOIN prices_30min p ON g.settlementdate = p.settlementdate 
+            JOIN prices_30min p ON g.settlementdate = p.settlementdate
                 AND d."Region" = p.regionid
         """)
         
         # Time of day averages for station analysis
-        self.conn.execute("""
+        # Average revenue uses 5-minute data
+        self.conn.execute(f"""
             CREATE OR REPLACE VIEW station_time_of_day AS
-            SELECT 
+            SELECT
                 duid,
                 EXTRACT(hour FROM settlementdate) as hour,
                 AVG(scadavalue) as avg_generation_mw,
                 AVG(price) as avg_price,
-                AVG(scadavalue * price * 0.0833) as avg_revenue,
+                AVG(scadavalue * price * {MINUTES_5_TO_HOURS}) as avg_revenue,
                 COUNT(*) as data_points
             FROM station_time_series_5min
             GROUP BY duid, hour
@@ -294,9 +300,10 @@ class DuckDBViewManager:
         """)
         
         # Station performance metrics
-        self.conn.execute("""
+        # Uses 5-minute data for calculations
+        self.conn.execute(f"""
             CREATE OR REPLACE VIEW station_performance_metrics AS
-            SELECT 
+            SELECT
                 duid,
                 MAX(station_name) as station_name,
                 MAX(owner) as owner,
@@ -305,7 +312,7 @@ class DuckDBViewManager:
                 MAX(capacity_mw) as capacity_mw,
                 MIN(settlementdate) as start_date,
                 MAX(settlementdate) as end_date,
-                SUM(scadavalue * 0.0833) as total_generation_mwh,
+                SUM(scadavalue * {MINUTES_5_TO_HOURS}) as total_generation_mwh,
                 SUM(revenue_5min) as total_revenue,
                 AVG(scadavalue) as avg_generation_mw,
                 MAX(scadavalue) as max_generation_mw,
@@ -359,9 +366,10 @@ class DuckDBViewManager:
         """)
         
         # Generation with price data (integrated view for revenue calculations)
-        self.conn.execute("""
+        # Revenue = MW × $/MWh × 0.5 hours
+        self.conn.execute(f"""
             CREATE OR REPLACE VIEW generation_with_prices_30min AS
-            SELECT 
+            SELECT
                 g.settlementdate,
                 g.fuel_type,
                 g.region,
@@ -369,10 +377,10 @@ class DuckDBViewManager:
                 g.unit_count,
                 g.total_capacity_mw,
                 p.RRP as price,
-                g.total_generation_mw * p.RRP * 0.5 as revenue_30min
+                g.total_generation_mw * p.RRP * {MINUTES_30_TO_HOURS} as revenue_30min
             FROM generation_by_fuel_30min g
-            LEFT JOIN prices_30min p 
-                ON g.settlementdate = p.SETTLEMENTDATE 
+            LEFT JOIN prices_30min p
+                ON g.settlementdate = p.SETTLEMENTDATE
                 AND g.region = p.REGIONID
         """)
         
@@ -395,16 +403,17 @@ class DuckDBViewManager:
         """)
         
         # Daily generation summary by fuel (for overview displays)
-        self.conn.execute("""
+        # Convert 30-min MW readings to MWh
+        self.conn.execute(f"""
             CREATE OR REPLACE VIEW daily_generation_by_fuel AS
-            SELECT 
+            SELECT
                 DATE_TRUNC('day', settlementdate) as date,
                 fuel_type,
                 region,
                 AVG(total_generation_mw) as avg_generation_mw,
                 MAX(total_generation_mw) as max_generation_mw,
                 MIN(total_generation_mw) as min_generation_mw,
-                SUM(total_generation_mw * 0.5) as total_generation_mwh,
+                SUM(total_generation_mw * {MINUTES_30_TO_HOURS}) as total_generation_mwh,
                 AVG(utilization_pct) as avg_utilization_pct
             FROM capacity_utilization_30min
             GROUP BY 1, 2, 3

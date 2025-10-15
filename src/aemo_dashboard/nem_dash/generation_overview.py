@@ -12,6 +12,11 @@ from datetime import datetime, timedelta
 
 from ..shared.config import config
 from ..shared.logging_config import get_logger
+from ..shared.resolution_utils import (
+    detect_resolution_minutes,
+    periods_for_hours,
+    get_decay_rate_per_period
+)
 from .nem_dash_query_manager import NEMDashQueryManager
 
 logger = get_logger(__name__)
@@ -201,13 +206,11 @@ def prepare_generation_for_stacking(gen_data, transmission_data=None, rooftop_da
         
         # Rename index for hvplot
         pivot_df.index.name = 'settlementdate'
-        
-        # Ensure we only have last 24 hours of data
+
+        # Data is already filtered to the correct time range by the dashboard
+        # Do not filter again to avoid data truncation
         if len(pivot_df) > 0:
-            end_time = pivot_df.index.max()
-            start_time = end_time - pd.Timedelta(hours=24)
-            pivot_df = pivot_df[pivot_df.index >= start_time]
-            logger.info(f"Filtered to last 24 hours: {len(pivot_df)} records from {start_time} to {end_time}")
+            logger.info(f"Data range: {len(pivot_df)} records from {pivot_df.index.min()} to {pivot_df.index.max()}")
         
         # Add transmission flows if available
         if transmission_data is not None and not transmission_data.empty:
@@ -250,30 +253,36 @@ def prepare_generation_for_stacking(gen_data, transmission_data=None, rooftop_da
                 # Align with generation data
                 if len(pivot_df) > 0:
                     rooftop_aligned = rooftop_series.reindex(pivot_df.index)
-                    
+
+                    # Detect resolution dynamically
+                    resolution_minutes = detect_resolution_minutes(pivot_df.index)
+
                     # Forward-fill missing values at the end (up to 2 hours)
                     # This handles the case where rooftop data is less recent than generation data
-                    rooftop_aligned = rooftop_aligned.fillna(method='ffill', limit=24)  # 24 * 5min = 2 hours
-                    
+                    ffill_limit = periods_for_hours(2, resolution_minutes)  # Dynamic: 2 hours worth of periods
+                    rooftop_aligned = rooftop_aligned.fillna(method='ffill', limit=ffill_limit)
+
                     # Apply gentle decay for extended forward-fill periods
                     last_valid_idx = rooftop_aligned.last_valid_index()
                     if last_valid_idx is not None and last_valid_idx < rooftop_aligned.index[-1]:
                         # Calculate how many periods we're forward-filling
                         fill_start_pos = rooftop_aligned.index.get_loc(last_valid_idx) + 1
                         fill_periods = len(rooftop_aligned) - fill_start_pos
-                        
+
                         if fill_periods > 0:
                             # Apply exponential decay for realism (solar decreases over time)
+                            # Use 2-hour half-life (resolution-aware)
                             last_value = rooftop_aligned.iloc[fill_start_pos - 1]
-                            decay_rate = 0.98  # 2% decay per 5-minute period
+                            decay_rate = get_decay_rate_per_period(2.0, resolution_minutes)
                             for i in range(fill_periods):
                                 rooftop_aligned.iloc[fill_start_pos + i] = last_value * (decay_rate ** (i + 1))
-                    
+
                     # Fill any remaining NaN with 0
                     rooftop_aligned = rooftop_aligned.fillna(0)
                     pivot_df['Rooftop Solar'] = rooftop_aligned
-                    
-                    logger.info(f"Added rooftop solar: max {pivot_df['Rooftop Solar'].max():.1f}MW")
+
+                    logger.info(f"Added rooftop solar: max {pivot_df['Rooftop Solar'].max():.1f}MW "
+                               f"(resolution: {resolution_minutes}min, ffill_limit: {ffill_limit} periods)")
                 
             except Exception as e:
                 logger.error(f"Error adding rooftop solar: {e}")
@@ -437,43 +446,36 @@ def create_generation_overview_component(dashboard_instance=None):
                     gen_data = dashboard_instance.process_data_for_region()
                     logger.info(f"Dashboard processed data shape: {gen_data.shape if not gen_data.empty else 'empty'}")
                     logger.info(f"Dashboard processed data columns: {list(gen_data.columns) if not gen_data.empty else 'none'}")
-                    
+
                     if not gen_data.empty:
                         # This data is already processed by fuel type and filtered by the dashboard's time range
-                        # Convert to format needed for stacking (add SETTLEMENTDATE column)
+                        # DO NOT filter again - the dashboard has already applied the correct time range
+                        # Just ensure proper datetime format
                         if gen_data.index.name == 'settlementdate':
                             gen_data = gen_data.reset_index()
                             gen_data['SETTLEMENTDATE'] = gen_data['settlementdate']
                         elif 'settlementdate' not in gen_data.columns:
                             gen_data = gen_data.reset_index()
                             gen_data['SETTLEMENTDATE'] = gen_data.index
-                        
-                        # Filter to last 24 hours based on timestamp
-                        if 'SETTLEMENTDATE' in gen_data.columns:
-                            gen_data['SETTLEMENTDATE'] = pd.to_datetime(gen_data['SETTLEMENTDATE'])
-                            end_time = gen_data['SETTLEMENTDATE'].max()
-                            start_time = end_time - pd.Timedelta(hours=24)
-                            gen_data = gen_data[gen_data['SETTLEMENTDATE'] >= start_time]
-                        elif 'settlementdate' in gen_data.columns:
-                            gen_data['settlementdate'] = pd.to_datetime(gen_data['settlementdate'])
-                            end_time = gen_data['settlementdate'].max()
-                            start_time = end_time - pd.Timedelta(hours=24)
-                            gen_data = gen_data[gen_data['settlementdate'] >= start_time]
-                        else:
-                            # Fallback to tail if no date column
-                            gen_data = gen_data.tail(288)
-                        logger.info(f"Using dashboard processed data: {len(gen_data)} records for last 24h")
+
+                        logger.info(f"Using dashboard processed data: {len(gen_data)} records (already filtered by dashboard)")
+
+                        # Dashboard data already includes rooftop solar and transmission
+                        # Do NOT load them separately or we'll have conflicts
+                        transmission_data = None
+                        rooftop_data = None
                 except Exception as e:
                     logger.error(f"Error using dashboard processed data: {e}")
                     gen_data = pd.DataFrame()
+                    transmission_data = load_transmission_data()
+                    rooftop_data = load_rooftop_solar_data()
             else:
                 # Fallback to loading data directly
                 logger.info("Loading generation data directly")
                 gen_data = load_generation_data()
-            
-            transmission_data = load_transmission_data()
-            rooftop_data = load_rooftop_solar_data()
-            
+                transmission_data = load_transmission_data()
+                rooftop_data = load_rooftop_solar_data()
+
             # Prepare data for stacking
             pivot_df = prepare_generation_for_stacking(gen_data, transmission_data, rooftop_data)
             

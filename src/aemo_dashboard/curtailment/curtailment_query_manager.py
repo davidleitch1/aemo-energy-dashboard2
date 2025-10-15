@@ -12,6 +12,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, Tuple, List
 from pathlib import Path
+from ..shared.resolution_utils import periods_for_hours
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -48,16 +49,16 @@ class CurtailmentQueryManager:
         """Create base views for parquet files - called AFTER _create_curtailment_views sets up duid_regions"""
         try:
             # Register curtailment5 data (collected by production collector)
-            # Contains: settlementdate, duid, availability, totalcleared, semidispatchcap, curtailment
+            # Note: curtailment5.parquet has UPPERCASE columns: SETTLEMENTDATE, DUID, AVAILABILITY, etc.
             self.conn.execute(f"""
                 CREATE OR REPLACE VIEW curtailment5 AS
                 SELECT
-                    settlementdate as timestamp,
-                    duid,
-                    availability as availgen,
-                    totalcleared as dispatchcap,
-                    semidispatchcap,
-                    curtailment as curtailment_calc
+                    SETTLEMENTDATE as timestamp,
+                    DUID as duid,
+                    AVAILABILITY as availgen,
+                    TOTALCLEARED as dispatchcap,
+                    SEMIDISPATCHCAP as semidispatchcap,
+                    CURTAILMENT as curtailment_calc
                 FROM read_parquet('{self.curtailment5_path}')
             """)
 
@@ -71,25 +72,26 @@ class CurtailmentQueryManager:
         """Create SCADA views - called AFTER duid_regions table is created"""
         try:
             # Register 5-minute SCADA data (filter by wind/solar DUIDs from duid_regions)
+            # Note: scada5.parquet has lowercase column names: settlementdate, duid, scadavalue
             self.conn.execute(f"""
                 CREATE OR REPLACE VIEW scada AS
                 SELECT
                     settlementdate as timestamp,
-                    duid,
+                    UPPER(duid) as duid,
                     scadavalue as scada
                 FROM read_parquet('{self.scada5_path}')
-                WHERE duid IN (SELECT DISTINCT duid FROM duid_regions)
+                WHERE UPPER(duid) IN (SELECT DISTINCT UPPER(duid) FROM duid_regions)
             """)
 
             # Register 30-minute SCADA data
             self.conn.execute(f"""
-                CREATE OR REPLACE VIEW scada30 AS
+                CREATE OR REPLACE VIEW scada30_view AS
                 SELECT
                     settlementdate as timestamp,
-                    duid,
+                    UPPER(duid) as duid,
                     scadavalue as scada
                 FROM read_parquet('{self.scada30_path}')
-                WHERE duid IN (SELECT DISTINCT duid FROM duid_regions)
+                WHERE UPPER(duid) IN (SELECT DISTINCT UPPER(duid) FROM duid_regions)
             """)
 
             logger.info("SCADA views created successfully")
@@ -136,8 +138,11 @@ class CurtailmentQueryManager:
                 """)
                 logger.warning("No region mapping data found, created empty duid_regions table")
 
-            # Create merged curtailment view using production curtailment5 data
-            # Note: We don't join SCADA here - actual generation is queried separately in query methods
+            # Now create SCADA views (after duid_regions table exists)
+            self._create_scada_views()
+
+            # Create merged curtailment view with SCADA data joined
+            # This provides the 'scada' column that curtailment_tab.py expects
             self.conn.execute("""
                 CREATE OR REPLACE VIEW curtailment_merged AS
                 SELECT
@@ -146,6 +151,8 @@ class CurtailmentQueryManager:
                     c.availgen,
                     c.dispatchcap,
                     GREATEST(0, COALESCE(c.curtailment_calc, 0)) as curtailment,
+                    -- Add actual generation from SCADA (CRITICAL for dashboard plotting)
+                    COALESCE(s.scada, c.dispatchcap, 0) as scada,
                     -- Determine if curtailed based on SEMIDISPATCHCAP flag
                     CASE
                         WHEN c.semidispatchcap = 1 AND c.curtailment_calc > 0 THEN true
@@ -184,8 +191,8 @@ class CurtailmentQueryManager:
                         END
                     ) as fuel
                 FROM curtailment5 c
-                LEFT JOIN duid_regions r
-                    ON c.duid = r.duid
+                LEFT JOIN duid_regions r ON c.duid = r.duid
+                LEFT JOIN scada s ON c.timestamp = s.timestamp AND c.duid = s.duid
             """)
 
             # Create 30-minute curtailment view
@@ -204,7 +211,9 @@ class CurtailmentQueryManager:
                     -- For dispatch cap: take AVG within 30-min period
                     AVG(dispatchcap) as dispatchcap,
                     -- For curtailment: average MW over the 30-min period
-                    AVG(curtailment) as curtailment
+                    AVG(curtailment) as curtailment,
+                    -- For scada (actual generation): average MW over the 30-min period
+                    AVG(scada) as scada
                 FROM curtailment_merged
                 GROUP BY 1, 2, 3, 4
             """)
@@ -219,6 +228,7 @@ class CurtailmentQueryManager:
                     AVG(availgen) as availgen,
                     AVG(dispatchcap) as dispatchcap,
                     AVG(curtailment) as curtailment,
+                    AVG(scada) as scada,
                     AVG(CASE WHEN is_curtailed THEN 1.0 ELSE 0.0 END) as curtailment_rate,
                     SUM(CASE WHEN curtailment_type = 'local' THEN 1 ELSE 0 END) as local_count,
                     SUM(CASE WHEN curtailment_type = 'network' THEN 1 ELSE 0 END) as network_count,
@@ -240,6 +250,8 @@ class CurtailmentQueryManager:
                     AVG(dispatchcap) as avg_dispatchcap,
                     AVG(curtailment) as curtailment,
                     SUM(curtailment) / 12 as curtailment_mwh,  -- Total curtailment in MWh (5min to MWh)
+                    SUM(scada) / 12 as generation_mwh,  -- Total actual generation in MWh (5min to MWh)
+                    AVG(scada) as scada,  -- Average actual generation (MW)
                     -- Only count curtailment rate when dispatch cap was constraining
                     AVG(CASE WHEN dispatchcap < availgen - 5 THEN 1.0 ELSE 0.0 END) as constraint_rate,
                     COUNT(CASE WHEN dispatchcap < availgen - 5 THEN 1 END) as constrained_intervals
@@ -298,7 +310,9 @@ class CurtailmentQueryManager:
                 if not (duid and duid != 'All'):
                     # Aggregate daily data by region/fuel
                     view = 'curtailment_daily_agg'
-                    self.conn.execute("""
+                    region_filter = f" AND region = '{region}'" if region and region != 'All' else ""
+                    fuel_filter = f" AND fuel = '{fuel}'" if fuel and fuel != 'All' else ""
+                    self.conn.execute(f"""
                         CREATE OR REPLACE TEMP VIEW curtailment_daily_agg AS
                         SELECT
                             timestamp,
@@ -312,8 +326,8 @@ class CurtailmentQueryManager:
                         FROM curtailment_daily
                         WHERE timestamp >= '{start_date.strftime('%Y-%m-%d')}'
                           AND timestamp <= '{end_date.strftime('%Y-%m-%d')}'
-                          {" AND region = '" + region + "'" if region and region != 'All' else ""}
-                          {" AND fuel = '" + fuel + "'" if fuel and fuel != 'All' else ""}
+                          {region_filter}
+                          {fuel_filter}
                         GROUP BY timestamp, region, fuel
                     """)
             elif resolution == 'hourly':

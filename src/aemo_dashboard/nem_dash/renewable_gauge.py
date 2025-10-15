@@ -13,40 +13,14 @@ from pathlib import Path
 
 from ..shared.config import config
 from ..shared.logging_config import get_logger
+from ..shared.fuel_categories import (
+    RENEWABLE_FUELS,
+    PUMPED_HYDRO_DUIDS,
+    EXCLUDED_FROM_GENERATION
+)
 from .nem_dash_query_manager import NEMDashQueryManager
 
 logger = get_logger(__name__)
-
-# Initialize query manager
-query_manager = NEMDashQueryManager()
-
-# Renewable fuel types to include in calculation
-RENEWABLE_FUELS = ['Wind', 'Solar', 'Water', 'Rooftop Solar', 'Hydro', 'Biomass']
-
-# Pumped hydro DUIDs to exclude from renewable calculation
-# This list is based on analysis of bidirectional water units (pump and generate)
-PUMPED_HYDRO_DUIDS = [
-    'BARRON-1',  # Barron Gorge
-    'BLOWERNG',  # Blowering
-    'BUTLERSG',  # Butlers Gorge
-    'CLOVER',    # Clover
-    'CLUNY',     # Cluny
-    'EILDON1',   # Eildon 1
-    'EILDON2',   # Eildon 2
-    'GUTHEGA',   # Guthega
-    'HUMENSW',   # Hume NSW
-    'HUMEV',     # Hume VIC
-    'KAREEYA4',  # Kareeya 4
-    'MCKAY1',    # Mackay
-    'MURRAY',    # Murray 1 (Snowy 2.0 precursor)
-    'PALOONA',   # Paloona
-    'REPULSE',   # Repulse
-    'ROWALLAN',  # Rowallan
-    'SHGEN',     # Shoalhaven
-    'TUMUT3',    # Tumut 3
-    'UPPTUMUT',  # Upper Tumut
-    'W/HOE#2'    # Wivenhoe 2
-]
 
 # File to store historical records
 RECORDS_FILE = Path(config.data_dir) / 'renewable_records.json'
@@ -195,10 +169,8 @@ def calculate_renewable_percentage(gen_data):
         else:
             # Already a Series
             latest_data = gen_data
-        
-        # Fuels to exclude from total generation calculation
-        EXCLUDED_FUELS = ['Battery Storage', 'Transmission Flow']
-        
+
+        # Note: EXCLUDED_FROM_GENERATION imported from fuel_categories
         # Load pumped hydro DUIDs from records file if available
         pumped_hydro_duids = PUMPED_HYDRO_DUIDS
         try:
@@ -221,11 +193,11 @@ def calculate_renewable_percentage(gen_data):
         
         for fuel in latest_data.index:
             value = latest_data[fuel]
-            is_excluded = fuel in EXCLUDED_FUELS
+            is_excluded = fuel in EXCLUDED_FROM_GENERATION
             is_renewable = fuel in RENEWABLE_FUELS
             logger.info(f"Fuel: {fuel}, Value: {value}, Is Renewable: {is_renewable}, Is Excluded: {is_excluded}")
-            
-            if pd.notna(value) and value > 0 and fuel not in EXCLUDED_FUELS:  # Exclude battery and transmission
+
+            if pd.notna(value) and value > 0 and fuel not in EXCLUDED_FROM_GENERATION:  # Exclude storage and transmission
                 total_gen += value
                 if fuel in RENEWABLE_FUELS:
                     renewable_gen += value

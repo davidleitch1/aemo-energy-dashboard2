@@ -15,6 +15,11 @@ import time
 
 from aemo_dashboard.shared.logging_config import get_logger
 from aemo_dashboard.shared.smoothing import apply_ewm_smoothing
+from aemo_dashboard.shared.fuel_categories import (
+    RENEWABLE_FUELS,
+    THERMAL_FUELS,
+    EXCLUDED_FROM_GENERATION
+)
 from aemo_dashboard.generation.generation_query_manager import GenerationQueryManager
 from aemo_dashboard.shared.config import Config
 
@@ -681,9 +686,10 @@ class PenetrationTab:
                 title='Thermal v Renewables - No data available'
             )
         
-        # Define fuel categories
-        renewable_fuels = ['Wind', 'Solar', 'Rooftop', 'Water']
-        thermal_fuels = ['Coal', 'CCGT', 'OCGT', 'Gas other']
+        # Define fuel categories - imported from fuel_categories module
+        # Note: Using centralized RENEWABLE_FUELS and THERMAL_FUELS
+        renewable_fuels = [f for f in RENEWABLE_FUELS if f in ['Wind', 'Solar', 'Rooftop', 'Rooftop Solar', 'Water', 'Hydro']]
+        thermal_fuels = [f for f in THERMAL_FUELS if f in ['Coal', 'CCGT', 'OCGT', 'Gas other']]
         
         # Categorize
         df['category'] = df['fuel_type'].apply(
