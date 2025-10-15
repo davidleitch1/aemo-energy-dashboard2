@@ -213,8 +213,8 @@ def create_app():
 
     return layout
 
-# Create the app at module level so Panel can serve it
-app = create_app()
+# Create the app at module level and mark it as servable
+create_app().servable()
 
 def main():
     """Main function to run the dashboard"""
