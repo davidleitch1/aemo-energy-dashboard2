@@ -202,11 +202,11 @@ def create_app():
     prices = get_data()
     fig = pcht(prices)
     table = display_table(prices)
-    mpl_pane = pn.pane.Matplotlib(fig, sizing_mode='stretch_both')
-    table_pane = pn.pane.DataFrame(table, sizing_mode='stretch_both')
+    mpl_pane = pn.pane.Matplotlib(fig, sizing_mode='fixed', width=450, height=250)
+    table_pane = pn.pane.DataFrame(table, sizing_mode='fixed', width=450, height=350)
 
     # Layout for the Panel
-    layout = pn.Column(table_pane, mpl_pane, max_width=450, max_height=630)
+    layout = pn.Column(table_pane, mpl_pane, sizing_mode='fixed', width=450)
 
     # Set up periodic callback inside the server context
     pn.state.add_periodic_callback(update_plot, 270000)  # 270000ms = 4.5 minutes
