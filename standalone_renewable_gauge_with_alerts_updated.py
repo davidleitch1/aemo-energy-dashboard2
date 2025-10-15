@@ -31,6 +31,11 @@ RENEWABLE_FUELS = ['Wind', 'Solar', 'Water', 'Rooftop Solar', 'Hydro', 'Biomass'
 # Excluded fuel types
 EXCLUDED_FUELS = ['Battery Storage', 'Transmission Flow']
 
+# Main rooftop regions (exclude sub-regions to avoid double-counting)
+# QLDN, QLDS, QLDC are subsets of QLD1
+# TASN, TASS are subsets of TAS1
+MAIN_ROOFTOP_REGIONS = ['NSW1', 'QLD1', 'VIC1', 'SA1', 'TAS1']
+
 # Global Twilio client
 twilio_client = None
 
@@ -243,7 +248,11 @@ def get_current_generation_stats():
                 columns='regionid',
                 values='power'
             ).fillna(0)
-            
+
+            # Filter to main regions only (exclude sub-regions to avoid double-counting)
+            available_regions = [r for r in MAIN_ROOFTOP_REGIONS if r in rooftop_wide.columns]
+            rooftop_wide = rooftop_wide[available_regions]
+
             rooftop_5min = interpolate_rooftop_to_5min(rooftop_wide)
             
             if latest_time in rooftop_5min.index:
@@ -306,15 +315,16 @@ def load_renewable_records(records_file):
         print(f"Error loading records: {e}")
     
     # Return default records
+    # Note: Rooftop and renewable % reduced after fixing double-counting (2025-10-15)
     return {
         'all_time': {
-            'renewable_pct': {'value': 78.7, 'timestamp': '2024-11-06T13:00:00'},
+            'renewable_pct': {'value': 63.0, 'timestamp': '2024-11-06T13:00:00'},  # Reduced from 78.7% (double-counting fix)
             'wind_mw': {'value': 9757, 'timestamp': '2025-07-10T23:10:00'},
             'solar_mw': {'value': 7459, 'timestamp': '2025-02-27T14:30:00'},
-            'rooftop_mw': {'value': 19297, 'timestamp': '2024-12-27T12:30:00'},
+            'rooftop_mw': {'value': 15000, 'timestamp': '2024-12-27T12:30:00'},  # Reduced from 19297 MW (double-counting fix)
             'water_mw': {'value': 6494, 'timestamp': '2023-06-20T18:00:00'}
         },
-        'hourly': {str(h): {'value': 45 + h * 0.5, 'timestamp': '2024-01-01T00:00:00'} 
+        'hourly': {str(h): {'value': 45 + h * 0.5, 'timestamp': '2024-01-01T00:00:00'}
                   for h in range(24)}
     }
 
@@ -633,13 +643,13 @@ def main():
         # Create a fake stats with record-breaking values
         test_stats = {
             'timestamp': datetime.now(),
-            'renewable_pct': 85.0,  # Higher than 78.7%
+            'renewable_pct': 70.0,  # Higher than 63.0% (after double-counting fix)
             'wind_mw': 10000,       # Higher than 9757 MW
             'solar_mw': 8000,       # Higher than 7459 MW
-            'rooftop_mw': 20000,    # Higher than 19297 MW
+            'rooftop_mw': 16000,    # Higher than 15000 MW (after double-counting fix)
             'water_mw': 7000,       # Higher than 6494 MW
-            'renewable_mw': 45000,
-            'total_mw': 52941
+            'renewable_mw': 41000,
+            'total_mw': 58571
         }
         
         data_dir = os.getenv('DATA_DIR', '/tmp')
