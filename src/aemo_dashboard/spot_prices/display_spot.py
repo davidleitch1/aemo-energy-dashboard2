@@ -178,8 +178,15 @@ def pcht(prices):
     plt.close()
     return fig
 
+# Global panes that will be updated
+mpl_pane = None
+table_pane = None
+
 # Function to update the plot
 def update_plot(event=None):
+    global mpl_pane, table_pane
+    if mpl_pane is None or table_pane is None:
+        return
     prices = get_data()
     fig = pcht(prices)
     mpl_pane.object = fig
@@ -187,8 +194,10 @@ def update_plot(event=None):
 
 def create_app():
     """Create the dashboard app"""
+    global mpl_pane, table_pane
+
     logger.info("Creating spot price dashboard app...")
-    
+
     # Create an initial plot
     prices = get_data()
     fig = pcht(prices)
@@ -198,22 +207,18 @@ def create_app():
 
     # Layout for the Panel
     layout = pn.Column(table_pane, mpl_pane, max_width=450, max_height=630)
-    
+
+    # Set up periodic callback inside the server context
+    pn.state.add_periodic_callback(update_plot, 270000)  # 270000ms = 4.5 minutes
+
     return layout
 
 def main():
     """Main function to run the dashboard"""
     logger.info("Starting spot price dashboard...")
-    
-    # Create the app factory function that sets up callbacks inside the server context
-    def app_factory():
-        app = create_app()
-        # Set up periodic callback inside the server context
-        pn.state.add_periodic_callback(update_plot, 270000)  # 270000ms = 4.5 minutes
-        return app
-    
-    # Serve with specific port using the app factory
-    pn.serve(app_factory, port=5007, show=True, autoreload=False)
+
+    # Serve with specific port
+    pn.serve(create_app, port=5007, show=True, autoreload=False)
 
 if __name__ == "__main__":
     main()
