@@ -213,6 +213,9 @@ def create_app():
 
     return layout
 
+# Create the app at module level so Panel can serve it
+app = create_app()
+
 def main():
     """Main function to run the dashboard"""
     logger.info("Starting spot price dashboard...")
