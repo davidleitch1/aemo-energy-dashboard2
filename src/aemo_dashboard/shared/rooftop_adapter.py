@@ -8,6 +8,7 @@ import numpy as np
 from pathlib import Path
 import os
 from datetime import timedelta
+from .fuel_categories import MAIN_ROOFTOP_REGIONS
 
 # Henderson 7-term filter weights
 HENDERSON_7 = np.array([-0.059, 0.059, 0.294, 0.412, 0.294, 0.059, -0.059])
@@ -142,14 +143,26 @@ def load_rooftop_data(
     # Check if this is the new long format
     if 'regionid' in df.columns:
         print(f"Converting rooftop data from 30-min long to 5-min wide format...")
-        
+
         # Convert to wide format first
         df_wide = df.pivot(
             index='settlementdate',
             columns='regionid',
             values='power'
         )
-        
+
+        # Filter to main regions only (exclude sub-regions to avoid double-counting)
+        # This prevents Queensland (QLDN+QLDS+QLDC) and Tasmania (TASN+TASS) from being counted twice
+        available_regions = [r for r in MAIN_ROOFTOP_REGIONS if r in df_wide.columns]
+        if len(available_regions) < len(MAIN_ROOFTOP_REGIONS):
+            missing = set(MAIN_ROOFTOP_REGIONS) - set(available_regions)
+            print(f"⚠️  Warning: Missing main rooftop regions: {missing}")
+
+        # Keep only the 5 main regions
+        df_wide = df_wide[available_regions]
+        print(f"✅ Filtered to {len(available_regions)} main regions (excluded sub-regions)")
+        print(f"   Main regions: {available_regions}")
+
         # Create 5-minute index spanning the data range
         start_time = df_wide.index.min()
         end_time = df_wide.index.max()
