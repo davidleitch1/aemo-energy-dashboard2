@@ -34,6 +34,8 @@ class PriceAnalysisMotor:
         self.date_ranges = {}
         self._last_query_params = None
         
+        self.query_start_date = None
+        self.query_end_date = None
         # Ensure DuckDB views are created
         view_manager.create_all_views()
         
@@ -155,6 +157,10 @@ class PriceAnalysisMotor:
                 
                 # Store query parameters
                 self._last_query_params = query_params
+
+                # Store dates for capacity utilization calculations
+                self.query_start_date = start_dt
+                self.query_end_date = end_dt
                 
                 # Report data period
                 if logger.isEnabledFor(logging.INFO):
@@ -249,7 +255,15 @@ class PriceAnalysisMotor:
                     
                     # Calculate capacity utilization using correct formula
                     # Time span in hours = (end_date - start_date).total_seconds() / 3600
-                    time_span_hours = (grouped['end_date'] - grouped['start_date']).dt.total_seconds() / 3600
+                    # IMPORTANT: Use the QUERY date range, not the min/max of actual data
+                    # This ensures capacity factor is based on the full selected period,
+                    # not just the timestamps where the plant was generating
+                    if self.query_start_date and self.query_end_date:
+                        time_span_hours = (self.query_end_date - self.query_start_date).total_seconds() / 3600
+                    else:
+                        # Fallback to data range (old behavior)
+                        time_span_hours = (grouped["end_date"] - grouped["start_date"]).dt.total_seconds() / 3600
+                    
                     grouped['capacity_utilization_pct'] = np.where(
                         (grouped['capacity_mw'] > 0) & (time_span_hours > 0),
                         (grouped['generation_mwh'] / (grouped['capacity_mw'] * time_span_hours)) * 100,
@@ -464,7 +478,15 @@ class PriceAnalysisMotor:
                 grouped['capacity_mw'] = capacity_info
                 
                 # Calculate capacity utilization using correct formula
-                time_span_hours = (grouped['end_date'] - grouped['start_date']).dt.total_seconds() / 3600
+                # IMPORTANT: Use the QUERY date range, not the min/max of actual data
+                # This ensures capacity factor is based on the full selected period,
+                # not just the timestamps where the plant was generating
+                if self.query_start_date and self.query_end_date:
+                    time_span_hours = (self.query_end_date - self.query_start_date).total_seconds() / 3600
+                else:
+                    # Fallback to data range (old behavior)
+                    time_span_hours = (grouped["end_date"] - grouped["start_date"]).dt.total_seconds() / 3600
+                
                 grouped['capacity_utilization_pct'] = np.where(
                     (grouped['capacity_mw'] > 0) & (time_span_hours > 0),
                     (grouped['generation_mwh'] / (grouped['capacity_mw'] * time_span_hours)) * 100,
