@@ -251,6 +251,7 @@ class HybridQueryManager:
         # Execute query
         with perf_logger.timer("duckdb_integrated_query", threshold=0.5):
             result = self.conn.execute(query).df()
+            logger.info("===== SQL query returned %d records =====" % len(result))
         
         # Ensure proper data types
         if not result.empty:
@@ -418,6 +419,7 @@ class HybridQueryManager:
         
         # Execute
         result = self.conn.execute(query).df()
+        logger.info("===== SQL query returned %d records =====" % len(result))
         
         # Cache if not empty
         if use_cache and not result.empty:
