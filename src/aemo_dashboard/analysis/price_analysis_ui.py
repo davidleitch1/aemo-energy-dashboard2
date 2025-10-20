@@ -448,6 +448,11 @@ class PriceAnalysisUI(param.Parameterized):
                 
                 logger.info(f"Applying date filter: {start_date_str} to {end_date_str}")
                 
+                # IMPORTANT: Update resolution based on current time_range BEFORE integrating data
+                use_30min = (self.time_range == 'All')
+                logger.info(f"Updating motor resolution to {'30min' if use_30min else '5min'} based on time_range: {self.time_range}")
+                self.motor.load_data(use_30min_data=use_30min)
+                
                 # Update loading message for data integration phase
                 self._show_loading("Integrating data (this may take 30-60 seconds for large date ranges)...")
                 
