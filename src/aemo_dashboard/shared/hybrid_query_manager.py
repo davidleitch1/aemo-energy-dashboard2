@@ -239,8 +239,8 @@ class HybridQueryManager:
                 FROM generation_30min g
                 LEFT JOIN duid_mapping d ON g.duid = d.DUID
                 LEFT JOIN prices_30min p
-                    ON g.settlementdate = p.SETTLEMENTDATE
-                    AND d.Region = p.REGIONID
+                    ON g.settlementdate = p.settlementdate
+                    AND d.Region = p.regionid
                 WHERE g.settlementdate >= '{start_date.strftime('%Y-%m-%d %H:%M:%S')}'
                   AND g.settlementdate <= '{end_date.strftime('%Y-%m-%d %H:%M:%S')}'
             ) t
