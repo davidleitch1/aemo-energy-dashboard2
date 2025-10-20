@@ -34,8 +34,6 @@ class PriceAnalysisMotor:
         self.date_ranges = {}
         self._last_query_params = None
         
-        self.query_start_date = None
-        self.query_end_date = None
         # Ensure DuckDB views are created
         view_manager.create_all_views()
         
@@ -157,10 +155,6 @@ class PriceAnalysisMotor:
                 
                 # Store query parameters
                 self._last_query_params = query_params
-
-                # Store dates for capacity utilization calculations
-                self.query_start_date = start_dt
-                self.query_end_date = end_dt
                 
                 # Report data period
                 if logger.isEnabledFor(logging.INFO):
@@ -228,14 +222,11 @@ class PriceAnalysisMotor:
                 grouped.columns = ['total_generation_sum', 'total_revenue_dollars', 'start_date', 'end_date', 'record_count']
                 
                 # Calculate actual MWh generation based on resolution
-                logger.info("========== DIAGNOSTIC: Resolution = %s ==========" % self.resolution)
                 # scadavalue sum = sum of MW readings across intervals
                 if self.resolution == '5min':
                     # Convert to MWh: sum(MW) × (5min / 60min/hr) = sum(MW) × (1/12) = MWh
-                    logger.info("========== DIAGNOSTIC: Applied 5min factor (5/60) ==========")
                     grouped['generation_mwh'] = grouped['total_generation_sum'] * (5.0 / 60.0)
                 else:  # 30min
-                    logger.info("========== DIAGNOSTIC: Applied 30min factor (0.5) ==========")
                     # Convert to MWh: sum(MW) × (30min / 60min/hr) = sum(MW) × 0.5 = MWh
                     grouped['generation_mwh'] = grouped['total_generation_sum'] * 0.5
                 grouped['average_price_per_mwh'] = np.where(
@@ -258,15 +249,7 @@ class PriceAnalysisMotor:
                     
                     # Calculate capacity utilization using correct formula
                     # Time span in hours = (end_date - start_date).total_seconds() / 3600
-                    # IMPORTANT: Use the QUERY date range, not the min/max of actual data
-                    # This ensures capacity factor is based on the full selected period,
-                    # not just the timestamps where the plant was generating
-                    if self.query_start_date and self.query_end_date:
-                        time_span_hours = (self.query_end_date - self.query_start_date).total_seconds() / 3600
-                    else:
-                        # Fallback to data range (old behavior)
-                        time_span_hours = (grouped["end_date"] - grouped["start_date"]).dt.total_seconds() / 3600
-                    
+                    time_span_hours = (grouped['end_date'] - grouped['start_date']).dt.total_seconds() / 3600
                     grouped['capacity_utilization_pct'] = np.where(
                         (grouped['capacity_mw'] > 0) & (time_span_hours > 0),
                         (grouped['generation_mwh'] / (grouped['capacity_mw'] * time_span_hours)) * 100,
@@ -481,15 +464,7 @@ class PriceAnalysisMotor:
                 grouped['capacity_mw'] = capacity_info
                 
                 # Calculate capacity utilization using correct formula
-                # IMPORTANT: Use the QUERY date range, not the min/max of actual data
-                # This ensures capacity factor is based on the full selected period,
-                # not just the timestamps where the plant was generating
-                if self.query_start_date and self.query_end_date:
-                    time_span_hours = (self.query_end_date - self.query_start_date).total_seconds() / 3600
-                else:
-                    # Fallback to data range (old behavior)
-                    time_span_hours = (grouped["end_date"] - grouped["start_date"]).dt.total_seconds() / 3600
-                
+                time_span_hours = (grouped['end_date'] - grouped['start_date']).dt.total_seconds() / 3600
                 grouped['capacity_utilization_pct'] = np.where(
                     (grouped['capacity_mw'] > 0) & (time_span_hours > 0),
                     (grouped['generation_mwh'] / (grouped['capacity_mw'] * time_span_hours)) * 100,

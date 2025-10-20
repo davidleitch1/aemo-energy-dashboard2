@@ -224,7 +224,6 @@ class HybridQueryManager:
             """
         else:
             query = f"""
-            logger.info(f"🔍 [DIAGNOSTIC] Building 30min query: using generation_30min and prices_30min tables")
             SELECT {select_columns}
             FROM (
                 SELECT

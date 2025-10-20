@@ -228,14 +228,18 @@ class PriceAnalysisMotor:
                 grouped.columns = ['total_generation_sum', 'total_revenue_dollars', 'start_date', 'end_date', 'record_count']
                 
                 # Calculate actual MWh generation based on resolution
-                logger.info("========== DIAGNOSTIC: Resolution = %s ==========" % self.resolution)
                 # scadavalue sum = sum of MW readings across intervals
+                # DIAGNOSTIC: Log resolution and conversion details
+                logger.info(f"🔍 [DIAGNOSTIC] Converting MW to MWh using resolution: {self.resolution}")
+                if not grouped.empty:
+                    sample_idx = 0
+                    sample_mw = grouped.iloc[sample_idx]["total_generation_sum"] if len(grouped) > 0 else 0
+                    logger.info(f"🔍 [DIAGNOSTIC] Sample MW sum (before conversion): {sample_mw:,.2f} MW")
                 if self.resolution == '5min':
                     # Convert to MWh: sum(MW) × (5min / 60min/hr) = sum(MW) × (1/12) = MWh
-                    logger.info("========== DIAGNOSTIC: Applied 5min factor (5/60) ==========")
                     grouped['generation_mwh'] = grouped['total_generation_sum'] * (5.0 / 60.0)
+                    logger.info(f"🔍 [DIAGNOSTIC] Applied 5min conversion factor: {5.0/60.0:.6f} (5min/60min)")
                 else:  # 30min
-                    logger.info("========== DIAGNOSTIC: Applied 30min factor (0.5) ==========")
                     # Convert to MWh: sum(MW) × (30min / 60min/hr) = sum(MW) × 0.5 = MWh
                     grouped['generation_mwh'] = grouped['total_generation_sum'] * 0.5
                 grouped['average_price_per_mwh'] = np.where(
