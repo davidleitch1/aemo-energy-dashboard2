@@ -250,6 +250,7 @@ class HybridQueryManager:
         
         # Execute query
         with perf_logger.timer("duckdb_integrated_query", threshold=0.5):
+            logger.info("===== EXECUTING QUERY: %s" % query[:500])
             result = self.conn.execute(query).df()
             logger.info("===== SQL query returned %d records =====" % len(result))
         
@@ -418,6 +419,7 @@ class HybridQueryManager:
         """
         
         # Execute
+        logger.info("===== EXECUTING QUERY: %s" % query[:500])
         result = self.conn.execute(query).df()
         logger.info("===== SQL query returned %d records =====" % len(result))
         

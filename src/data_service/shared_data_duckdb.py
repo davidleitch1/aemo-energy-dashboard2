@@ -74,8 +74,8 @@ class DuckDBDataService:
         logger.info("Registering parquet files as views...")
         
         # Generation data
-        gen_30_path = str(config.gen_output_file).replace('scada5.parquet', 'scada30.parquet')
-        gen_5_path = str(config.gen_output_file)
+        gen_5_path = str(config.scada5_file)
+        gen_30_path = str(config.scada30_file)
         
         self.conn.execute(f"""
             CREATE VIEW generation_30min AS 
