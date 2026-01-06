@@ -66,6 +66,8 @@ class Config:
         self.transmission_output_file = self._get_file_path('TRANSMISSION_OUTPUT_FILE', 'transmission_flows.parquet')
         self.rooftop_solar_file = self._get_file_path('ROOFTOP_SOLAR_FILE', 'rooftop_solar.parquet')
         self.curtailment5_file = self._get_file_path('CURTAILMENT5_FILE', 'curtailment5.parquet')
+        self.curtailment_regional5_file = self._get_file_path('CURTAILMENT_REGIONAL5_FILE', 'curtailment_regional5.parquet')
+        self.curtailment_duid5_file = self._get_file_path('CURTAILMENT_DUID5_FILE', 'curtailment_duid5.parquet')
         self.scada5_file = self._get_file_path('GEN_OUTPUT_FILE_5MIN', 'scada5.parquet')
         self.scada30_file = self._get_file_path('GEN_OUTPUT_FILE', 'scada30.parquet')
     

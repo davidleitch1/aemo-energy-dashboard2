@@ -5681,12 +5681,14 @@ def main():
     
     # Serve the app with dark theme and proper session handling
     pn.serve(
-        app_factory, 
-        port=port, 
+        app_factory,
+        port=port,
         allow_websocket_origin=[f"localhost:{port}", "nemgen.itkservices2.com"],
         show=True,
         autoreload=False,  # Disable autoreload in production
-        threaded=True     # Enable threading for better concurrent handling
+        threaded=True,     # Enable threading for better concurrent handling
+        websocket_ping_interval=60,  # Send WebSocket PING every 60 seconds
+        websocket_ping_timeout=30    # Wait 30 seconds for PONG response
     )
 
 if __name__ == "__main__":

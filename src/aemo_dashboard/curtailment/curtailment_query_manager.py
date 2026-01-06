@@ -1,221 +1,109 @@
 #!/usr/bin/env python3
 """
-Curtailment Query Manager - DuckDB-based queries for curtailment analysis.
+Curtailment Query Manager - DuckDB-based queries for regional curtailment analysis.
 
-This module provides efficient DuckDB queries for curtailment data without
-loading entire datasets into memory. Based on the generation_query_manager pattern.
+Uses curtailment_regional5.parquet which contains UIGF-based curtailment data
+aggregated by region (NSW1, QLD1, SA1, TAS1, VIC1).
+
+Schema:
+    settlementdate, regionid, solar_uigf, solar_cleared, solar_curtailment,
+    wind_uigf, wind_cleared, wind_curtailment, total_curtailment
 """
 
 import duckdb
 import pandas as pd
 import logging
 from datetime import datetime, timedelta
-from typing import Optional, Dict, Any, Tuple, List
+from typing import Optional, Dict, Any, List
 from pathlib import Path
-from ..shared.resolution_utils import periods_for_hours
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
 class CurtailmentQueryManager:
-    """DuckDB-based query manager for curtailment analysis"""
+    """DuckDB-based query manager for regional curtailment analysis"""
 
     def __init__(self):
         """Initialize DuckDB connection and register parquet files"""
         self.conn = duckdb.connect(':memory:')
 
-        # Get data paths from config (works on both dev and production machines)
+        # Get data paths from config
         from ..shared.config import config
-        self.curtailment5_path = config.curtailment5_file
-        self.scada5_path = config.scada5_file
-        self.scada30_path = config.scada30_file
+        self.curtailment_regional_path = config.curtailment_regional5_file
+        self.curtailment_duid_path = config.curtailment_duid5_file
         self.gen_info_path = config.gen_info_file
+        self.prices_path = config.spot_hist_file
+
+        # Load DUID to region mapping from gen_info
+        self._load_duid_region_mapping()
 
         # Create views for parquet files
-        self._create_base_views()
-
-        # Create optimized curtailment views
-        self._create_curtailment_views()
+        self._create_views()
 
         # Cache for frequently accessed data
         self.cache = {}
         self.cache_ttl = 300  # 5 minutes
         self.cache_timestamps = {}
 
-        logger.info("CurtailmentQueryManager initialized with DuckDB backend")
+        logger.info("CurtailmentQueryManager initialized with regional and DUID UIGF data")
 
-    def _create_base_views(self):
-        """Create base views for parquet files - called AFTER _create_curtailment_views sets up duid_regions"""
+    def _load_duid_region_mapping(self):
+        """Load DUID to region mapping from gen_info"""
         try:
-            # Register curtailment5 data (collected by production collector)
-            # Note: curtailment5.parquet has UPPERCASE columns: SETTLEMENTDATE, DUID, AVAILABILITY, etc.
-            self.conn.execute(f"""
-                CREATE OR REPLACE VIEW curtailment5 AS
-                SELECT
-                    SETTLEMENTDATE as timestamp,
-                    DUID as duid,
-                    AVAILABILITY as availgen,
-                    TOTALCLEARED as dispatchcap,
-                    SEMIDISPATCHCAP as semidispatchcap,
-                    CURTAILMENT as curtailment_calc
-                FROM read_parquet('{self.curtailment5_path}')
-            """)
+            import pickle
+            with open(self.gen_info_path, 'rb') as f:
+                gen_info = pickle.load(f)
 
-            logger.info("Base curtailment view created successfully")
-
+            if isinstance(gen_info, pd.DataFrame) and 'DUID' in gen_info.columns and 'Region' in gen_info.columns:
+                # Create mapping dict: DUID -> Region (e.g., 'NSW1', 'VIC1', etc.)
+                self.duid_to_region = dict(zip(gen_info['DUID'], gen_info['Region']))
+                logger.info(f"Loaded {len(self.duid_to_region)} DUID->Region mappings")
+            else:
+                self.duid_to_region = {}
+                logger.warning("Could not load DUID->Region mapping from gen_info")
         except Exception as e:
-            logger.error(f"Error creating base views: {e}")
-            raise
+            self.duid_to_region = {}
+            logger.warning(f"Error loading DUID->Region mapping: {e}")
 
-    def _create_scada_views(self):
-        """Create SCADA views - called AFTER duid_regions table is created"""
+    def _create_views(self):
+        """Create DuckDB views for curtailment data"""
         try:
-            # Register 5-minute SCADA data (filter by wind/solar DUIDs from duid_regions)
-            # Note: scada5.parquet has lowercase column names: settlementdate, duid, scadavalue
+            # Create base view for regional curtailment data
             self.conn.execute(f"""
-                CREATE OR REPLACE VIEW scada AS
+                CREATE OR REPLACE VIEW curtailment_regional AS
                 SELECT
                     settlementdate as timestamp,
-                    UPPER(duid) as duid,
-                    scadavalue as scada
-                FROM read_parquet('{self.scada5_path}')
-                WHERE UPPER(duid) IN (SELECT DISTINCT UPPER(duid) FROM duid_regions)
+                    regionid as region,
+                    solar_uigf,
+                    solar_cleared,
+                    solar_curtailment,
+                    wind_uigf,
+                    wind_cleared,
+                    wind_curtailment,
+                    total_curtailment,
+                    -- Calculate totals for compatibility
+                    solar_uigf + wind_uigf as total_uigf,
+                    solar_cleared + wind_cleared as total_cleared
+                FROM read_parquet('{self.curtailment_regional_path}')
             """)
 
-            # Register 30-minute SCADA data
-            self.conn.execute(f"""
-                CREATE OR REPLACE VIEW scada30_view AS
-                SELECT
-                    settlementdate as timestamp,
-                    UPPER(duid) as duid,
-                    scadavalue as scada
-                FROM read_parquet('{self.scada30_path}')
-                WHERE UPPER(duid) IN (SELECT DISTINCT UPPER(duid) FROM duid_regions)
-            """)
-
-            logger.info("SCADA views created successfully")
-
-        except Exception as e:
-            logger.error(f"Error creating SCADA views: {e}")
-            raise
-
-    def _create_curtailment_views(self):
-        """Create optimized curtailment calculation views"""
-        try:
-            # Load comprehensive wind/solar mapping (extracted from gen_info)
-            ws_mapping_path = Path(__file__).parent / 'wind_solar_regions_complete.pkl'
-
-            region_data = []
-
-            # Load wind/solar mapping
-            if ws_mapping_path.exists():
-                import pickle
-                with open(ws_mapping_path, 'rb') as f:
-                    ws_mapping = pickle.load(f)
-
-                for duid, info in ws_mapping.items():
-                    region_data.append({
-                        'duid': duid,
-                        'region': info.get('region', 'Unknown'),
-                        'fuel': info.get('fuel', 'Unknown')
-                    })
-
-                logger.info(f"Loaded {len(ws_mapping)} wind/solar mappings")
-            else:
-                logger.warning("Wind/solar mapping file not found!")
-
-            if region_data:
-                import pandas as pd
-                region_df = pd.DataFrame(region_data)
-                self.conn.execute("CREATE OR REPLACE TABLE duid_regions AS SELECT * FROM region_df")
-                logger.info(f"Created duid_regions table with {len(region_data)} entries")
-            else:
-                # Create fallback region table
-                self.conn.execute("""
-                    CREATE OR REPLACE TABLE duid_regions AS
-                    SELECT 'DUMMY' as duid, 'Unknown' as region, 'Unknown' as fuel WHERE 1=0
-                """)
-                logger.warning("No region mapping data found, created empty duid_regions table")
-
-            # Now create SCADA views (after duid_regions table exists)
-            self._create_scada_views()
-
-            # Create merged curtailment view with SCADA data joined
-            # This provides the 'scada' column that curtailment_tab.py expects
-            self.conn.execute("""
-                CREATE OR REPLACE VIEW curtailment_merged AS
-                SELECT
-                    c.timestamp,
-                    c.duid,
-                    c.availgen,
-                    c.dispatchcap,
-                    GREATEST(0, COALESCE(c.curtailment_calc, 0)) as curtailment,
-                    -- Add actual generation from SCADA (CRITICAL for dashboard plotting)
-                    COALESCE(s.scada, c.dispatchcap, 0) as scada,
-                    -- Determine if curtailed based on SEMIDISPATCHCAP flag
-                    CASE
-                        WHEN c.semidispatchcap = 1 AND c.curtailment_calc > 0 THEN true
-                        ELSE false
-                    END as is_curtailed,
-                    -- Curtailment type based on SEMIDISPATCHCAP
-                    CASE
-                        WHEN c.semidispatchcap = 1 AND c.curtailment_calc > 0 THEN 'network'
-                        WHEN c.semidispatchcap = 0 AND c.dispatchcap < c.availgen * 0.95 THEN 'economic'
-                        ELSE 'none'
-                    END as curtailment_type,
-                    -- Get region from mapping table or use fallback
-                    COALESCE(r.region,
-                        CASE
-                            -- Common patterns for region detection
-                            WHEN c.duid LIKE 'NSW%' OR c.duid LIKE 'BW%' OR c.duid LIKE 'LD%' THEN 'NSW1'
-                            WHEN c.duid LIKE 'QLD%' OR c.duid LIKE 'BRA%' OR c.duid LIKE 'DAR%' THEN 'QLD1'
-                            WHEN c.duid LIKE 'SA%' OR c.duid LIKE 'LK%' OR c.duid LIKE 'TO%' THEN 'SA1'
-                            WHEN c.duid LIKE 'TAS%' OR c.duid LIKE 'BAS%' THEN 'TAS1'
-                            WHEN c.duid LIKE 'VIC%' OR c.duid LIKE 'MUR%' OR c.duid LIKE 'YAL%' THEN 'VIC1'
-                            -- Additional patterns
-                            WHEN c.duid LIKE '%NSW%' THEN 'NSW1'
-                            WHEN c.duid LIKE '%QLD%' THEN 'QLD1'
-                            WHEN c.duid LIKE '%SA' THEN 'SA1'
-                            WHEN c.duid LIKE '%TAS%' THEN 'TAS1'
-                            WHEN c.duid LIKE '%VIC%' THEN 'VIC1'
-                            ELSE 'Unknown'
-                        END
-                    ) as region,
-                    -- Get fuel type from mapping or use pattern
-                    COALESCE(r.fuel,
-                        CASE
-                            WHEN c.duid LIKE '%WF%' OR UPPER(c.duid) LIKE '%WIND%' THEN 'Wind'
-                            WHEN c.duid LIKE '%SF%' OR UPPER(c.duid) LIKE '%SOLAR%' OR c.duid LIKE '%PV%' THEN 'Solar'
-                            ELSE 'Unknown'
-                        END
-                    ) as fuel
-                FROM curtailment5 c
-                LEFT JOIN duid_regions r ON c.duid = r.duid
-                LEFT JOIN scada s ON c.timestamp = s.timestamp AND c.duid = s.duid
-            """)
-
-            # Create 30-minute curtailment view
-            # Aggregates 5-min curtailment data to 30-minute intervals
+            # Create 30-minute aggregation view
             self.conn.execute("""
                 CREATE OR REPLACE VIEW curtailment_30min AS
                 SELECT
-                    -- Round timestamp to 30-minute boundary
                     date_trunc('hour', timestamp) +
                     INTERVAL '30 minutes' * FLOOR(EXTRACT(MINUTE FROM timestamp) / 30) as timestamp,
-                    duid,
                     region,
-                    fuel,
-                    -- For availgen: take MAX within 30-min period (plant's max capacity)
-                    MAX(availgen) as availgen,
-                    -- For dispatch cap: take AVG within 30-min period
-                    AVG(dispatchcap) as dispatchcap,
-                    -- For curtailment: average MW over the 30-min period
-                    AVG(curtailment) as curtailment,
-                    -- For scada (actual generation): average MW over the 30-min period
-                    AVG(scada) as scada
-                FROM curtailment_merged
-                GROUP BY 1, 2, 3, 4
+                    AVG(solar_uigf) as solar_uigf,
+                    AVG(solar_cleared) as solar_cleared,
+                    AVG(solar_curtailment) as solar_curtailment,
+                    AVG(wind_uigf) as wind_uigf,
+                    AVG(wind_cleared) as wind_cleared,
+                    AVG(wind_curtailment) as wind_curtailment,
+                    AVG(total_curtailment) as total_curtailment
+                FROM curtailment_regional
+                GROUP BY 1, 2
             """)
 
             # Create hourly aggregation view
@@ -224,45 +112,67 @@ class CurtailmentQueryManager:
                 SELECT
                     date_trunc('hour', timestamp) as timestamp,
                     region,
-                    fuel,
-                    AVG(availgen) as availgen,
-                    AVG(dispatchcap) as dispatchcap,
-                    AVG(curtailment) as curtailment,
-                    AVG(scada) as scada,
-                    AVG(CASE WHEN is_curtailed THEN 1.0 ELSE 0.0 END) as curtailment_rate,
-                    SUM(CASE WHEN curtailment_type = 'local' THEN 1 ELSE 0 END) as local_count,
-                    SUM(CASE WHEN curtailment_type = 'network' THEN 1 ELSE 0 END) as network_count,
-                    SUM(CASE WHEN curtailment_type = 'economic' THEN 1 ELSE 0 END) as economic_count
-                FROM curtailment_merged
-                GROUP BY 1, 2, 3
+                    AVG(solar_uigf) as solar_uigf,
+                    AVG(solar_cleared) as solar_cleared,
+                    AVG(solar_curtailment) as solar_curtailment,
+                    AVG(wind_uigf) as wind_uigf,
+                    AVG(wind_cleared) as wind_cleared,
+                    AVG(wind_curtailment) as wind_curtailment,
+                    AVG(total_curtailment) as total_curtailment
+                FROM curtailment_regional
+                GROUP BY 1, 2
             """)
 
-            # Create daily aggregation view
+            # Create daily aggregation view (converts to MWh)
             self.conn.execute("""
                 CREATE OR REPLACE VIEW curtailment_daily AS
                 SELECT
                     date_trunc('day', timestamp) as timestamp,
                     region,
-                    fuel,
-                    duid,
-                    MAX(availgen) as availgen,  -- Max capacity for the day
-                    MIN(CASE WHEN dispatchcap > 0 THEN dispatchcap END) as min_dispatchcap,  -- Minimum constraint
-                    AVG(dispatchcap) as avg_dispatchcap,
-                    AVG(curtailment) as curtailment,
-                    SUM(curtailment) / 12 as curtailment_mwh,  -- Total curtailment in MWh (5min to MWh)
-                    SUM(scada) / 12 as generation_mwh,  -- Total actual generation in MWh (5min to MWh)
-                    AVG(scada) as scada,  -- Average actual generation (MW)
-                    -- Only count curtailment rate when dispatch cap was constraining
-                    AVG(CASE WHEN dispatchcap < availgen - 5 THEN 1.0 ELSE 0.0 END) as constraint_rate,
-                    COUNT(CASE WHEN dispatchcap < availgen - 5 THEN 1 END) as constrained_intervals
-                FROM curtailment_merged
-                GROUP BY 1, 2, 3, 4
+                    -- Convert 5-min MW values to MWh (multiply by 5/60 = 1/12)
+                    SUM(solar_curtailment) / 12 as solar_curtailment_mwh,
+                    SUM(wind_curtailment) / 12 as wind_curtailment_mwh,
+                    SUM(total_curtailment) / 12 as total_curtailment_mwh,
+                    SUM(solar_cleared) / 12 as solar_generation_mwh,
+                    SUM(wind_cleared) / 12 as wind_generation_mwh,
+                    -- Average MW values
+                    AVG(solar_curtailment) as avg_solar_curtailment_mw,
+                    AVG(wind_curtailment) as avg_wind_curtailment_mw,
+                    AVG(total_curtailment) as avg_total_curtailment_mw,
+                    -- Max values
+                    MAX(solar_curtailment) as max_solar_curtailment_mw,
+                    MAX(wind_curtailment) as max_wind_curtailment_mw,
+                    MAX(total_curtailment) as max_total_curtailment_mw
+                FROM curtailment_regional
+                GROUP BY 1, 2
             """)
 
-            logger.info("Curtailment views created successfully")
+            # Create DUID-level curtailment view
+            self.conn.execute(f"""
+                CREATE OR REPLACE VIEW curtailment_duid AS
+                SELECT
+                    settlementdate as timestamp,
+                    duid,
+                    uigf,
+                    totalcleared,
+                    curtailment
+                FROM read_parquet('{self.curtailment_duid_path}')
+            """)
+
+            # Create prices view for economic/grid curtailment classification
+            self.conn.execute(f"""
+                CREATE OR REPLACE VIEW prices AS
+                SELECT
+                    settlementdate as timestamp,
+                    regionid as region,
+                    rrp as price
+                FROM read_parquet('{self.prices_path}')
+            """)
+
+            logger.info("Curtailment views created successfully (regional + DUID + prices)")
 
         except Exception as e:
-            logger.error(f"Error creating curtailment views: {e}")
+            logger.error(f"Error creating views: {e}")
             raise
 
     def query_curtailment_data(
@@ -271,7 +181,6 @@ class CurtailmentQueryManager:
         end_date: datetime,
         region: Optional[str] = None,
         fuel: Optional[str] = None,
-        duid: Optional[str] = None,
         resolution: str = 'auto'
     ) -> pd.DataFrame:
         """
@@ -281,65 +190,33 @@ class CurtailmentQueryManager:
             start_date: Start of date range
             end_date: End of date range
             region: Optional region filter ('NSW1', 'QLD1', etc.)
-            fuel: Optional fuel type filter ('Wind', 'Solar')
-            duid: Optional specific DUID filter
+            fuel: Optional fuel type filter ('Wind', 'Solar', 'All')
             resolution: Data resolution ('auto', '5min', '30min', 'hourly', 'daily')
 
         Returns:
             DataFrame with curtailment data
         """
         try:
-            # Determine resolution and aggregate for daily when needed
+            # Determine resolution
             if resolution == 'auto':
                 days_diff = (end_date - start_date).days
                 if days_diff > 30:
                     resolution = 'daily'
-                    view = 'curtailment_daily'
                 elif days_diff > 7:
                     resolution = 'hourly'
-                    view = 'curtailment_hourly'
                 elif days_diff > 2:
                     resolution = '30min'
-                    view = 'curtailment_30min'
                 else:
                     resolution = '5min'
-                    view = 'curtailment_merged'
-            elif resolution == 'daily':
-                view = 'curtailment_daily'
-                # For daily, we need to aggregate by region/fuel if not looking at specific DUID
-                if not (duid and duid != 'All'):
-                    # Aggregate daily data by region/fuel
-                    view = 'curtailment_daily_agg'
-                    region_filter = f" AND region = '{region}'" if region and region != 'All' else ""
-                    fuel_filter = f" AND fuel = '{fuel}'" if fuel and fuel != 'All' else ""
-                    self.conn.execute(f"""
-                        CREATE OR REPLACE TEMP VIEW curtailment_daily_agg AS
-                        SELECT
-                            timestamp,
-                            region,
-                            fuel,
-                            SUM(generation_mwh) as scada,
-                            SUM(curtailment_mwh) as curtailment,
-                            MAX(availgen) as availgen,
-                            MIN(min_dispatchcap) as dispatchcap,
-                            AVG(constraint_rate) * 100 as curtailment_rate
-                        FROM curtailment_daily
-                        WHERE timestamp >= '{start_date.strftime('%Y-%m-%d')}'
-                          AND timestamp <= '{end_date.strftime('%Y-%m-%d')}'
-                          {region_filter}
-                          {fuel_filter}
-                        GROUP BY timestamp, region, fuel
-                    """)
-            elif resolution == 'hourly':
-                view = 'curtailment_hourly'
-            elif resolution == '30min':
-                view = 'curtailment_30min'
-            elif resolution == '5min':
-                view = 'curtailment_merged'
-            else:
-                # Default to 30min for unknown resolution
-                logger.warning(f"Unknown resolution {resolution}, defaulting to 30min")
-                view = 'curtailment_30min'
+
+            # Select view based on resolution
+            view_map = {
+                '5min': 'curtailment_regional',
+                '30min': 'curtailment_30min',
+                'hourly': 'curtailment_hourly',
+                'daily': 'curtailment_daily'
+            }
+            view = view_map.get(resolution, 'curtailment_30min')
 
             # Build WHERE clause
             conditions = [
@@ -350,28 +227,42 @@ class CurtailmentQueryManager:
             if region and region != 'All':
                 conditions.append(f"region = '{region}'")
 
-            if fuel and fuel != 'All':
-                conditions.append(f"fuel = '{fuel}'")
-
-            if duid and duid != 'All':
-                conditions.append(f"duid = '{duid}'")
-                # Don't force 5min view, respect the resolution parameter
-
             where_clause = " AND ".join(conditions)
 
-            # Build query
+            # Build SELECT based on fuel filter
+            if fuel and fuel != 'All':
+                if fuel == 'Solar':
+                    select_cols = """
+                        timestamp, region,
+                        solar_uigf as uigf,
+                        solar_cleared as cleared,
+                        solar_curtailment as curtailment,
+                        'Solar' as fuel
+                    """
+                elif fuel == 'Wind':
+                    select_cols = """
+                        timestamp, region,
+                        wind_uigf as uigf,
+                        wind_cleared as cleared,
+                        wind_curtailment as curtailment,
+                        'Wind' as fuel
+                    """
+                else:
+                    select_cols = "*"
+            else:
+                select_cols = "*"
+
             query = f"""
-                SELECT *
+                SELECT {select_cols}
                 FROM {view}
                 WHERE {where_clause}
-                ORDER BY timestamp
+                ORDER BY timestamp, region
             """
 
             # Check cache
-            cache_key = f"{view}_{start_date}_{end_date}_{region}_{fuel}_{duid}"
+            cache_key = f"{view}_{start_date}_{end_date}_{region}_{fuel}"
             if cache_key in self.cache:
                 cache_time = self.cache_timestamps.get(cache_key, 0)
-                # Fix: Use total_seconds() instead of .seconds to get full duration
                 if (datetime.now() - datetime.fromtimestamp(cache_time)).total_seconds() < self.cache_ttl:
                     logger.debug(f"Cache hit for {cache_key}")
                     return self.cache[cache_key].copy()
@@ -403,63 +294,30 @@ class CurtailmentQueryManager:
             DataFrame with regional curtailment statistics
         """
         try:
-            # Query curtailment data (without rate - we'll calculate it after joining with actual output)
-            curt_query = f"""
-                SELECT
-                    region,
-                    COUNT(DISTINCT duid) as unit_count,
-                    SUM(curtailment) / 12 as total_curtailment_mwh,
-                    AVG(CASE WHEN availgen > 0 THEN curtailment ELSE NULL END) as avg_curtailment_mw,
-                    MAX(curtailment) as max_curtailment_mw,
-                    SUM(CASE WHEN curtailment_type = 'local' THEN 1 ELSE 0 END) as local_events,
-                    SUM(CASE WHEN curtailment_type = 'network' THEN 1 ELSE 0 END) as network_events,
-                    SUM(CASE WHEN curtailment_type = 'economic' THEN 1 ELSE 0 END) as economic_events
-                FROM curtailment_merged
-                WHERE timestamp >= '{start_date.strftime('%Y-%m-%d %H:%M:%S')}'
-                  AND timestamp <= '{end_date.strftime('%Y-%m-%d %H:%M:%S')}'
-                  AND region != 'Unknown'
-                GROUP BY region
-            """
-
-            # Load gen_info and register it (can't use read_parquet on .pkl file)
-            import pickle
-            import pandas as pd
-            with open(self.gen_info_path, 'rb') as f:
-                gen_info = pickle.load(f)
-
-            # If gen_info is a dict, convert to DataFrame
-            if isinstance(gen_info, dict):
-                gen_info_df = pd.DataFrame.from_dict(gen_info, orient='index')
-                gen_info_df = gen_info_df.reset_index().rename(columns={'index': 'DUID'})
-            else:
-                gen_info_df = gen_info
-
-            # Register as temp table
-            self.conn.execute("CREATE OR REPLACE TEMP TABLE temp_gen_info AS SELECT * FROM gen_info_df")
-
-            # Query actual generation using scada30 and gen_info (same pattern as Generation mix tab)
-            gen_query = f"""
-                SELECT
-                    d.Region as region,
-                    SUM(g.scadavalue) * 0.5 as actual_generation_mwh
-                FROM read_parquet('{self.scada30_path}') g
-                JOIN temp_gen_info d ON g.duid = d.DUID
-                WHERE g.settlementdate >= '{start_date.strftime('%Y-%m-%d %H:%M:%S')}'
-                  AND g.settlementdate <= '{end_date.strftime('%Y-%m-%d %H:%M:%S')}'
-                  AND d.Fuel IN ('Wind', 'Solar')
-                  AND d.Region IS NOT NULL
-                GROUP BY d.Region
-            """
-
-            # Merge the results and calculate curtailment rate as: Curtailed / (Curtailed + Actual)
             query = f"""
                 SELECT
-                    c.*,
-                    COALESCE(g.actual_generation_mwh, 0) as actual_generation_mwh,
-                    (c.total_curtailment_mwh / NULLIF(c.total_curtailment_mwh + COALESCE(g.actual_generation_mwh, 0), 0)) * 100 as curtailment_rate_pct
-                FROM ({curt_query}) c
-                LEFT JOIN ({gen_query}) g ON c.region = g.region
-                ORDER BY c.total_curtailment_mwh DESC
+                    region,
+                    -- Curtailment totals (MWh)
+                    SUM(solar_curtailment) / 12 as solar_curtailment_mwh,
+                    SUM(wind_curtailment) / 12 as wind_curtailment_mwh,
+                    SUM(total_curtailment) / 12 as total_curtailment_mwh,
+                    -- Generation totals (MWh)
+                    SUM(solar_cleared) / 12 as solar_generation_mwh,
+                    SUM(wind_cleared) / 12 as wind_generation_mwh,
+                    SUM(solar_cleared + wind_cleared) / 12 as total_generation_mwh,
+                    -- Curtailment rates (%)
+                    (SUM(solar_curtailment) / NULLIF(SUM(solar_uigf), 0)) * 100 as solar_curtailment_rate_pct,
+                    (SUM(wind_curtailment) / NULLIF(SUM(wind_uigf), 0)) * 100 as wind_curtailment_rate_pct,
+                    (SUM(total_curtailment) / NULLIF(SUM(solar_uigf + wind_uigf), 0)) * 100 as total_curtailment_rate_pct,
+                    -- Max curtailment
+                    MAX(solar_curtailment) as max_solar_curtailment_mw,
+                    MAX(wind_curtailment) as max_wind_curtailment_mw,
+                    MAX(total_curtailment) as max_total_curtailment_mw
+                FROM curtailment_regional
+                WHERE timestamp >= '{start_date.strftime('%Y-%m-%d %H:%M:%S')}'
+                  AND timestamp <= '{end_date.strftime('%Y-%m-%d %H:%M:%S')}'
+                GROUP BY region
+                ORDER BY total_curtailment_mwh DESC
             """
 
             return self.conn.execute(query).df()
@@ -468,58 +326,368 @@ class CurtailmentQueryManager:
             logger.error(f"Error querying region summary: {e}")
             return pd.DataFrame()
 
-    def query_top_curtailed_units(
+    def query_fuel_summary(
         self,
         start_date: datetime,
         end_date: datetime,
-        limit: int = 10,
         region: Optional[str] = None
     ) -> pd.DataFrame:
         """
-        Get top curtailed units.
-
-        Args:
-            start_date: Start datetime
-            end_date: End datetime
-            limit: Maximum number of units to return
-            region: Optional region filter (e.g., 'NSW1', 'VIC1')
+        Get summary statistics by fuel type.
 
         Returns:
-            DataFrame with top curtailed units
+            DataFrame with fuel-type curtailment statistics
         """
         try:
-            # Build region filter
-            region_filter = ""
-            if region:
-                region_filter = f"AND region = '{region}'"
+            region_filter = f"AND region = '{region}'" if region and region != 'All' else ""
 
             query = f"""
-                SELECT
-                    duid,
-                    region,
-                    fuel,
-                    COUNT(*) as curtailed_intervals,
-                    -- Curtailment rate: % of potential energy curtailed
-                    (SUM(curtailment) / NULLIF(SUM(CASE WHEN availgen > 0 THEN availgen ELSE 0 END), 0)) * 100 as curtailment_rate_pct,
-                    SUM(curtailment) / 12 as total_curtailment_mwh,
-                    AVG(CASE WHEN availgen > 0 THEN curtailment ELSE NULL END) as avg_curtailment_mw,
-                    MAX(curtailment) as max_curtailment_mw
-                FROM curtailment_merged
-                WHERE timestamp >= '{start_date.strftime('%Y-%m-%d %H:%M:%S')}'
-                  AND timestamp <= '{end_date.strftime('%Y-%m-%d %H:%M:%S')}'
-                  AND region != 'Unknown'
-                  {region_filter}
-                GROUP BY duid, region, fuel
-                HAVING SUM(curtailment) > 0  -- Only show units that have curtailment
-                ORDER BY total_curtailment_mwh DESC
-                LIMIT {limit}
+                WITH fuel_data AS (
+                    SELECT
+                        'Solar' as fuel,
+                        SUM(solar_curtailment) / 12 as curtailment_mwh,
+                        SUM(solar_cleared) / 12 as generation_mwh,
+                        SUM(solar_uigf) / 12 as potential_mwh,
+                        (SUM(solar_curtailment) / NULLIF(SUM(solar_uigf), 0)) * 100 as curtailment_rate_pct,
+                        MAX(solar_curtailment) as max_curtailment_mw
+                    FROM curtailment_regional
+                    WHERE timestamp >= '{start_date.strftime('%Y-%m-%d %H:%M:%S')}'
+                      AND timestamp <= '{end_date.strftime('%Y-%m-%d %H:%M:%S')}'
+                      {region_filter}
+
+                    UNION ALL
+
+                    SELECT
+                        'Wind' as fuel,
+                        SUM(wind_curtailment) / 12 as curtailment_mwh,
+                        SUM(wind_cleared) / 12 as generation_mwh,
+                        SUM(wind_uigf) / 12 as potential_mwh,
+                        (SUM(wind_curtailment) / NULLIF(SUM(wind_uigf), 0)) * 100 as curtailment_rate_pct,
+                        MAX(wind_curtailment) as max_curtailment_mw
+                    FROM curtailment_regional
+                    WHERE timestamp >= '{start_date.strftime('%Y-%m-%d %H:%M:%S')}'
+                      AND timestamp <= '{end_date.strftime('%Y-%m-%d %H:%M:%S')}'
+                      {region_filter}
+                )
+                SELECT * FROM fuel_data
+                ORDER BY curtailment_mwh DESC
             """
 
             return self.conn.execute(query).df()
 
         except Exception as e:
-            logger.error(f"Error querying top curtailed units: {e}")
+            logger.error(f"Error querying fuel summary: {e}")
             return pd.DataFrame()
+
+    def query_top_duids(
+        self,
+        start_date: datetime,
+        end_date: datetime,
+        top_n: int = 20,
+        region: Optional[str] = None,
+        curtailment_type: str = 'all'
+    ) -> pd.DataFrame:
+        """
+        Get top N DUIDs by total curtailment for the period.
+
+        Args:
+            start_date: Start of date range
+            end_date: End of date range
+            top_n: Number of top DUIDs to return
+            region: Optional region filter ('NSW1', 'VIC1', etc.)
+            curtailment_type: 'all', 'economic' (price < 0), or 'grid' (price >= 0)
+
+        Returns:
+            DataFrame with DUID curtailment statistics sorted by total curtailment
+        """
+        try:
+            # For curtailment type filtering, we need to join with prices
+            # First get raw curtailment data with price info
+            query = f"""
+                SELECT
+                    c.timestamp,
+                    c.duid,
+                    c.uigf,
+                    c.totalcleared,
+                    c.curtailment
+                FROM curtailment_duid c
+                WHERE c.timestamp >= '{start_date.strftime('%Y-%m-%d %H:%M:%S')}'
+                  AND c.timestamp <= '{end_date.strftime('%Y-%m-%d %H:%M:%S')}'
+                  AND c.curtailment > 0
+            """
+
+            curt_df = self.conn.execute(query).df()
+
+            if curt_df.empty:
+                logger.info(f"No curtailment data found for period")
+                return pd.DataFrame()
+
+            # Add region from mapping
+            curt_df['region'] = curt_df['duid'].map(self.duid_to_region)
+
+            # Join with prices - need to get prices for the same period
+            prices_query = f"""
+                SELECT timestamp, region, price
+                FROM prices
+                WHERE timestamp >= '{start_date.strftime('%Y-%m-%d %H:%M:%S')}'
+                  AND timestamp <= '{end_date.strftime('%Y-%m-%d %H:%M:%S')}'
+            """
+            prices_df = self.conn.execute(prices_query).df()
+
+            # Merge curtailment with prices
+            merged = curt_df.merge(prices_df, on=['timestamp', 'region'], how='left')
+
+            # Classify curtailment type
+            merged['curt_type'] = merged['price'].apply(
+                lambda x: 'economic' if pd.notna(x) and x < 0 else 'grid'
+            )
+
+            # Filter by curtailment type if specified
+            if curtailment_type == 'economic':
+                merged = merged[merged['curt_type'] == 'economic']
+            elif curtailment_type == 'grid':
+                merged = merged[merged['curt_type'] == 'grid']
+
+            # Filter by region if specified
+            if region and region != 'All':
+                merged = merged[merged['region'] == region]
+
+            if merged.empty:
+                logger.info(f"No {curtailment_type} curtailment data found")
+                return pd.DataFrame()
+
+            # Aggregate by DUID
+            result = merged.groupby('duid').agg({
+                'curtailment': ['sum', 'max', 'mean', 'count'],
+                'totalcleared': 'sum',
+                'uigf': 'sum'
+            }).reset_index()
+
+            # Flatten column names
+            result.columns = ['duid', 'curtailment_sum', 'max_curtailment_mw',
+                            'avg_curtailment_mw', 'curtailment_intervals',
+                            'totalcleared_sum', 'uigf_sum']
+
+            # Convert to MWh (5-min intervals / 12)
+            result['curtailment_mwh'] = result['curtailment_sum'] / 12
+            result['generation_mwh'] = result['totalcleared_sum'] / 12
+            result['uigf_mwh'] = result['uigf_sum'] / 12
+
+            # Calculate curtailment rate
+            result['curtailment_rate_pct'] = (
+                result['curtailment_sum'] / result['uigf_sum'].replace(0, pd.NA) * 100
+            )
+
+            # Sort and limit
+            result = result.sort_values('curtailment_mwh', ascending=False).head(top_n)
+
+            # Select final columns
+            result = result[['duid', 'curtailment_mwh', 'generation_mwh', 'uigf_mwh',
+                           'curtailment_rate_pct', 'max_curtailment_mw',
+                           'avg_curtailment_mw', 'curtailment_intervals']]
+
+            logger.info(f"Queried top {top_n} DUIDs for region={region}, type={curtailment_type}, found {len(result)}")
+            return result
+
+        except Exception as e:
+            logger.error(f"Error querying top DUIDs: {e}")
+            import traceback
+            traceback.print_exc()
+            return pd.DataFrame()
+
+    def query_top_duids_by_type(
+        self,
+        start_date: datetime,
+        end_date: datetime,
+        top_n: int = 20,
+        region: Optional[str] = None
+    ) -> pd.DataFrame:
+        """
+        Get top N DUIDs with curtailment split by type (economic vs grid).
+
+        Args:
+            start_date: Start of date range
+            end_date: End of date range
+            top_n: Number of top DUIDs to return
+            region: Optional region filter ('NSW1', 'VIC1', etc.)
+
+        Returns:
+            DataFrame with DUID curtailment by type, suitable for side-by-side bar chart
+        """
+        try:
+            # Get raw curtailment data
+            query = f"""
+                SELECT
+                    c.timestamp,
+                    c.duid,
+                    c.uigf,
+                    c.totalcleared,
+                    c.curtailment
+                FROM curtailment_duid c
+                WHERE c.timestamp >= '{start_date.strftime('%Y-%m-%d %H:%M:%S')}'
+                  AND c.timestamp <= '{end_date.strftime('%Y-%m-%d %H:%M:%S')}'
+                  AND c.curtailment > 0
+            """
+
+            curt_df = self.conn.execute(query).df()
+
+            if curt_df.empty:
+                return pd.DataFrame()
+
+            # Add region from mapping
+            curt_df['region'] = curt_df['duid'].map(self.duid_to_region)
+
+            # Filter by region if specified
+            if region and region != 'All':
+                curt_df = curt_df[curt_df['region'] == region]
+
+            if curt_df.empty:
+                return pd.DataFrame()
+
+            # Get prices
+            prices_query = f"""
+                SELECT timestamp, region, price
+                FROM prices
+                WHERE timestamp >= '{start_date.strftime('%Y-%m-%d %H:%M:%S')}'
+                  AND timestamp <= '{end_date.strftime('%Y-%m-%d %H:%M:%S')}'
+            """
+            prices_df = self.conn.execute(prices_query).df()
+
+            # Merge
+            merged = curt_df.merge(prices_df, on=['timestamp', 'region'], how='left')
+
+            # Classify
+            merged['curt_type'] = merged['price'].apply(
+                lambda x: 'Economic' if pd.notna(x) and x < 0 else 'Grid'
+            )
+
+            # Aggregate by DUID and type
+            agg = merged.groupby(['duid', 'curt_type']).agg({
+                'curtailment': 'sum',
+                'uigf': 'sum'
+            }).reset_index()
+
+            # Convert to MWh
+            agg['curtailment_mwh'] = agg['curtailment'] / 12
+            agg['uigf_mwh'] = agg['uigf'] / 12
+
+            # Pivot to get economic and grid side by side
+            pivot = agg.pivot_table(
+                index='duid',
+                columns='curt_type',
+                values='curtailment_mwh',
+                fill_value=0
+            ).reset_index()
+
+            # Ensure both columns exist
+            if 'Economic' not in pivot.columns:
+                pivot['Economic'] = 0
+            if 'Grid' not in pivot.columns:
+                pivot['Grid'] = 0
+
+            # Calculate total and sort
+            pivot['Total'] = pivot['Economic'] + pivot['Grid']
+            pivot = pivot.sort_values('Total', ascending=False).head(top_n)
+
+            # Melt back to long format for plotting
+            result = pivot.melt(
+                id_vars=['duid', 'Total'],
+                value_vars=['Economic', 'Grid'],
+                var_name='curtailment_type',
+                value_name='curtailment_mwh'
+            )
+
+            logger.info(f"Queried top {top_n} DUIDs by type for region={region}, found {len(pivot)} DUIDs")
+            return result
+
+        except Exception as e:
+            logger.error(f"Error querying top DUIDs by type: {e}")
+            import traceback
+            traceback.print_exc()
+            return pd.DataFrame()
+
+    def query_duid_timeseries(
+        self,
+        start_date: datetime,
+        end_date: datetime,
+        duid: str,
+        resolution: str = 'hourly'
+    ) -> pd.DataFrame:
+        """
+        Get time series data for a specific DUID.
+
+        Args:
+            start_date: Start of date range
+            end_date: End of date range
+            duid: The DUID to query
+            resolution: Data resolution ('5min', '30min', 'hourly', 'daily')
+
+        Returns:
+            DataFrame with DUID curtailment time series
+        """
+        try:
+            # Build aggregation based on resolution
+            if resolution == '5min':
+                time_expr = "timestamp"
+                agg_suffix = ""
+            elif resolution == '30min':
+                time_expr = "date_trunc('hour', timestamp) + INTERVAL '30 minutes' * FLOOR(EXTRACT(MINUTE FROM timestamp) / 30)"
+                agg_suffix = "AVG"
+            elif resolution == 'hourly':
+                time_expr = "date_trunc('hour', timestamp)"
+                agg_suffix = "AVG"
+            else:  # daily
+                time_expr = "date_trunc('day', timestamp)"
+                agg_suffix = "SUM"  # Sum for daily to get MWh
+
+            if resolution == '5min':
+                query = f"""
+                    SELECT
+                        timestamp,
+                        duid,
+                        uigf,
+                        totalcleared,
+                        curtailment
+                    FROM curtailment_duid
+                    WHERE timestamp >= '{start_date.strftime('%Y-%m-%d %H:%M:%S')}'
+                      AND timestamp <= '{end_date.strftime('%Y-%m-%d %H:%M:%S')}'
+                      AND duid = '{duid}'
+                    ORDER BY timestamp
+                """
+            else:
+                divisor = "/ 12" if resolution == 'daily' else ""
+                query = f"""
+                    SELECT
+                        {time_expr} as timestamp,
+                        duid,
+                        {agg_suffix}(uigf) {divisor} as uigf,
+                        {agg_suffix}(totalcleared) {divisor} as totalcleared,
+                        {agg_suffix}(curtailment) {divisor} as curtailment
+                    FROM curtailment_duid
+                    WHERE timestamp >= '{start_date.strftime('%Y-%m-%d %H:%M:%S')}'
+                      AND timestamp <= '{end_date.strftime('%Y-%m-%d %H:%M:%S')}'
+                      AND duid = '{duid}'
+                    GROUP BY 1, 2
+                    ORDER BY timestamp
+                """
+
+            result = self.conn.execute(query).df()
+            logger.info(f"Queried {len(result)} {resolution} records for {duid}")
+            return result
+
+        except Exception as e:
+            logger.error(f"Error querying DUID timeseries: {e}")
+            return pd.DataFrame()
+
+    def get_duid_list(self) -> List[str]:
+        """Get list of all DUIDs with curtailment data"""
+        try:
+            query = "SELECT DISTINCT duid FROM curtailment_duid ORDER BY duid"
+            result = self.conn.execute(query).df()
+            return result['duid'].tolist()
+        except Exception as e:
+            logger.error(f"Error getting DUID list: {e}")
+            return []
 
     def get_statistics(self) -> Dict[str, Any]:
         """Get query manager statistics"""
@@ -534,16 +702,16 @@ class CurtailmentQueryManager:
                 SELECT
                     MIN(timestamp) as earliest,
                     MAX(timestamp) as latest,
-                    COUNT(DISTINCT duid) as unit_count,
+                    COUNT(DISTINCT region) as region_count,
                     COUNT(*) as total_records
-                FROM curtailment_merged
+                FROM curtailment_regional
             """).df()
 
             if not coverage.empty:
                 stats['data_coverage'] = {
                     'earliest': coverage['earliest'].iloc[0],
                     'latest': coverage['latest'].iloc[0],
-                    'unit_count': coverage['unit_count'].iloc[0],
+                    'region_count': coverage['region_count'].iloc[0],
                     'total_records': coverage['total_records'].iloc[0]
                 }
         except:
@@ -562,36 +730,39 @@ class CurtailmentQueryManager:
 if __name__ == "__main__":
     import time
 
-    print("Testing CurtailmentQueryManager...")
+    print("Testing CurtailmentQueryManager with regional data...")
 
     manager = CurtailmentQueryManager()
 
-    # Test 1: Query last 24 hours
+    # Test 1: Query last 7 days
     end_date = datetime.now()
-    start_date = end_date - timedelta(days=1)
+    start_date = end_date - timedelta(days=7)
 
-    print(f"\n1. Querying 24 hours of data...")
+    print(f"\n1. Querying 7 days of data...")
     t1 = time.time()
     data = manager.query_curtailment_data(start_date, end_date, region='NSW1')
-    print(f"✓ Query completed in {time.time() - t1:.2f}s")
-    print(f"✓ Records: {len(data):,}")
+    print(f"   Query completed in {time.time() - t1:.2f}s")
+    print(f"   Records: {len(data):,}")
+    if not data.empty:
+        print(f"   Columns: {list(data.columns)}")
+        print(f"   Sample:\n{data.head()}")
 
     # Test 2: Regional summary
     print(f"\n2. Querying regional summary...")
     t2 = time.time()
     summary = manager.query_region_summary(start_date, end_date)
-    print(f"✓ Query completed in {time.time() - t2:.2f}s")
+    print(f"   Query completed in {time.time() - t2:.2f}s")
     print(summary)
 
-    # Test 3: Top curtailed units
-    print(f"\n3. Querying top curtailed units...")
+    # Test 3: Fuel summary
+    print(f"\n3. Querying fuel summary...")
     t3 = time.time()
-    top_units = manager.query_top_curtailed_units(start_date, end_date, limit=5)
-    print(f"✓ Query completed in {time.time() - t3:.2f}s")
-    print(top_units)
+    fuel_summary = manager.query_fuel_summary(start_date, end_date)
+    print(f"   Query completed in {time.time() - t3:.2f}s")
+    print(fuel_summary)
 
     # Show statistics
     print(f"\n4. Statistics:")
     stats = manager.get_statistics()
     for key, value in stats.items():
-        print(f"  {key}: {value}")
+        print(f"   {key}: {value}")

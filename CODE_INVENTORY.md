@@ -1,8 +1,8 @@
 # AEMO Energy Dashboard - Code Inventory
 
 ## Summary
-- **Total Python Files in Dashboard:** 87 files
-- **Total Lines of Code:** 35,697 lines
+- **Total Python Files in Dashboard:** 88 files
+- **Total Lines of Code:** 36,514 lines
 - **Main Runner Scripts:** 13 scripts
 - **Project Structure:** Modular dashboard with 10 functional components
 
@@ -154,11 +154,17 @@ The AEMO Energy Dashboard is a comprehensive, real-time energy market analysis p
 | src/aemo_dashboard/station/station_search.py | 361 | Fuzzy search engine for finding stations and DUIDs |
 | src/aemo_dashboard/station/station_analysis.py | 452 | Station analysis calculation engine |
 | src/aemo_dashboard/station/station_analysis_original.py | 507 | Original station analysis implementation |
-| src/aemo_dashboard/station/station_analysis_ui.py | 1,148 | Individual station/DUID analysis UI with time-series and time-of-day charts |
+| src/aemo_dashboard/station/station_analysis_ui.py | 1,165 | Individual station/DUID analysis UI with time-series and time-of-day charts |
+| src/aemo_dashboard/station/coal_analysis.py | 800 | Coal station analysis with revenue, utilization, and evolution charts |
 
-**Total Station Analysis: 5 files, 2,480 lines**
+**Total Station Analysis: 6 files, 3,297 lines**
 
 **Purpose:** Detailed analysis of individual generators with time-series, time-of-day patterns, and performance metrics
+
+**Subtabs:**
+- **Individual Stations:** Deep-dive analysis of individual generators/DUIDs with time-series, time-of-day patterns, and summary statistics
+- **Coal:** Revenue and capacity utilization comparison for all coal stations (latest 12m vs previous 12m) using grouped horizontal bar charts
+- **Coal Evolution:** Long-term trends for Bayswater, Tarong, and Loy Yang B showing capacity utilization over time (90-day smoothed) and time-of-day dispatch pattern changes (latest 12m vs 5 years ago)
 
 ### Insights Tab
 | File | Lines | Description |
@@ -223,7 +229,7 @@ The AEMO Energy Dashboard is a comprehensive, real-time energy market analysis p
 | Penetration Tab | 7 | 3,626 | Renewable energy trends |
 | Curtailment Tab | 3 | 1,152 | Renewable curtailment analysis |
 | Price Analysis Tab | 4 | 2,904 | Weighted average price analysis |
-| Station Analysis Tab | 5 | 2,480 | Individual generator analysis |
+| Station Analysis Tab | 6 | 3,297 | Individual generator & coal station analysis |
 | Insights Tab | 2 | 2,094 | Market insights and commentary |
 | Spot Prices Updates | 4 | 800 | Price data updates and alerts |
 | Rooftop Updates | 2 | 528 | Rooftop solar data updates |
@@ -231,7 +237,7 @@ The AEMO Energy Dashboard is a comprehensive, real-time energy market analysis p
 | Combined Updates | 2 | 127 | Orchestrates all updates |
 | Diagnostics | 2 | 358 | Data quality checks |
 | Core Package | 1 | 0 | Package initialization |
-| **TOTAL** | **87** | **35,697** | **Complete Dashboard** |
+| **TOTAL** | **88** | **36,514** | **Complete Dashboard** |
 
 ## Architecture Notes
 
@@ -262,6 +268,9 @@ The AEMO Energy Dashboard is a comprehensive, real-time energy market analysis p
 4. **Penetration:** Renewable energy transition
 5. **Curtailment:** Renewable curtailment events
 6. **Station:** Individual generator deep-dive
+   - *Individual Stations:* Time-series and time-of-day analysis for any generator
+   - *Coal:* Revenue and capacity utilization comparison for all coal stations
+   - *Coal Evolution:* Long-term trends for Bayswater, Tarong, Loy Yang B
 7. **Insights:** Market commentary and analysis
 
 ## Development Notes
@@ -289,6 +298,6 @@ The AEMO Energy Dashboard is a comprehensive, real-time energy market analysis p
 
 ---
 
-**Generated:** 2025-10-15
+**Generated:** 2026-01-06
 **Project:** AEMO Energy Dashboard
 **Location:** /Volumes/davidleitch/aemo_production/aemo-energy-dashboard2
