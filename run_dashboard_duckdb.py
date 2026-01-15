@@ -10,7 +10,9 @@ import os
 import sys
 import time
 import logging
+import signal
 from pathlib import Path
+from contextlib import contextmanager
 
 # Set environment variable BEFORE any imports
 os.environ['USE_DUCKDB'] = 'true'
@@ -26,7 +28,67 @@ logging.basicConfig(
 logger = logging.getLogger('dashboard_startup')
 
 
-def init_duckdb_with_retry(max_attempts: int = 3, delay: float = 3.0) -> bool:
+class TimeoutError(Exception):
+    """Raised when an operation times out"""
+    pass
+
+
+@contextmanager
+def timeout(seconds: int, error_message: str = "Operation timed out"):
+    """Context manager that raises TimeoutError after specified seconds (Unix only)"""
+    def timeout_handler(signum, frame):
+        raise TimeoutError(error_message)
+    
+    # Set the signal handler
+    old_handler = signal.signal(signal.SIGALRM, timeout_handler)
+    signal.alarm(seconds)
+    
+    try:
+        yield
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, old_handler)
+
+
+def warmup_parquet_access(conn, timeout_seconds: int = 30) -> bool:
+    """
+    Execute warmup queries that actually read from parquet files.
+    
+    This catches file contention issues before the dashboard tries to initialize.
+    Uses LIMIT 1 to minimize data transfer but still test file access.
+    
+    Args:
+        conn: DuckDB connection
+        timeout_seconds: Maximum time to wait for each query
+        
+    Returns:
+        True if all warmup queries succeeded, False otherwise
+    """
+    warmup_queries = [
+        ("generation_30min", "SELECT settlementdate FROM generation_30min LIMIT 1"),
+        ("prices_30min", "SELECT settlementdate FROM prices_30min LIMIT 1"),
+    ]
+    
+    for view_name, query in warmup_queries:
+        try:
+            logger.info(f"  Warming up {view_name}...")
+            with timeout(timeout_seconds, f"Timeout reading {view_name}"):
+                result = conn.execute(query).fetchone()
+                if result:
+                    logger.info(f"  {view_name} OK")
+                else:
+                    logger.warning(f"  {view_name} returned no data (may be empty)")
+        except TimeoutError as e:
+            logger.error(f"  {view_name} TIMEOUT: {e}")
+            return False
+        except Exception as e:
+            logger.error(f"  {view_name} ERROR: {e}")
+            return False
+    
+    return True
+
+
+def init_duckdb_with_retry(max_attempts: int = 3, delay: float = 5.0) -> bool:
     """
     Initialize DuckDB service with retry logic.
 
@@ -46,17 +108,34 @@ def init_duckdb_with_retry(max_attempts: int = 3, delay: float = 3.0) -> bool:
             logger.info(f"Initializing DuckDB service (attempt {attempt + 1}/{max_attempts})...")
 
             # Import the DuckDB service - this triggers initialization
+            # Force re-initialization by clearing any cached instance
+            import importlib
+            if 'data_service.shared_data_duckdb' in sys.modules:
+                # Reset the singleton to force re-initialization
+                module = sys.modules['data_service.shared_data_duckdb']
+                if hasattr(module, 'DuckDBDataService'):
+                    module.DuckDBDataService._instance = None
+                    module.DuckDBDataService._instance = None
+                importlib.reload(module)
+            
             from data_service.shared_data_duckdb import duckdb_data_service
 
-            # Verify it's working with a simple health check
-            # Try to execute a simple query to confirm connection is valid
-            if hasattr(duckdb_data_service, 'conn') and duckdb_data_service.conn is not None:
-                # Try a simple query
-                duckdb_data_service.conn.execute("SELECT 1").fetchone()
-                logger.info("DuckDB service initialized successfully")
-                return True
-            else:
+            # Verify connection exists
+            if not hasattr(duckdb_data_service, 'conn') or duckdb_data_service.conn is None:
                 raise Exception("DuckDB connection not established")
+            
+            # Basic connection test
+            duckdb_data_service.conn.execute("SELECT 1").fetchone()
+            logger.info("DuckDB connection OK")
+            
+            # CRITICAL: Warmup queries that actually read parquet files
+            # This catches file contention before dashboard initialization
+            logger.info("Running parquet warmup queries...")
+            if not warmup_parquet_access(duckdb_data_service.conn, timeout_seconds=30):
+                raise Exception("Parquet warmup queries failed")
+            
+            logger.info("DuckDB service initialized and warmed up successfully")
+            return True
 
         except Exception as e:
             error_msg = str(e).lower()
@@ -64,12 +143,13 @@ def init_duckdb_with_retry(max_attempts: int = 3, delay: float = 3.0) -> bool:
             # Check for common file access errors
             is_file_error = any(err in error_msg for err in [
                 'magic bytes', 'cannot open', 'invalid input',
-                'file is locked', 'permission denied', 'no such file'
+                'file is locked', 'permission denied', 'no such file',
+                'timeout', 'warmup'
             ])
 
             if is_file_error:
                 logger.warning(
-                    f"File access error on attempt {attempt + 1}/{max_attempts}: {str(e)[:100]}"
+                    f"File access error on attempt {attempt + 1}/{max_attempts}: {str(e)[:200]}"
                 )
             else:
                 logger.error(f"Initialization error: {e}")
@@ -92,7 +172,7 @@ def main():
     print("Press Ctrl+C to stop\n")
 
     # Initialize DuckDB with retry logic
-    if not init_duckdb_with_retry(max_attempts=3, delay=3.0):
+    if not init_duckdb_with_retry(max_attempts=3, delay=5.0):
         logger.error("Failed to initialize DuckDB. Please check if data files are accessible.")
         logger.info("Tip: If the data collector is running, try stopping it temporarily.")
         sys.exit(1)
