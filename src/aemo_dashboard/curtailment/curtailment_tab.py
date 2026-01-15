@@ -10,11 +10,11 @@ import pandas as pd
 import hvplot.pandas
 from datetime import datetime, timedelta, date
 from typing import Optional, Tuple
-import logging
+from ..shared.logging_config import get_logger
 
 from .curtailment_query_manager import CurtailmentQueryManager
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # NEM Regions
 NEM_REGIONS = ['NSW1', 'QLD1', 'SA1', 'TAS1', 'VIC1']

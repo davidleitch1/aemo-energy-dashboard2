@@ -9,9 +9,9 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, Tuple
-import logging
+from .logging_config import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 class PerformanceOptimizer:
     """Intelligent data resampling for optimal visualization performance"""

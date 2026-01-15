@@ -18,12 +18,13 @@ import pickle
 from pathlib import Path
 import json
 import sys
+import logging
 import time
 from bokeh.models import DatetimeTickFormatter
 from dotenv import load_dotenv
 
 from ..shared.config import config
-from ..shared.logging_config import setup_logging, get_logger
+from ..shared.logging_config import setup_logging, get_logger, log_once
 from ..shared.email_alerts import EmailAlertManager
 from ..analysis.price_analysis_ui import create_price_analysis_tab
 from ..station.station_analysis_ui import create_station_analysis_tab
@@ -390,8 +391,8 @@ class EnergyDashboard(param.Parameterized):
                 self.duid_to_fuel = dict(zip(self.gen_info_df['DUID'], self.gen_info_df['Fuel']))
                 self.duid_to_region = dict(zip(self.gen_info_df['DUID'], self.gen_info_df['Region']))
                 
-                logger.info(f"Loaded {len(self.gen_info_df)} DUID mappings")
-                logger.info(f"Fuel types: {self.gen_info_df['Fuel'].unique()}")
+                logger.debug(f"Loaded {len(self.gen_info_df)} DUID mappings")
+                logger.debug(f"Fuel types: {self.gen_info_df['Fuel'].unique()}")
                 
             else:
                 logger.error(f"gen_info.pkl not found at {GEN_INFO_FILE}")
@@ -438,7 +439,7 @@ class EnergyDashboard(param.Parameterized):
         logger.info(f"Added {len(duids_to_add)} DUIDs to exception list")
     
     def handle_unknown_duids(self, unknown_duids, df):
-        """Handle unknown DUIDs - log and potentially send alerts"""
+        """Handle unknown DUIDs - log summary and potentially send alerts"""
         
         # Load exception list
         exception_duids = self.load_duid_exception_list()
@@ -447,29 +448,17 @@ class EnergyDashboard(param.Parameterized):
         new_unknown_duids = unknown_duids - exception_duids
         known_exception_duids = unknown_duids & exception_duids
         
-        # Always log the issue
-        logger.warning(f"🚨 Found {len(unknown_duids)} unknown DUIDs not in gen_info.pkl:")
-        logger.warning(f"   - {len(new_unknown_duids)} are NEW (will trigger email if enabled)")
-        logger.warning(f"   - {len(known_exception_duids)} are in exception list (no email)")
+        # Use log_once to avoid spam - only log summary once per hour per unique set
+        if new_unknown_duids:
+            duid_key = f"unknown_duids_{len(new_unknown_duids)}"
+            sample_duids = sorted(new_unknown_duids)[:5]
+            suffix = f"... and {len(new_unknown_duids) - 5} more" if len(new_unknown_duids) > 5 else ""
+            log_once(logger, logging.WARNING, duid_key,
+                     f"Found {len(new_unknown_duids)} NEW unknown DUIDs: {sample_duids}{suffix}")
         
-        # PERFORMANCE FIX: Get latest records for all unknown DUIDs in single operation
-        if unknown_duids:
-            # Filter to only unknown DUIDs and get most recent record for each
-            unknown_df = df[df['duid'].isin(unknown_duids)]
-            if not unknown_df.empty:
-                # Get latest record for each DUID efficiently
-                latest_records = unknown_df.groupby('duid').tail(1).set_index('duid')
-                
-                for duid in sorted(unknown_duids):
-                    if duid in latest_records.index:
-                        sample = latest_records.loc[duid]
-                        exception_flag = " [EXCEPTION LIST]" if duid in exception_duids else " [NEW]"
-                        logger.warning(f"  - {duid}: {sample['scadavalue']:.1f} MW at {sample['settlementdate']}{exception_flag}")
-                    else:
-                        logger.warning(f"  - {duid}: No data found")
-            else:
-                for duid in sorted(unknown_duids):
-                    logger.warning(f"  - {duid}: No data found")
+        # Log exception list matches only at debug level
+        if known_exception_duids:
+            logger.debug(f"Ignoring {len(known_exception_duids)} known exception DUIDs")
         
         # Only send email for new unknown DUIDs not in exception list
         if new_unknown_duids:
@@ -631,7 +620,7 @@ class EnergyDashboard(param.Parameterized):
             
             # For long date ranges, use pre-aggregated data from query manager
             if days_span > 30:  # Use aggregated data for ranges > 30 days
-                logger.info(f"Using pre-aggregated data for {days_span:.0f} day range")
+                logger.debug(f"Using pre-aggregated data for {days_span:.0f} day range")
                 
                 # Query aggregated data by fuel type
                 df = self.query_manager.query_generation_by_fuel(
@@ -661,7 +650,7 @@ class EnergyDashboard(param.Parameterized):
                 
             else:
                 # For short date ranges, use existing raw data approach
-                logger.info(f"Using raw DUID data for {days_span:.0f} day range")
+                logger.debug(f"Using raw DUID data for {days_span:.0f} day range")
                 from ..shared.adapter_selector import load_generation_data
                 
                 df = load_generation_data(
@@ -698,7 +687,7 @@ class EnergyDashboard(param.Parameterized):
                 # Set flag to indicate we're using raw data
                 self._using_aggregated_data = False
                 
-                logger.info(f"Loaded {len(df)} raw generation records")
+                logger.debug(f"Loaded {len(df)} raw generation records")
             
             self.gen_output_df = df
                 
@@ -723,19 +712,19 @@ class EnergyDashboard(param.Parameterized):
             )
             
             # Debug: Check the structure
-            logger.info(f"Price data columns: {df.columns.tolist()}")
-            logger.info(f"Price data index: {df.index.name}")
-            logger.info(f"Price data shape: {df.shape}")
-            logger.info(f"Price data dtypes:\n{df.dtypes}")
+            logger.debug(f"Price data columns: {df.columns.tolist()}")
+            logger.debug(f"Price data index: {df.index.name}")
+            logger.debug(f"Price data shape: {df.shape}")
+            logger.debug(f"Price data dtypes:\n{df.dtypes}")
             
             # Check if SETTLEMENTDATE is the index
             if df.index.name == 'SETTLEMENTDATE':
                 # Reset index to make SETTLEMENTDATE a regular column
                 df = df.reset_index()
-                logger.info("Reset index - SETTLEMENTDATE is now a column")
+                logger.debug("Reset index - SETTLEMENTDATE is now a column")
             
             # Now check columns again
-            logger.info(f"Columns after reset_index: {df.columns.tolist()}")
+            logger.debug(f"Columns after reset_index: {df.columns.tolist()}")
             
             # Verify we have the required columns
             required_cols = ['SETTLEMENTDATE', 'RRP', 'REGIONID']
@@ -769,7 +758,7 @@ class EnergyDashboard(param.Parameterized):
                 df = df[df['REGIONID'] == 'NSW1']
             
             logger.info(f"Price data shape after region filtering: {df.shape}")
-            logger.info(f"Available regions in data: {df['REGIONID'].unique()}")
+            logger.debug(f"Available regions in data: {df['REGIONID'].unique()}")
             
             # Ensure data is sorted by time
             df = df.sort_values('SETTLEMENTDATE')
@@ -794,8 +783,8 @@ class EnergyDashboard(param.Parameterized):
                 
                 logger.info(f"Loaded {len(clean_df)} price records for {self.time_range}")
                 if not clean_df.empty:
-                    logger.info(f"Price range: ${clean_df['RRP'].min():.2f} to ${clean_df['RRP'].max():.2f}")
-                    logger.info(f"Time range: {clean_df['settlementdate'].min()} to {clean_df['settlementdate'].max()}")
+                    logger.debug(f"Price range: ${clean_df['RRP'].min():.2f} to ${clean_df['RRP'].max():.2f}")
+                    logger.debug(f"Time range: {clean_df['settlementdate'].min()} to {clean_df['settlementdate'].max()}")
                 
                 return clean_df
                 
@@ -823,7 +812,7 @@ class EnergyDashboard(param.Parameterized):
             needs_optimization = days_span > 90  # Optimize for ranges > 3 months
             
             if needs_optimization:
-                logger.info(f"Long date range detected ({days_span:.1f} days), applying performance optimization")
+                logger.debug(f"Long date range detected ({days_span:.1f} days), applying performance optimization")
                 df, metadata = load_transmission_data(
                     start_date=start_datetime,
                     end_date=end_datetime,
@@ -831,15 +820,15 @@ class EnergyDashboard(param.Parameterized):
                     optimize_for_plotting=True,
                     plot_type='transmission'
                 )
-                logger.info(f"Transmission optimization: {metadata.get('description', 'Unknown')}")
-                logger.info(f"Reduction: {metadata.get('reduction_ratio', 0):.1%} of original data")
+                logger.debug(f"Transmission optimization: {metadata.get('description', 'Unknown')}")
+                logger.debug(f"Reduction: {metadata.get('reduction_ratio', 0):.1%} of original data")
             else:
                 df = load_transmission_data(
                     start_date=start_datetime,
                     end_date=end_datetime,
                     resolution='auto'
                 )
-            logger.info(f"Loaded transmission data using enhanced adapter: {df.shape}")
+            logger.debug(f"Loaded transmission data using enhanced adapter: {df.shape}")
             
             if df.empty:
                 self.transmission_df = pd.DataFrame()
@@ -847,9 +836,9 @@ class EnergyDashboard(param.Parameterized):
             
             # Store transmission data
             self.transmission_df = df
-            logger.info(f"Loaded {len(df)} transmission records using enhanced adapter with auto resolution")
-            logger.info(f"Transmission date range: {df['settlementdate'].min()} to {df['settlementdate'].max()}")
-            logger.info(f"Available interconnectors: {df['interconnectorid'].unique()}")
+            logger.debug(f"Loaded {len(df)} transmission records using enhanced adapter with auto resolution")
+            logger.debug(f"Transmission date range: {df['settlementdate'].min()} to {df['settlementdate'].max()}")
+            logger.debug(f"Available interconnectors: {df['interconnectorid'].unique()}")
             
         except Exception as e:
             logger.error(f"Error loading transmission data: {e}")
@@ -869,18 +858,18 @@ class EnergyDashboard(param.Parameterized):
                 start_date=start_datetime,
                 end_date=end_datetime
             )
-            logger.info(f"Loaded rooftop solar data using enhanced adapter: {df.shape}")
+            logger.debug(f"Loaded rooftop solar data using enhanced adapter: {df.shape}")
             
             if df.empty:
                 self.rooftop_df = pd.DataFrame()
                 return
             
-            logger.info(f"Rooftop solar date range: {df['settlementdate'].min()} to {df['settlementdate'].max()}")
+            logger.debug(f"Rooftop solar date range: {df['settlementdate'].min()} to {df['settlementdate'].max()}")
             
             # Store rooftop solar data
             self.rooftop_df = df
-            logger.info(f"Loaded {len(df)} rooftop solar records for {self.time_range}")
-            logger.info(f"Available regions: {[col for col in df.columns if col != 'settlementdate']}")
+            logger.debug(f"Loaded {len(df)} rooftop solar records for {self.time_range}")
+            logger.debug(f"Available regions: {[col for col in df.columns if col != 'settlementdate']}")
             
         except Exception as e:
             logger.error(f"Error loading rooftop solar data: {e}")
@@ -1001,7 +990,7 @@ class EnergyDashboard(param.Parameterized):
                     values='total_generation_mw'
                 ).fillna(0)
                 
-                logger.info(f"Using pre-aggregated data for {self.region}: {len(pivot_df)} time periods")
+                logger.debug(f"Using pre-aggregated data for {self.region}: {len(pivot_df)} time periods")
             else:
                 # For NEM, use the already loaded data
                 df = self.gen_output_df.copy()
@@ -1014,7 +1003,7 @@ class EnergyDashboard(param.Parameterized):
                     values='total_generation_mw'
                 ).fillna(0)
                 
-                logger.info(f"Using pre-aggregated NEM data: {len(pivot_df)} time periods")
+                logger.debug(f"Using pre-aggregated NEM data: {len(pivot_df)} time periods")
         else:
             # Using raw DUID data - process as before
             df = self.gen_output_df.copy()

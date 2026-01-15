@@ -19,10 +19,6 @@ from ..shared.logging_config import get_logger
 
 logger = get_logger(__name__)
 
-# Add debug logging for refresh issues
-import logging
-refresh_logger = logging.getLogger('refresh.price_components')
-refresh_logger.setLevel(logging.DEBUG)
 
 # ITK teal style for dataframe (from original)
 PRICE_TABLE_STYLES = [
@@ -86,28 +82,28 @@ def load_price_data(start_date=None, end_date=None):
         start_date: Start date for price data (defaults to 48 hours ago)
         end_date: End date for price data (defaults to now)
     """
-    refresh_logger.debug(f"load_price_data called at {time.time()} with dates: {start_date} to {end_date}")
+    logger.debug(f"load_price_data called at {time.time()} with dates: {start_date} to {end_date}")
     
     # If no dates provided, default to last 48 hours to prevent loading all data
     if start_date is None or end_date is None:
         end_date = pd.Timestamp.now()
         start_date = end_date - pd.Timedelta(hours=48)
-        refresh_logger.info(f"No dates provided, using default range: {start_date} to {end_date}")
+        logger.info(f"No dates provided, using default range: {start_date} to {end_date}")
     else:
         # Convert date objects to pandas Timestamps if needed
-        refresh_logger.debug(f"Date types received: start_date={type(start_date)}, end_date={type(end_date)}")
+        logger.debug(f"Date types received: start_date={type(start_date)}, end_date={type(end_date)}")
         if hasattr(start_date, 'date'):  # It's already a datetime/Timestamp
             pass
         else:  # It's likely a date object, convert to Timestamp
             start_date = pd.Timestamp(start_date)
             end_date = pd.Timestamp(end_date) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)  # End of day
-        refresh_logger.info(f"Using provided dates (converted): {start_date} to {end_date}")
+        logger.info(f"Using provided dates (converted): {start_date} to {end_date}")
     
     try:
         from ..shared.adapter_selector import load_price_data as load_price_adapter
         
         logger.info(f"Loading price data for {start_date} to {end_date}")
-        refresh_logger.debug("About to call load_price_adapter with date filtering...")
+        logger.debug("About to call load_price_adapter with date filtering...")
         
         # Load data using the adapter with date filtering
         data = load_price_adapter(start_date=start_date, end_date=end_date)
@@ -195,13 +191,13 @@ def create_price_chart(prices):
     Create smoothed price chart
     Adapted from display_spot.py pcht function
     """
-    refresh_logger.debug(f"create_price_chart called with {len(prices) if not prices.empty else 0} price records")
+    logger.debug(f"create_price_chart called with {len(prices) if not prices.empty else 0} price records")
     
     if prices.empty:
         return pn.pane.HTML("<div>No price data available</div>", width=550, height=400)
     
     try:
-        refresh_logger.debug("Starting matplotlib figure creation...")
+        logger.debug("Starting matplotlib figure creation...")
         # Count consecutive valid points from the end for each column
         valid_counts = {}
         for col in prices.columns:
@@ -226,14 +222,14 @@ def create_price_chart(prices):
         df = prices.tail(rows_to_take).ewm(alpha=0.22, adjust=False).mean()
         
         # Apply Dracula style BEFORE creating figure
-        refresh_logger.debug("Applying Dracula style...")
+        logger.debug("Applying Dracula style...")
         plt.rcParams.update(DRACULA_STYLE)
         
         # Create matplotlib figure
-        refresh_logger.debug("Creating matplotlib figure...")
+        logger.debug("Creating matplotlib figure...")
         fig, ax = plt.subplots()
         fig.set_size_inches(5.5, 4.0)  # Increased height to match generation chart
-        refresh_logger.debug("Matplotlib figure created successfully")
+        logger.debug("Matplotlib figure created successfully")
         
         # Show the timestamp of the last data point
         # The real issue is data not updating after midnight, not the display
@@ -266,10 +262,10 @@ def create_price_chart(prices):
         ax.legend(fontsize=7, frameon=False)
         
         plt.tight_layout()
-        refresh_logger.debug("Matplotlib chart completed, creating Panel pane...")
+        logger.debug("Matplotlib chart completed, creating Panel pane...")
         
         pane = pn.pane.Matplotlib(fig, sizing_mode='fixed', width=550, height=400)
-        refresh_logger.debug(f"Panel Matplotlib pane created: {type(pane)}")
+        logger.debug(f"Panel Matplotlib pane created: {type(pane)}")
         
         return pane
         
@@ -286,28 +282,28 @@ def create_price_section(start_date=None, end_date=None):
         start_date: Start date for price data
         end_date: End date for price data
     """
-    refresh_logger.info("="*60)
-    refresh_logger.info(f"create_price_section called at {time.time()}")
-    refresh_logger.info(f"Date range: {start_date} to {end_date}")
-    refresh_logger.info(f"Thread: {threading.current_thread().name}")
-    refresh_logger.info(f"Panel state: {hasattr(pn.state, 'curdoc')}")
-    refresh_logger.info("="*60)
+    logger.info("="*60)
+    logger.info(f"create_price_section called at {time.time()}")
+    logger.info(f"Date range: {start_date} to {end_date}")
+    logger.info(f"Thread: {threading.current_thread().name}")
+    logger.info(f"Panel state: {hasattr(pn.state, 'curdoc')}")
+    logger.info("="*60)
     
     # FIX for midnight rollover bug: Create and return components directly
     # without pn.pane.panel wrapper so they can be refreshed via object property
     start_time = time.time()
     
     try:
-        refresh_logger.debug("Loading price data with date filtering...")
+        logger.debug("Loading price data with date filtering...")
         prices = load_price_data(start_date, end_date)
         
-        refresh_logger.debug(f"Creating price table with {len(prices) if not prices.empty else 0} records...")
+        logger.debug(f"Creating price table with {len(prices) if not prices.empty else 0} records...")
         table = create_price_table(prices)
         
-        refresh_logger.debug("Creating price chart...")
+        logger.debug("Creating price chart...")
         chart = create_price_chart(prices)
         
-        refresh_logger.debug(f"Components created in {time.time() - start_time:.2f}s")
+        logger.debug(f"Components created in {time.time() - start_time:.2f}s")
         
         result = pn.Column(
             table,
@@ -317,11 +313,11 @@ def create_price_section(start_date=None, end_date=None):
             margin=(5, 5)
         )
         
-        refresh_logger.debug(f"create_price_section returning: {type(result)}")
+        logger.debug(f"create_price_section returning: {type(result)}")
         return result
         
     except Exception as e:
-        refresh_logger.error(f"Error in create_price_section: {e}", exc_info=True)
+        logger.error(f"Error in create_price_section: {e}", exc_info=True)
         raise
 
 
@@ -364,7 +360,7 @@ class PriceDisplay:
     
     def __init__(self):
         """Initialize with persistent panes"""
-        refresh_logger.info("PriceDisplay: Creating persistent panes")
+        logger.info("PriceDisplay: Creating persistent panes")
         
         # Load initial data (last 48 hours by default)
         initial_prices = load_price_data()
@@ -373,12 +369,12 @@ class PriceDisplay:
         if not initial_prices.empty:
             self.chart_pane = create_price_chart(initial_prices)
             self.table_pane = create_price_table(initial_prices)
-            refresh_logger.info(f"PriceDisplay: Created panes with {len(initial_prices)} price records")
+            logger.info(f"PriceDisplay: Created panes with {len(initial_prices)} price records")
         else:
             # Fallback if no data available
             self.chart_pane = pn.pane.HTML("<div>No price data available</div>", width=550, height=400)
             self.table_pane = pn.pane.HTML("<div>No price data available</div>", width=550, height=350)
-            refresh_logger.warning("PriceDisplay: No initial price data available")
+            logger.warning("PriceDisplay: No initial price data available")
         
         # Store last update info for debugging
         self.last_update_time = pd.Timestamp.now()
@@ -394,7 +390,7 @@ class PriceDisplay:
             end_date: End date for price data
         """
         update_start = time.time()
-        refresh_logger.info(f"PriceDisplay.update called with dates: {start_date} to {end_date}")
+        logger.info(f"PriceDisplay.update called with dates: {start_date} to {end_date}")
         
         # Load fresh data
         prices = load_price_data(start_date, end_date)
@@ -408,19 +404,19 @@ class PriceDisplay:
             # We update the content of existing panes rather than replacing them
             if hasattr(new_chart, 'object'):
                 self.chart_pane.object = new_chart.object
-                refresh_logger.debug("PriceDisplay: Updated chart_pane.object")
+                logger.debug("PriceDisplay: Updated chart_pane.object")
             else:
                 # If new_chart is already a figure, assign directly
                 self.chart_pane.object = new_chart
-                refresh_logger.debug("PriceDisplay: Updated chart_pane.object (direct)")
+                logger.debug("PriceDisplay: Updated chart_pane.object (direct)")
             
             if hasattr(new_table, 'object'):
                 self.table_pane.object = new_table.object
-                refresh_logger.debug("PriceDisplay: Updated table_pane.object")
+                logger.debug("PriceDisplay: Updated table_pane.object")
             else:
                 # If new_table is already styled data, assign directly
                 self.table_pane.object = new_table
-                refresh_logger.debug("PriceDisplay: Updated table_pane.object (direct)")
+                logger.debug("PriceDisplay: Updated table_pane.object (direct)")
             
             # Log successful update
             self.last_update_time = pd.Timestamp.now()
@@ -428,15 +424,15 @@ class PriceDisplay:
             
             # Check for midnight rollover
             if start_date and end_date:
-                refresh_logger.info(f"PriceDisplay: Updated with {len(prices)} records for {start_date} to {end_date}")
+                logger.info(f"PriceDisplay: Updated with {len(prices)} records for {start_date} to {end_date}")
                 if hasattr(self, '_last_end_date') and self._last_end_date:
                     if self._last_end_date.date() != end_date.date() if hasattr(end_date, 'date') else end_date != self._last_end_date:
-                        refresh_logger.info(f"PriceDisplay: MIDNIGHT ROLLOVER DETECTED - Date changed from {self._last_end_date} to {end_date}")
+                        logger.info(f"PriceDisplay: MIDNIGHT ROLLOVER DETECTED - Date changed from {self._last_end_date} to {end_date}")
                 self._last_end_date = end_date
             
-            refresh_logger.info(f"PriceDisplay: Update completed in {time.time() - update_start:.2f}s")
+            logger.info(f"PriceDisplay: Update completed in {time.time() - update_start:.2f}s")
         else:
-            refresh_logger.warning("PriceDisplay: No price data available for update")
+            logger.warning("PriceDisplay: No price data available for update")
             # Update with empty message
             self.chart_pane.object = pn.pane.HTML("<div>No price data available</div>", width=550, height=400).object
             self.table_pane.object = pn.pane.HTML("<div>No price data available</div>", width=550, height=350).object

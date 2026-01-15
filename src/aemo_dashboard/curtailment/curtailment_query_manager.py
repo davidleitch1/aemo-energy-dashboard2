@@ -12,13 +12,12 @@ Schema:
 
 import duckdb
 import pandas as pd
-import logging
+from ..shared.logging_config import get_logger
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List
 from pathlib import Path
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class CurtailmentQueryManager:
