@@ -4,10 +4,11 @@ Patch for DuckDB initialization to add retry logic for concurrent file access
 
 import time
 import logging
+from aemo_dashboard.shared.logging_config import get_logger
 import os
 from functools import wraps
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 def retry_on_file_error(max_retries=3, delay=2.0):
     """Decorator to retry operations that might fail due to file access"""

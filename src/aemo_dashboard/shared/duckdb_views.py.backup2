@@ -64,8 +64,8 @@ class DuckDBViewManager:
                 d.Fuel as fuel_type,
                 d.Region as region,
                 d."Capacity(MW)" as nameplate_capacity,
-                p.settlementdate as price_settlementdate,
-                p.regionid as price_region,
+                p.SETTLEMENTDATE as price_settlementdate,
+                p.REGIONID as price_region,
                 p.RRP as rrp,
                 g.scadavalue * p.RRP * {MINUTES_30_TO_HOURS} as revenue_30min,
                 -- Additional calculated fields
@@ -79,8 +79,8 @@ class DuckDBViewManager:
             FROM generation_30min g
             LEFT JOIN duid_mapping d ON g.duid = d.DUID
             LEFT JOIN prices_30min p
-                ON g.settlementdate = p.settlementdate
-                AND d.Region = p.regionid
+                ON g.settlementdate = p.SETTLEMENTDATE
+                AND d.Region = p.REGIONID
         """)
         
         # 5-minute integrated data view
@@ -380,8 +380,8 @@ class DuckDBViewManager:
                 g.total_generation_mw * p.RRP * {MINUTES_30_TO_HOURS} as revenue_30min
             FROM generation_by_fuel_30min g
             LEFT JOIN prices_30min p
-                ON g.settlementdate = p.settlementdate
-                AND g.region = p.regionid
+                ON g.settlementdate = p.SETTLEMENTDATE
+                AND g.region = p.REGIONID
         """)
         
         # Capacity utilization by fuel type

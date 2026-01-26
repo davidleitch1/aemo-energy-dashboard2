@@ -224,7 +224,6 @@ class HybridQueryManager:
             """
         else:
             query = f"""
-            logger.info(f"🔍 [DIAGNOSTIC] Building 30min query: using generation_30min and prices_30min tables")
             SELECT {select_columns}
             FROM (
                 SELECT
@@ -250,9 +249,7 @@ class HybridQueryManager:
         
         # Execute query
         with perf_logger.timer("duckdb_integrated_query", threshold=0.5):
-            logger.info("===== EXECUTING QUERY: %s" % query[:500])
             result = self.conn.execute(query).df()
-            logger.info("===== SQL query returned %d records =====" % len(result))
         
         # Ensure proper data types
         if not result.empty:
@@ -419,9 +416,7 @@ class HybridQueryManager:
         """
         
         # Execute
-        logger.info("===== EXECUTING QUERY: %s" % query[:500])
         result = self.conn.execute(query).df()
-        logger.info("===== SQL query returned %d records =====" % len(result))
         
         # Cache if not empty
         if use_cache and not result.empty:

@@ -2,9 +2,9 @@
 Patch to fix dashboard initialization hang
 """
 
-import logging
+from ..shared.logging_config import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 def patch_dashboard_initialization():
     """Patch the dashboard initialization to fix the loading screen hang"""

@@ -16,6 +16,8 @@ Key Principles:
 Usage:
     from aemo_dashboard.shared.fuel_categories import (
         RENEWABLE_FUELS,
+        MAIN_ROOFTOP_REGIONS,
+        ROOFTOP_SUBREGIONS,
         PUMPED_HYDRO_DUIDS,
         EXCLUDED_FROM_GENERATION,
         THERMAL_FUELS
@@ -23,6 +25,7 @@ Usage:
 
 History:
     - 2025-10-15: Created to fix renewable percentage calculation bug
+    - 2025-10-15: Added MAIN_ROOFTOP_REGIONS to fix rooftop solar double-counting
     - Pumped hydro DUIDs sourced from /Volumes/davidleitch/aemo_production/data/pumped_hydro_duids.txt
     - Based on audit conducted August 3, 2025 (see CLAUDE.md)
 """
@@ -39,6 +42,44 @@ RENEWABLE_FUELS = [
     'Water',    # Hydro excluding pumped hydro
     'Hydro',    # Alias for Water
     'Biomass'
+]
+
+# =============================================================================
+# ROOFTOP SOLAR MAIN REGIONS
+# =============================================================================
+
+# These 5 regions represent the main NEM regions for rooftop solar calculations.
+# Sub-regions (QLDN, QLDS, QLDC, TASN, TASS) are geographic subsets and must
+# NOT be included in NEM totals to avoid double-counting.
+#
+# Historical Context:
+# - QLD1 includes all rooftop solar in Queensland (QLDN + QLDS + QLDC are subsets)
+# - TAS1 includes all rooftop solar in Tasmania (TASN + TASS are subsets)
+# - Including sub-regions in calculations resulted in ~33% overestimation
+#
+# Data Collection:
+# - The collector continues downloading all regions (including sub-regions)
+# - This preserves granular data for future analysis
+# - Only calculations filter to these 5 main regions
+#
+# History:
+# - 2025-10-15: Created to fix rooftop solar double-counting issue
+
+MAIN_ROOFTOP_REGIONS = [
+    'NSW1',  # New South Wales (complete region)
+    'QLD1',  # Queensland (includes QLDN, QLDS, QLDC as subsets)
+    'VIC1',  # Victoria (complete region)
+    'SA1',   # South Australia (complete region)
+    'TAS1'   # Tasmania (includes TASN, TASS as subsets)
+]
+
+# Sub-regions to EXCLUDE from calculations (geographic subsets, not additional generation)
+ROOFTOP_SUBREGIONS = [
+    'QLDN',  # Queensland North (subset of QLD1)
+    'QLDS',  # Queensland South (subset of QLD1)
+    'QLDC',  # Queensland Central (subset of QLD1)
+    'TASN',  # Tasmania North (subset of TAS1)
+    'TASS'   # Tasmania South (subset of TAS1)
 ]
 
 # =============================================================================

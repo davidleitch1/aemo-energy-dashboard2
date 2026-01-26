@@ -197,21 +197,17 @@ class PriceAnalysisMotor:
                 raise ValueError("Data not integrated yet. Call integrate_data() first.")
             
             with perf_logger.timer("price_aggregation", threshold=0.5):
-                logger.info("===== AGGREGATION START: Total integrated_data=%d =====" % len(self.integrated_data))
                 # Filter out any missing values in hierarchy columns
                 data = self.integrated_data.dropna(subset=hierarchy)
-                logger.info("===== AFTER dropna: records=%d =====" % len(data))
                 
                 # Apply filters before aggregation
                 if region_filters and 'region' in data.columns:
                     data = data[data['region'].isin(region_filters)]
-                    logger.info("===== AFTER region filter: records=%d =====" % len(data))
                     if logger.isEnabledFor(logging.DEBUG):
                         logger.debug(f"After region filter: {len(data)} records")
                 
                 if fuel_filters and 'fuel_type' in data.columns:
                     data = data[data['fuel_type'].isin(fuel_filters)]
-                    logger.info("===== AFTER fuel filter: records=%d =====" % len(data))
                     if logger.isEnabledFor(logging.DEBUG):
                         logger.debug(f"After fuel filter: {len(data)} records")
                 
@@ -231,21 +227,20 @@ class PriceAnalysisMotor:
                 # Flatten column names
                 grouped.columns = ['total_generation_sum', 'total_revenue_dollars', 'start_date', 'end_date', 'record_count']
                 
-                # DIAGNOSTIC: Show grouped data details before conversion
-                if not grouped.empty:
-                    logger.info("===== BEFORE CONVERSION: Groups=%d, Total_MW_sum=%.2f, Total_records=%d =====" % (len(grouped), grouped["total_generation_sum"].sum(), grouped["record_count"].sum()))
                 # Calculate actual MWh generation based on resolution
-                logger.info("========== DIAGNOSTIC: Resolution = %s ==========" % self.resolution)
                 # scadavalue sum = sum of MW readings across intervals
+                # DIAGNOSTIC: Log resolution and conversion details
+                logger.info(f"🔍 [DIAGNOSTIC] Converting MW to MWh using resolution: {self.resolution}")
+                if not grouped.empty:
+                    sample_idx = 0
+                    sample_mw = grouped.iloc[sample_idx]["total_generation_sum"] if len(grouped) > 0 else 0
+                    logger.info(f"🔍 [DIAGNOSTIC] Sample MW sum (before conversion): {sample_mw:,.2f} MW")
                 if self.resolution == '5min':
                     # Convert to MWh: sum(MW) × (5min / 60min/hr) = sum(MW) × (1/12) = MWh
-                    logger.info("========== DIAGNOSTIC: Applied 5min factor (5/60) ==========")
                     grouped['generation_mwh'] = grouped['total_generation_sum'] * (5.0 / 60.0)
-                    logger.info("===== AFTER 5MIN CONVERSION: Total_MWh=%.2f, Total_GWh=%.2f =====" % (grouped["generation_mwh"].sum(), grouped["generation_mwh"].sum()/1000))
+                    logger.info(f"🔍 [DIAGNOSTIC] Applied 5min conversion factor: {5.0/60.0:.6f} (5min/60min)")
                 else:  # 30min
-                    logger.info("========== DIAGNOSTIC: Applied 30min factor (0.5) ==========")
                     # Convert to MWh: sum(MW) × (30min / 60min/hr) = sum(MW) × 0.5 = MWh
-                    logger.info("===== AFTER 30MIN CONVERSION: Total_MWh=%.2f, Total_GWh=%.2f =====" % (grouped["generation_mwh"].sum(), grouped["generation_mwh"].sum()/1000))
                     grouped['generation_mwh'] = grouped['total_generation_sum'] * 0.5
                 grouped['average_price_per_mwh'] = np.where(
                     grouped['generation_mwh'] > 0,

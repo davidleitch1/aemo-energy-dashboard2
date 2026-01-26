@@ -15,6 +15,7 @@ from datetime import datetime, timedelta
 
 from .station_analysis import StationAnalysisMotor
 from .station_search import StationSearchEngine
+from .coal_analysis import create_coal_tab, create_coal_evolution_tab
 from ..shared.logging_config import get_logger
 from ..shared.flexoki_theme import (
     FLEXOKI_PAPER,
@@ -321,23 +322,38 @@ class StationAnalysisUI(param.Parameterized):
             # Continue anyway - this is a non-critical optimization
 
     def create_ui_components(self):
-        """Create the main UI components"""
-        
+        """Create the main UI components with subtabs"""
+
         if not self.data_loaded:
             return pn.pane.Markdown("⚠️ Data loading failed. Please check logs and restart.")
-        
+
         # Create individual UI sections with Material UI
         search_card = self._create_search_card()
         self.charts_section = self._create_charts_section()
-        
-        # Simple layout without redundant titles or status
-        main_layout = pn.Row(
+
+        # Individual station analysis layout
+        individual_station_content = pn.Row(
             search_card,
             self.charts_section,
             sizing_mode='stretch_width'
         )
-        
-        return main_layout
+
+        # Create Coal analysis content (lazy loaded)
+        coal_content = pn.panel(create_coal_tab, loading_indicator=True)
+
+        # Create Coal Evolution analysis content (lazy loaded)
+        coal_evolution_content = pn.panel(create_coal_evolution_tab, loading_indicator=True)
+
+        # Create subtabs for different analysis types
+        subtabs = pn.Tabs(
+            ('Individual Stations', individual_station_content),
+            ('Coal', coal_content),
+            ('Coal Evolution', coal_evolution_content),
+            tabs_location='above',
+            sizing_mode='stretch_width'
+        )
+
+        return subtabs
     
     def _create_search_card(self):
         """Create the station search interface with Material Design styling"""

@@ -21,6 +21,7 @@ from .config import config
 from .logging_config import get_logger
 from .performance_logging import PerformanceLogger, performance_monitor
 from .resolution_manager import resolution_manager
+from .fuel_categories import MAIN_ROOFTOP_REGIONS
 
 # Import DuckDB service
 from data_service.shared_data_duckdb import duckdb_data_service
@@ -72,8 +73,16 @@ def load_rooftop_data(
                 logger.warning("No rooftop data range available")
                 return pd.DataFrame()
         
+        # Build region filter list for SQL (only main regions to avoid double-counting)
+        regions_sql = "','".join(MAIN_ROOFTOP_REGIONS)
+
         # Build query for 30-minute data (table is named rooftop_solar)
         if region:
+            # Single region query - must be a main region
+            if region not in MAIN_ROOFTOP_REGIONS:
+                logger.warning(f"Region '{region}' is not a main rooftop region. Using main regions only.")
+                logger.warning(f"Main regions are: {MAIN_ROOFTOP_REGIONS}")
+
             query = f"""
             SELECT settlementdate, regionid, rooftop_solar_mw
             FROM rooftop_solar
@@ -83,13 +92,16 @@ def load_rooftop_data(
             ORDER BY settlementdate
             """
         else:
+            # Multi-region query - ONLY MAIN REGIONS (filter out sub-regions)
             query = f"""
             SELECT settlementdate, regionid, rooftop_solar_mw
             FROM rooftop_solar
             WHERE settlementdate >= '{start_date.strftime('%Y-%m-%d %H:%M:%S')}'
             AND settlementdate <= '{end_date.strftime('%Y-%m-%d %H:%M:%S')}'
+            AND regionid IN ('{regions_sql}')
             ORDER BY settlementdate, regionid
             """
+            logger.info(f"Filtering rooftop data to main regions only: {MAIN_ROOFTOP_REGIONS}")
         
         # Execute query
         with perf_logger.timer("duckdb_rooftop_query", threshold=0.5):

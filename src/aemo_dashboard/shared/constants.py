@@ -27,6 +27,41 @@ ENERGY_FACTOR_30MIN = MINUTES_30_TO_HOURS  # MW × 0.5 = MWh per 30-min interval
 RESOLUTION_5MIN = '5min'
 RESOLUTION_30MIN = '30min'
 
+# =============================================================================
+# Standard Time Range Options for Date Selectors
+# =============================================================================
+# Use these constants to ensure consistency across all dashboard tabs.
+# Values represent number of days (as strings) for compatibility with param.Selector
+
+STANDARD_TIME_RANGES = ['1', '7', '30', '90', '365', 'All']
+
+# Human-readable labels for time range options
+STANDARD_TIME_RANGE_LABELS = {
+    '1': '1 day',
+    '7': '7 days',
+    '30': '30 days',
+    '90': '90 days',
+    '365': '1 year',
+    'All': 'All data'
+}
+
+# Default time range for different contexts
+DEFAULT_TIME_RANGE_REALTIME = '1'    # For real-time views (Today tab)
+DEFAULT_TIME_RANGE_ANALYSIS = '7'    # For analysis views
+DEFAULT_TIME_RANGE_TRENDS = '30'     # For trend views
+DEFAULT_TIME_RANGE_HISTORICAL = '365'  # For historical views
+
+# Example usage in tabs:
+#
+# from aemo_dashboard.shared.constants import STANDARD_TIME_RANGES, DEFAULT_TIME_RANGE_ANALYSIS
+#
+# class MyTab(param.Parameterized):
+#     time_range = param.Selector(
+#         default=DEFAULT_TIME_RANGE_ANALYSIS,
+#         objects=STANDARD_TIME_RANGES
+#     )
+#
+
 # Example usage in revenue calculations:
 #
 # For 5-minute data:
