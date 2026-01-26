@@ -30,13 +30,19 @@ from ..station.station_analysis_ui import create_station_analysis_tab
 from ..nem_dash.nem_dash_tab import create_nem_dash_tab_with_updates
 from ..curtailment import create_curtailment_tab
 from .generation_query_manager import GenerationQueryManager
+from ..shared.flexoki_theme import (
+    FLEXOKI_PAPER,
+    FLEXOKI_BLACK,
+    FLEXOKI_BASE,
+    FLEXOKI_ACCENT,
+)
 
 # Set up logging
 setup_logging()
 logger = get_logger(__name__)
 
 # Configure Panel and HoloViews BEFORE extension loading
-pn.config.theme = 'dark'
+pn.config.theme = 'default'  # Use default (light) theme for Flexoki
 pn.extension('tabulator', 'plotly', template='material')
 
 # =============================================================================
@@ -52,7 +58,30 @@ _cache_stats = {'hits': 0, 'misses': 0, 'errors': 0}
 # Cached Plot Creation Functions
 # =============================================================================
 
-@pn.cache(max_items=20, policy='LRU', ttl=300, to_disk=False) 
+
+def _flexoki_background_hook(plot, element):
+    """Standalone hook function to set Flexoki backgrounds for cached plots.
+
+    Sets both plot area and legend backgrounds to FLEXOKI_PAPER (#FFFCF0).
+    """
+    try:
+        p = plot.state
+        # Set the main plot area background
+        p.background_fill_color = FLEXOKI_PAPER
+        # Set the border/outer area (where legend sits) - THIS IS THE KEY FIX
+        p.border_fill_color = FLEXOKI_PAPER
+        # Set outline color
+        p.outline_line_color = FLEXOKI_BASE[150]
+        if hasattr(p, 'legend') and p.legend:
+            for legend in p.legend:
+                legend.background_fill_color = FLEXOKI_PAPER
+                legend.border_line_color = FLEXOKI_BASE[150]
+                legend.border_line_alpha = 1.0
+    except Exception as e:
+        logger.debug(f"Could not set Flexoki backgrounds: {e}")
+
+
+@pn.cache(max_items=20, policy='LRU', ttl=300, to_disk=False)
 def create_generation_plot_cached(
     plot_data_json: str,
     fuel_types_str: str,
@@ -91,7 +120,7 @@ def create_generation_plot_cached(
         xlabel='',
         grid=True,
         legend='right',
-        bgcolor='black',
+        bgcolor=FLEXOKI_PAPER,
         color=[fuel_colors.get(fuel, '#6272a4') for fuel in fuel_types],
         alpha=0.8,
         hover=True,
@@ -101,11 +130,12 @@ def create_generation_plot_cached(
     
     area_plot = area_plot.opts(
         show_grid=False,
-        bgcolor='black',
+        bgcolor=FLEXOKI_PAPER,
         xaxis='bottom',  # Show x-axis for linking
-        xlabel='Time'
+        xlabel='Time',
+        hooks=[_flexoki_background_hook]
     )
-    
+
     creation_time = time.time() - start_time
     logger.info(f"Plot creation took {creation_time:.2f}s")
     
@@ -113,12 +143,40 @@ def create_generation_plot_cached(
 
 # Custom CSS to ensure x-axis labels are visible and style header
 pn.config.raw_css.append("""
+/* Global page background - Flexoki Paper */
+body, html {
+    background-color: #FFFCF0 !important;
+}
+
+/* Panel main container background */
+.bk-root, .bk, .pn-main, .main, #app {
+    background-color: #FFFCF0 !important;
+}
+
+/* Bokeh plot backgrounds - force cream color */
+.bk-canvas-wrapper, .bk-canvas-overlays {
+    background-color: #FFFCF0 !important;
+}
+
+/* Bokeh plot wrapper and figure backgrounds */
+.bk-Figure, .bk-plot-wrapper, .bk-plot-layout {
+    background-color: #FFFCF0 !important;
+}
+
+/* Bokeh legend backgrounds */
+.bk-Legend {
+    background-color: #FFFCF0 !important;
+    border-color: #B7B5AC !important;
+}
+
+/* Axis labels styling */
 .bk-axis-label {
     font-size: 12px !important;
 }
 .bk-tick-label {
     font-size: 11px !important;
 }
+
 /* Header background styling */
 .header-container {
     background-color: #008B8B;
@@ -126,25 +184,83 @@ pn.config.raw_css.append("""
     margin: -10px -10px 10px -10px;
     border-radius: 4px 4px 0 0;
 }
+
+/* Panel Select widget light theme styling */
+.bk-input select,
+select.bk-input {
+    background-color: #FFFCF0 !important;
+    color: #100F0F !important;
+    border: 1px solid #6F6E69 !important;
+}
+
+.bk-input select option,
+select.bk-input option {
+    background-color: #FFFCF0 !important;
+    color: #100F0F !important;
+}
+
+.bk-input select option:checked,
+select.bk-input option:checked {
+    background-color: #E6E4D9 !important;
+    color: #100F0F !important;
+}
+
+/* Bokeh legend background - Flexoki Paper */
+.bk-legend {
+    background-color: #FFFCF0 !important;
+    border-color: #B7B5AC !important;
+}
+
+/* Bokeh plot area background */
+.bk-plot-wrapper {
+    background-color: #FFFCF0 !important;
+}
 """)
 hv.extension('bokeh')
 
 # Logging is set up in imports
 
-# Configure Dracula dark theme with proper colors
-DRACULA_COLORS = {
-    'bg': '#282a36',        # Background
-    'current': '#44475a',   # Current Line
-    'fg': '#f8f8f2',        # Foreground
-    'comment': '#6272a4',   # Comment
-    'cyan': '#8be9fd',
-    'green': '#50fa7b',
-    'orange': '#ffb86c',
-    'pink': '#ff79c6',
-    'purple': '#bd93f9',
-    'red': '#ff5555',
-    'yellow': '#f1fa8c'
+# Configure Flexoki Light theme colors
+FLEXOKI_COLORS = {
+    'bg': FLEXOKI_PAPER,           # Background (#FFFCF0)
+    'current': FLEXOKI_BASE[100],  # Current Line (#E6E4D9)
+    'fg': FLEXOKI_BLACK,           # Foreground (#100F0F)
+    'comment': FLEXOKI_BASE[600],  # Comment (#6F6E69)
+    'cyan': FLEXOKI_ACCENT['cyan'],
+    'green': FLEXOKI_ACCENT['green'],
+    'orange': FLEXOKI_ACCENT['orange'],
+    'pink': FLEXOKI_ACCENT['magenta'],
+    'purple': FLEXOKI_ACCENT['purple'],
+    'red': FLEXOKI_ACCENT['red'],
+    'yellow': FLEXOKI_ACCENT['yellow']
 }
+# Alias for backwards compatibility
+DRACULA_COLORS = FLEXOKI_COLORS
+
+def _text_background_hook(plot, element):
+    """Hook to set background colors for Text/placeholder plots."""
+    try:
+        p = plot.state
+        p.background_fill_color = FLEXOKI_PAPER
+        p.border_fill_color = FLEXOKI_PAPER
+        p.outline_line_color = FLEXOKI_BASE[150]
+    except Exception:
+        pass
+
+def create_themed_placeholder(text, width=None, height=None):
+    """Create a placeholder text element with Flexoki theme backgrounds."""
+    opts = dict(
+        xlim=(0, 1), ylim=(0, 1),
+        bgcolor=FLEXOKI_PAPER,
+        color=FLEXOKI_BLACK,
+        fontsize=14,
+        hooks=[_text_background_hook]
+    )
+    if width:
+        opts['width'] = width
+    if height:
+        opts['height'] = height
+    return hv.Text(0.5, 0.5, text).opts(**opts)
 
 hv.opts.defaults(
     hv.opts.Area(
@@ -152,27 +268,31 @@ hv.opts.defaults(
         height=500,
         alpha=0.8,
         show_grid=True,
-        gridstyle={'grid_line_color': DRACULA_COLORS['current'], 'grid_line_alpha': 0.3},
-        bgcolor=DRACULA_COLORS['bg'],
+        gridstyle={'grid_line_color': FLEXOKI_BASE[100], 'grid_line_alpha': 0.3},
+        bgcolor=FLEXOKI_PAPER,
         toolbar='above'
     ),
     hv.opts.Bars(
-        bgcolor=DRACULA_COLORS['bg'],
+        bgcolor=FLEXOKI_PAPER,
         show_grid=True,
-        gridstyle={'grid_line_color': DRACULA_COLORS['current'], 'grid_line_alpha': 0.3},
+        gridstyle={'grid_line_color': FLEXOKI_BASE[100], 'grid_line_alpha': 0.3},
         toolbar='above'
     ),
     hv.opts.Curve(
-        bgcolor=DRACULA_COLORS['bg'],
+        bgcolor=FLEXOKI_PAPER,
         show_grid=True,
-        gridstyle={'grid_line_color': DRACULA_COLORS['current'], 'grid_line_alpha': 0.3},
+        gridstyle={'grid_line_color': FLEXOKI_BASE[100], 'grid_line_alpha': 0.3},
         toolbar='above'
     ),
     hv.opts.Overlay(
-        bgcolor=DRACULA_COLORS['bg'],
+        bgcolor=FLEXOKI_PAPER,
         show_grid=True,
-        gridstyle={'grid_line_color': DRACULA_COLORS['current'], 'grid_line_alpha': 0.3},
+        gridstyle={'grid_line_color': FLEXOKI_BASE[100], 'grid_line_alpha': 0.3},
         toolbar='above'
+    ),
+    hv.opts.Text(
+        bgcolor=FLEXOKI_PAPER,
+        color=FLEXOKI_BLACK
     )
 )
 
@@ -1511,10 +1631,31 @@ class EnergyDashboard(param.Parameterized):
                 table_df,
                 layout='fit_data_table',
                 sizing_mode='stretch_width',
-                theme='midnight',
+                theme='fast',
                 show_index=False,
                 disabled=True,  # Read-only
                 formatters=formatters,
+                stylesheets=[f"""
+                    .tabulator {{
+                        background-color: {FLEXOKI_PAPER};
+                        color: {FLEXOKI_BLACK};
+                    }}
+                    .tabulator-header {{
+                        background-color: {FLEXOKI_BASE[100]};
+                        color: {FLEXOKI_BLACK};
+                        font-weight: bold;
+                    }}
+                    .tabulator-row {{
+                        background-color: {FLEXOKI_PAPER};
+                        color: {FLEXOKI_BLACK};
+                    }}
+                    .tabulator-row:nth-child(even) {{
+                        background-color: {FLEXOKI_BASE[50]};
+                    }}
+                    .tabulator-row:hover {{
+                        background-color: {FLEXOKI_BASE[100]};
+                    }}
+                """],
                 configuration={
                     'columnDefaults': {
                         'headerSort': False  # Disable sorting to preserve descending order
@@ -1685,22 +1826,22 @@ class EnergyDashboard(param.Parameterized):
         return pivot_df
     
     def get_fuel_colors(self):
-        """Define colors for different fuel types - all distinct and visually clear"""
+        """Define colors for different fuel types - Flexoki theme"""
         fuel_colors = {
-            'Coal': '#4a4a4a',        # Dark gray - distinctive for coal
-            'CCGT': '#ff5555',        # Bright red - gas turbine
-            'OCGT': '#ff8c42',        # Orange-red - different gas turbine type
-            'Gas other': '#ff9500',   # Pure orange - clearly different from yellow
-            'Solar': '#ffd700',       # Gold/bright yellow - sunny color
-            'Rooftop Solar': '#ffff80',  # Lighter yellow - distributed solar
-            'Wind': '#00ff7f',        # Spring green - wind/renewable
-            'Water': '#00bfff',       # Sky blue - water/hydro
-            'Battery Storage': '#9370db',  # Medium purple - technology
-            'Biomass': '#8b4513',     # Saddle brown - organic/wood
-            'Other': '#ff69b4',       # Hot pink - catch-all category
-            'Transmission Flow': '#ffb6c1',      # Light pink - both imports and exports
-            'Transmission Imports': '#ffb6c1',   # Light pink - imports (inflow)  
-            'Transmission Exports': '#ffb6c1'    # Same light pink color for exports
+            'Coal': '#6B3A10',        # Brown - distinctive for coal
+            'CCGT': '#8A2E0D',        # Dark red-brown - gas turbine
+            'OCGT': '#E05830',        # Bright orange-red - different gas turbine type
+            'Gas other': FLEXOKI_ACCENT['orange'],  # Orange
+            'Solar': '#D4A000',       # Gold/bright yellow - sunny color
+            'Rooftop Solar': '#E8C547',  # Lighter yellow - distributed solar
+            'Wind': FLEXOKI_ACCENT['green'],  # Green - wind/renewable
+            'Water': FLEXOKI_ACCENT['cyan'],  # Cyan - water/hydro
+            'Battery Storage': FLEXOKI_ACCENT['purple'],  # Purple - technology
+            'Biomass': '#4A7C23',     # Dark green - organic
+            'Other': FLEXOKI_BASE[600],  # Gray - catch-all category
+            'Transmission Flow': FLEXOKI_ACCENT['magenta'],  # Magenta - both imports and exports
+            'Transmission Imports': FLEXOKI_ACCENT['magenta'],  # Magenta - imports (inflow)
+            'Transmission Exports': FLEXOKI_ACCENT['magenta']   # Same color for exports
         }
         return fuel_colors
     
@@ -1726,10 +1867,10 @@ class EnergyDashboard(param.Parameterized):
                 empty_plot = hv.Text(0.5, 0.5, 'No data available').opts(
                     xlim=(0, 1),
                     ylim=(0, 1),
-                    bgcolor='black',
+                    bgcolor=FLEXOKI_PAPER,
                     width=1200,
                     height=400,
-                    color='white',
+                    color=FLEXOKI_BLACK,
                     fontsize=16
                 )
                 return empty_plot
@@ -1743,8 +1884,8 @@ class EnergyDashboard(param.Parameterized):
             if not fuel_types:
                 # Fallback empty plot
                 return hv.Text(0.5, 0.5, 'No generation data for selected region').opts(
-                    bgcolor='black',
-                    color='white',
+                    bgcolor=FLEXOKI_PAPER,
+                    color=FLEXOKI_BLACK,
                     fontsize=14
                 )
             
@@ -1787,7 +1928,7 @@ class EnergyDashboard(param.Parameterized):
                     xlabel='',  # Remove x-label since it will be on the price chart
                     grid=True,
                     legend='right',
-                    bgcolor='black',
+                    bgcolor=FLEXOKI_PAPER,
                     color=[fuel_colors.get(fuel, '#6272a4') for fuel in positive_fuel_types],
                     alpha=0.8,
                     hover=True,
@@ -1839,10 +1980,13 @@ class EnergyDashboard(param.Parameterized):
                             color='#ffb6c1',  # Light pink
                             alpha=0.8,
                             hover=True,
-                            legend=False
+                            legend=False,
+                            bgcolor=FLEXOKI_PAPER
+                        ).opts(
+                            hooks=[self._get_flexoki_background_hook()]
                         )
                         negative_plots.append(transmission_plot)
-                    
+
                     # Then plot battery storage (top layer)
                     if 'Battery Storage' in plot_data_negative.columns:
                         battery_plot = plot_data_negative.hvplot.area(
@@ -1854,7 +1998,10 @@ class EnergyDashboard(param.Parameterized):
                             color='#9370db',  # Purple
                             alpha=0.8,
                             hover=True,
-                            legend=False
+                            legend=False,
+                            bgcolor=FLEXOKI_PAPER
+                        ).opts(
+                            hooks=[self._get_flexoki_background_hook()]
                         )
                         negative_plots.append(battery_plot)
                     
@@ -1873,10 +2020,10 @@ class EnergyDashboard(param.Parameterized):
                 area_plot = area_plot.opts(
                     title=f'Generation by Fuel Type - {self.region} ({time_range_display}) | data:AEMO, design ITK',
                     show_grid=False,
-                    bgcolor='black',
+                    bgcolor=FLEXOKI_PAPER,
                     xaxis='bottom',  # Show x-axis for linking
                     xlabel='Time',
-                    hooks=[self._get_datetime_formatter_hook()]
+                    hooks=[self._get_datetime_formatter_hook(), self._get_flexoki_background_hook()]
                 )
                 
             else:
@@ -1930,18 +2077,19 @@ class EnergyDashboard(param.Parameterized):
                         xlabel='',  # Remove x-label since it will be on the price chart
                         grid=True,
                         legend='right',
-                        bgcolor='black',
+                        bgcolor=FLEXOKI_PAPER,
                         color=[fuel_colors.get(fuel, '#6272a4') for fuel in positive_fuel_types],
                         alpha=0.8,
                         hover=True,
                         hover_tooltips=[('Fuel Type', '$name')]
                     ).opts(
                         show_grid=False,
-                        bgcolor='black',
+                        bgcolor=FLEXOKI_PAPER,
                         xaxis='bottom',  # Show x-axis for linking
-                        xlabel='Time'
-                )
-            
+                        xlabel='Time',
+                        hooks=[self._get_flexoki_background_hook()]
+                    )
+
             # Load and create price chart
             price_df = self.load_price_data()
             
@@ -1958,32 +2106,32 @@ class EnergyDashboard(param.Parameterized):
                 ylabel='Price ($/MWh)',
                 xlabel='Time',
                 grid=True,
-                bgcolor='black',
-                color='white',
+                bgcolor=FLEXOKI_PAPER,
+                color=FLEXOKI_ACCENT['cyan'],  # Use cyan accent for visibility on light background
                 line_width=2,
                 alpha=0.8,
                 hover=True,
                 hover_tooltips=[('Price', '@RRP{$0.2f}')]
             ).opts(
                 show_grid=False,
-                bgcolor='black',
-                hooks=[self._get_datetime_formatter_hook()]
+                bgcolor=FLEXOKI_PAPER,
+                hooks=[self._get_datetime_formatter_hook(), self._get_flexoki_background_hook()]
             )
-            
+
             # Always use two-plot approach with linked x-axes for better handling of negative values
             logger.info("Using two-plot approach with HoloViews shared_axes")
-            
+
             # Apply hooks to individual plots before combining
             area_plot = area_plot.opts(
                 xaxis='bottom',  # Show x-axis on area plot
                 xlabel='Time',
-                hooks=[self._get_datetime_formatter_hook()]
+                hooks=[self._get_datetime_formatter_hook(), self._get_flexoki_background_hook()]
             )
-            
+
             price_plot = price_plot.opts(
-                xaxis='bottom',  # Ensure x-axis is visible  
+                xaxis='bottom',  # Ensure x-axis is visible
                 xlabel='Time',
-                hooks=[self._get_datetime_formatter_hook()]
+                hooks=[self._get_datetime_formatter_hook(), self._get_flexoki_background_hook()]
             )
             
             # Create the stacked layout with linked x-axes within this tab only
@@ -2003,7 +2151,7 @@ class EnergyDashboard(param.Parameterized):
             logger.error(f"Error creating plot: {e}")
             # Return fallback plot
             return hv.Text(0.5, 0.5, f'Error creating plot: {str(e)}').opts(
-                bgcolor='black',
+                bgcolor=FLEXOKI_PAPER,
                 color='red',
                 fontsize=12
             )
@@ -2018,10 +2166,10 @@ class EnergyDashboard(param.Parameterized):
                 return hv.Text(0.5, 0.5, 'Transmission flows not available for NEM view\nSelect a specific region').opts(
                     xlim=(0, 1),
                     ylim=(0, 1),
-                    bgcolor='black',
+                    bgcolor=FLEXOKI_PAPER,
                     width=1200,
                     height=300,
-                    color='white',
+                    color=FLEXOKI_BLACK,
                     fontsize=14
                 )
             
@@ -2034,10 +2182,10 @@ class EnergyDashboard(param.Parameterized):
                 return hv.Text(0.5, 0.5, f'No transmission data for {self.region}').opts(
                     xlim=(0, 1),
                     ylim=(0, 1),
-                    bgcolor='black',
+                    bgcolor=FLEXOKI_PAPER,
                     width=1200,
                     height=300,
-                    color='white',
+                    color=FLEXOKI_BLACK,
                     fontsize=14
                 )
             
@@ -2072,10 +2220,10 @@ class EnergyDashboard(param.Parameterized):
                 return hv.Text(0.5, 0.5, f'No transmission lines for {self.region}').opts(
                     xlim=(0, 1),
                     ylim=(0, 1),
-                    bgcolor='black',
+                    bgcolor=FLEXOKI_PAPER,
                     width=1200,
                     height=300,
-                    color='white',
+                    color=FLEXOKI_BLACK,
                     fontsize=14
                 )
             
@@ -2105,10 +2253,10 @@ class EnergyDashboard(param.Parameterized):
                 return hv.Text(0.5, 0.5, f'No transmission data for {self.region}').opts(
                     xlim=(0, 1),
                     ylim=(0, 1),
-                    bgcolor='black',
+                    bgcolor=FLEXOKI_PAPER,
                     width=1200,
                     height=300,
-                    color='white',
+                    color=FLEXOKI_BLACK,
                     fontsize=14
                 )
             
@@ -2255,16 +2403,16 @@ class EnergyDashboard(param.Parameterized):
                     hover=False,
                     label=f'{interconnector} unused capacity'
                 ).opts(
-                    hooks=[self._get_datetime_formatter_hook()]
+                    hooks=[self._get_datetime_formatter_hook(), self._get_flexoki_background_hook()]
                 )
-                
+
                 # Create the main flow line with enhanced tooltips
                 hover_df['capacity_status'] = hover_df['percent'].apply(
-                    lambda x: 'At Capacity (≥95%)' if x >= 95 else 
-                             'High Utilization (≥80%)' if x >= 80 else 
+                    lambda x: 'At Capacity (>=95%)' if x >= 95 else
+                             'High Utilization (>=80%)' if x >= 80 else
                              'Normal Operation'
                 )
-                
+
                 flow_line = hover_df.hvplot.line(
                     x='settlementdate',
                     y='flow',
@@ -2284,15 +2432,15 @@ class EnergyDashboard(param.Parameterized):
                     ],
                     hover_formatters={'@settlementdate': 'datetime'}
                 ).opts(
-                    hooks=[self._get_datetime_formatter_hook()]
+                    hooks=[self._get_datetime_formatter_hook(), self._get_flexoki_background_hook()]
                 )
-                
+
                 plot_elements.extend([filled_area, flow_line])
             
             # Add horizontal line at y=0
             zero_line = hv.HLine(0).opts(
-                color='white',
-                alpha=0.3,
+                color=FLEXOKI_BASE[600],  # Use comment gray for subtle grid line
+                alpha=0.5,
                 line_width=1,
                 line_dash='dashed'
             )
@@ -2336,7 +2484,7 @@ class EnergyDashboard(param.Parameterized):
                 combined_plot = hv.Overlay(plot_elements + [zero_line]).opts(
                     width=1200,
                     height=400,  # Increased height to accommodate multiple lines
-                    bgcolor='black',
+                    bgcolor=FLEXOKI_PAPER,
                     ylabel='Flow (MW)',
                     xlabel='Time',
                     title=f'Transmission Flows with Limits - {self.region} ({time_range_display})',
@@ -2345,16 +2493,16 @@ class EnergyDashboard(param.Parameterized):
                     framewise=True,  # Force complete recomputation on updates
                     xlim=x_range,  # Explicitly set x-axis range
                     apply_ranges=False,  # Prevent automatic range determination
-                    hooks=[self._get_datetime_formatter_hook()]  # Re-add hooks
+                    hooks=[self._get_datetime_formatter_hook(), self._get_flexoki_background_hook()]
                 )
             else:
                 combined_plot = hv.Text(0.5, 0.5, f'No transmission data available for {self.region}').opts(
                     xlim=(0, 1),
                     ylim=(0, 1),
-                    bgcolor='black',
+                    bgcolor=FLEXOKI_PAPER,
                     width=1200,
                     height=400,
-                    color='white',
+                    color=FLEXOKI_BLACK,
                     fontsize=14
                 )
             
@@ -2367,10 +2515,10 @@ class EnergyDashboard(param.Parameterized):
             return hv.Text(0.5, 0.5, 'Error loading transmission data').opts(
                 xlim=(0, 1),
                 ylim=(0, 1),
-                bgcolor='black',
+                bgcolor=FLEXOKI_PAPER,
                 width=1200,
                 height=300,
-                color='white',
+                color=FLEXOKI_BLACK,
                 fontsize=12
             )
 
@@ -2383,8 +2531,8 @@ class EnergyDashboard(param.Parameterized):
 
             if data.empty:
                 return hv.Text(0.5, 0.5, 'No generation data available').opts(
-                    xlim=(0, 1), ylim=(0, 1), bgcolor='black',
-                    width=1200, height=600, color='white', fontsize=14
+                    xlim=(0, 1), ylim=(0, 1), bgcolor=FLEXOKI_PAPER,
+                    width=1200, height=600, color=FLEXOKI_BLACK, fontsize=14
                 )
 
             # Prepare data for time-of-day analysis
@@ -2446,14 +2594,15 @@ class EnergyDashboard(param.Parameterized):
                     xlabel='Hour of Day',
                     grid=True,
                     legend='right',
-                    bgcolor='black',
+                    bgcolor=FLEXOKI_PAPER,
                     color=[fuel_colors.get(fuel, '#6272a4') for fuel in positive_fuels],
                     alpha=0.8,
                     hover=True,
                     title=f'Average Generation by Time of Day - {self.region} ({time_period}) | data:AEMO, design ITK'
                 ).opts(
                     xlim=(0, 23),
-                    xticks=list(range(0, 24, 2))
+                    xticks=list(range(0, 24, 2)),
+                    hooks=[self._get_flexoki_background_hook()]
                 )
 
                 # Create negative values overlay if needed (battery charging, transmission exports)
@@ -2476,10 +2625,12 @@ class EnergyDashboard(param.Parameterized):
                             color='#ffb6c1',  # Light pink - same as Generation Stack
                             alpha=0.8,
                             hover=True,
-                            legend=False
+                            legend=False,
+                            bgcolor=FLEXOKI_PAPER
                         ).opts(
                             xlim=(0, 23),
-                            xticks=list(range(0, 24, 2))
+                            xticks=list(range(0, 24, 2)),
+                            hooks=[self._get_flexoki_background_hook()]
                         )
                         negative_plots.append(transmission_plot)
 
@@ -2499,10 +2650,12 @@ class EnergyDashboard(param.Parameterized):
                             color='#9370db',  # Purple - same as Generation Stack
                             alpha=0.8,
                             hover=True,
-                            legend=False
+                            legend=False,
+                            bgcolor=FLEXOKI_PAPER
                         ).opts(
                             xlim=(0, 23),
-                            xticks=list(range(0, 24, 2))
+                            xticks=list(range(0, 24, 2)),
+                            hooks=[self._get_flexoki_background_hook()]
                         )
                         negative_plots.append(battery_plot)
 
@@ -2557,11 +2710,12 @@ class EnergyDashboard(param.Parameterized):
                             grid=True,
                             color='#ffff00',
                             line_width=3,
-                            bgcolor='black',
+                            bgcolor=FLEXOKI_PAPER,
                             title=f'Average Spot Price by Time of Day - {self.region} ({time_period})'
                         ).opts(
                             xlim=(0, 23),
-                            xticks=list(range(0, 24, 2))
+                            xticks=list(range(0, 24, 2)),
+                            hooks=[self._get_flexoki_background_hook()]
                         )
                         plot_elements.append(price_plot)
 
@@ -2575,8 +2729,8 @@ class EnergyDashboard(param.Parameterized):
                 combined_plot = plot_elements[0]
             else:
                 combined_plot = hv.Text(0.5, 0.5, 'No data available for TOD analysis').opts(
-                    xlim=(0, 1), ylim=(0, 1), bgcolor='black',
-                    width=1200, height=600, color='white', fontsize=14
+                    xlim=(0, 1), ylim=(0, 1), bgcolor=FLEXOKI_PAPER,
+                    width=1200, height=600, color=FLEXOKI_BLACK, fontsize=14
                 )
 
             return combined_plot
@@ -2586,8 +2740,8 @@ class EnergyDashboard(param.Parameterized):
             import traceback
             logger.error(traceback.format_exc())
             return hv.Text(0.5, 0.5, 'Error loading TOD data').opts(
-                xlim=(0, 1), ylim=(0, 1), bgcolor='black',
-                width=1200, height=600, color='white', fontsize=12
+                xlim=(0, 1), ylim=(0, 1), bgcolor=FLEXOKI_PAPER,
+                width=1200, height=600, color=FLEXOKI_BLACK, fontsize=12
             )
 
     def create_utilization_plot(self):
@@ -2600,10 +2754,10 @@ class EnergyDashboard(param.Parameterized):
                 empty_plot = hv.Text(0.5, 0.5, 'No utilization data available').opts(
                     xlim=(0, 1),
                     ylim=(0, 1),
-                    bgcolor='black',
+                    bgcolor=FLEXOKI_PAPER,
                     width=1200,
                     height=400,
-                    color='white',
+                    color=FLEXOKI_BLACK,
                     fontsize=14
                 )
                 return empty_plot
@@ -2619,8 +2773,8 @@ class EnergyDashboard(param.Parameterized):
             
             if not fuel_types:
                 return hv.Text(0.5, 0.5, 'No fuel data for utilization chart').opts(
-                    bgcolor='black',
-                    color='white',
+                    bgcolor=FLEXOKI_PAPER,
+                    color=FLEXOKI_BLACK,
                     fontsize=14
                 )
             
@@ -2636,7 +2790,7 @@ class EnergyDashboard(param.Parameterized):
                 xlabel='Time',
                 grid=False,
                 legend='right',
-                bgcolor='black',
+                bgcolor=FLEXOKI_PAPER,
                 color=[fuel_colors.get(fuel, '#6272a4') for fuel in fuel_types],
                 alpha=0.8,
                 hover=True,
@@ -2645,21 +2799,22 @@ class EnergyDashboard(param.Parameterized):
             ).opts(
                 show_grid=False,
                 toolbar='above',
-                bgcolor='black',
+                bgcolor=FLEXOKI_PAPER,
                 ylim=(0, 100),  # Double ensure Y-axis range
-                yformatter='%.0f%%'  # Format Y-axis as percentage
+                yformatter='%.0f%%',  # Format Y-axis as percentage
+                hooks=[self._get_flexoki_background_hook()]
             )
-            
+
             # Rename the Y dimension to make it independent from generation MW axis
             line_plot = line_plot.redim(**{fuel: f'{fuel}_utilization' for fuel in fuel_types})
-            
+
             return line_plot
-            
+
         except Exception as e:
             logger.error(f"Error creating utilization plot: {e}")
             # Return fallback plot
             return hv.Text(0.5, 0.5, f'Error creating utilization plot: {str(e)}').opts(
-                bgcolor='black',
+                bgcolor=FLEXOKI_PAPER,
                 color='red',
                 fontsize=12
             )
@@ -2714,9 +2869,9 @@ class EnergyDashboard(param.Parameterized):
             # Update the header with new time
             if self.header_section is not None:
                 header_html = f"""
-                <div class='header-container' style='background-color: #008B8B; padding: 15px; margin: -10px -10px 20px -10px;'>
-                    <h1 style='color: white; margin: 0; text-align: center;'>Nem Analysis</h1>
-                    <div style='text-align: center; color: white; font-size: 16px; margin-top: 5px;'>
+                <div class='header-container' style='background-color: {FLEXOKI_BASE[100]}; padding: 15px; margin: -10px -10px 20px -10px;'>
+                    <h1 style='color: {FLEXOKI_BLACK}; margin: 0; text-align: center;'>Nem Analysis</h1>
+                    <div style='text-align: center; color: {FLEXOKI_BLACK}; font-size: 16px; margin-top: 5px;'>
                         Last Updated: {datetime.now().strftime('%H:%M:%S')} | data:AEMO, design ITK
                     </div>
                 </div>
@@ -3018,7 +3173,37 @@ class EnergyDashboard(param.Parameterized):
                 logger.debug(f"Could not add attribution: {e}")
         
         return add_attribution
-    
+
+    def _get_flexoki_background_hook(self):
+        """Get a hook that ensures plot area and legend backgrounds are set to FLEXOKI_PAPER.
+
+        This fixes white backgrounds that can appear on plot areas and legends
+        even when bgcolor is set, by explicitly setting the Bokeh model properties.
+
+        Returns:
+            Hook function that sets backgrounds to FLEXOKI_PAPER (#FFFCF0)
+        """
+        def set_flexoki_backgrounds(plot, element):
+            """Set plot area and legend backgrounds to Flexoki paper color"""
+            try:
+                p = plot.state
+                # Set plot background (the inner plot area)
+                p.background_fill_color = FLEXOKI_PAPER
+                # Set border fill (the outer area including where legend sits) - KEY FIX
+                p.border_fill_color = FLEXOKI_PAPER
+                # Set outline color
+                p.outline_line_color = FLEXOKI_BASE[150]
+                # Set legend background if legend exists
+                if hasattr(p, 'legend') and p.legend:
+                    for legend in p.legend:
+                        legend.background_fill_color = FLEXOKI_PAPER
+                        legend.border_line_color = FLEXOKI_BASE[150]
+                        legend.border_line_alpha = 1.0
+            except Exception as e:
+                logger.debug(f"Could not set Flexoki backgrounds: {e}")
+
+        return set_flexoki_backgrounds
+
     def _apply_smoothing(self, data, smoothing_type, column_name, group_column=None):
         """Apply smoothing to data with various algorithms
         
@@ -3225,7 +3410,7 @@ class EnergyDashboard(param.Parameterized):
             time_range_widget.link(self, value='time_range')
             
             time_range_selector = pn.Column(
-                pn.pane.HTML("<div style='color: #aaa; font-size: 11px; margin-bottom: 4px;'>Days</div>"),
+                pn.pane.HTML(f"<div style='color: {FLEXOKI_BLACK}; font-size: 11px; margin-bottom: 4px;'>Days</div>"),
                 time_range_widget,
                 width=350,
                 margin=(10, 0)
@@ -3302,9 +3487,9 @@ class EnergyDashboard(param.Parameterized):
         try:
             # Dashboard title with update time in teal header
             header_html = f"""
-            <div class='header-container' style='background-color: #008B8B; padding: 15px; margin: -10px -10px 20px -10px;'>
-                <h1 style='color: white; margin: 0; text-align: center;'>Nem Analysis</h1>
-                <div style='text-align: center; color: white; font-size: 16px; margin-top: 5px;'>
+            <div class='header-container' style='background-color: {FLEXOKI_BASE[100]}; padding: 15px; margin: -10px -10px 20px -10px;'>
+                <h1 style='color: {FLEXOKI_BLACK}; margin: 0; text-align: center;'>Nem Analysis</h1>
+                <div style='text-align: center; color: {FLEXOKI_BLACK}; font-size: 16px; margin-top: 5px;'>
                     Last Updated: {datetime.now().strftime('%H:%M:%S')} | data:AEMO, design ITK
                 </div>
             </div>
@@ -3375,7 +3560,7 @@ class EnergyDashboard(param.Parameterized):
             # Add JavaScript auto-refresh for reliability - 9 minutes for production (2 collector cycles)
             auto_refresh_script = pn.pane.HTML(
                 """
-                <div style="position: fixed; top: 5px; right: 5px; background: rgba(40,42,54,0.8); color: #50fa7b; padding: 5px 10px; border-radius: 5px; font-size: 11px; z-index: 9999;">
+                <div style="position: fixed; top: 5px; right: 5px; background: rgba(226,224,217,0.9); color: #66800B; padding: 5px 10px; border-radius: 5px; font-size: 11px; z-index: 9999;">
                     Auto-refresh: 9min
                 </div>
                 <script>
@@ -3647,16 +3832,17 @@ class EnergyDashboard(param.Parameterized):
             
             # Initialize with instruction message
             self.price_plot_pane.object = hv.Text(0.5, 0.5, "Click 'Analyze Prices' to load data").opts(
-                xlim=(0, 1), ylim=(0, 1), 
-                bgcolor='#282a36',  # Dracula background
-                color='#f8f8f2',    # Dracula foreground
-                fontsize=16
+                xlim=(0, 1), ylim=(0, 1),
+                bgcolor=FLEXOKI_PAPER,
+                color=FLEXOKI_BLACK,
+                fontsize=16,
+                hooks=[_text_background_hook]
             )
             
             # Create statistics title pane
             self.stats_title_pane = pn.pane.Markdown(
                 "### Price Statistics",
-                styles={'color': '#f8f8f2', 'background-color': '#282a36', 'padding': '10px'}
+                styles={'color': FLEXOKI_BLACK, 'background-color': FLEXOKI_PAPER, 'padding': '10px'}
             )
             
             # Create statistics table pane
@@ -3671,43 +3857,43 @@ class EnergyDashboard(param.Parameterized):
                 height=420,  # Height for 10 rows (removed variance)
                 show_index=False,  # Changed to False for cleaner look
                 sizing_mode='stretch_width',
-                stylesheets=["""
-                    .tabulator {
-                        background-color: #282a36;
-                        color: #f8f8f2;
-                    }
-                    .tabulator-header {
-                        background-color: #44475a;
-                        color: #f8f8f2;
+                stylesheets=[f"""
+                    .tabulator {{
+                        background-color: {FLEXOKI_PAPER};
+                        color: {FLEXOKI_BLACK};
+                    }}
+                    .tabulator-header {{
+                        background-color: {FLEXOKI_BASE[100]};
+                        color: {FLEXOKI_BLACK};
                         font-weight: bold;
-                    }
-                    .tabulator-row {
-                        background-color: #282a36;
-                        color: #f8f8f2;
-                    }
-                    .tabulator-row:nth-child(even) {
-                        background-color: #383a46;
-                    }
-                    .tabulator-row:hover {
-                        background-color: #44475a;
-                    }
-                    .tabulator-cell {
+                    }}
+                    .tabulator-row {{
+                        background-color: {FLEXOKI_PAPER};
+                        color: {FLEXOKI_BLACK};
+                    }}
+                    .tabulator-row:nth-child(even) {{
+                        background-color: {FLEXOKI_BASE[50]};
+                    }}
+                    .tabulator-row:hover {{
+                        background-color: {FLEXOKI_BASE[100]};
+                    }}
+                    .tabulator-cell {{
                         padding: 4px 8px;  /* Reduced vertical padding for more compact look */
-                    }
-                    .tabulator-col {
+                    }}
+                    .tabulator-col {{
                         min-width: auto !important;  /* Allow columns to be more compact */
-                    }
+                    }}
                     /* Make the first row (Mean) bold and highlighted */
-                    .tabulator-row:first-child .tabulator-cell {
+                    .tabulator-row:first-child .tabulator-cell {{
                         font-weight: bold;
-                        color: #50fa7b;  /* Green color for emphasis */
-                        background-color: #383a46;  /* Slightly different background */
-                    }
+                        color: {FLEXOKI_ACCENT['green']};  /* Green color for emphasis */
+                        background-color: {FLEXOKI_BASE[50]};  /* Slightly different background */
+                    }}
                     /* Add light line after Min row (3rd row) */
-                    .tabulator-row:nth-child(3) {
+                    .tabulator-row:nth-child(3) {{
                         border-bottom: 1px solid #6272a4;
                         padding-bottom: 8px;
-                    }
+                    }}
                 """],
                 configuration={
                     'columnDefaults': {
@@ -3725,36 +3911,36 @@ class EnergyDashboard(param.Parameterized):
                 height=250,  # Compact height for 6 fuel rows
                 show_index=False,
                 sizing_mode='stretch_width',
-                stylesheets=["""
-                    .tabulator {
-                        background-color: #282a36;
-                        color: #f8f8f2;
+                stylesheets=[f"""
+                    .tabulator {{
+                        background-color: {FLEXOKI_PAPER};
+                        color: {FLEXOKI_BLACK};
                         margin-top: -10px;  /* Bring closer to stats table */
-                    }
-                    .tabulator-header {
-                        background-color: #44475a;
-                        color: #f8f8f2;
+                    }}
+                    .tabulator-header {{
+                        background-color: {FLEXOKI_BASE[100]};
+                        color: {FLEXOKI_BLACK};
                         font-weight: bold;
                         padding-top: 8px;  /* Add some padding at top */
-                    }
-                    .tabulator-row {
-                        background-color: #282a36;
-                        color: #f8f8f2;
-                    }
-                    .tabulator-row:nth-child(even) {
-                        background-color: #383a46;
-                    }
-                    .tabulator-row:hover {
-                        background-color: #44475a;
-                    }
-                    .tabulator-cell {
+                    }}
+                    .tabulator-row {{
+                        background-color: {FLEXOKI_PAPER};
+                        color: {FLEXOKI_BLACK};
+                    }}
+                    .tabulator-row:nth-child(even) {{
+                        background-color: {FLEXOKI_BASE[50]};
+                    }}
+                    .tabulator-row:hover {{
+                        background-color: {FLEXOKI_BASE[100]};
+                    }}
+                    .tabulator-cell {{
                         padding: 4px 8px;
-                    }
+                    }}
                     /* Make first column (Fuel Type) bold */
-                    .tabulator-row .tabulator-cell:first-child {
+                    .tabulator-row .tabulator-cell:first-child {{
                         font-weight: bold;
-                        color: #8be9fd;  /* Cyan for fuel names */
-                    }
+                        color: {FLEXOKI_ACCENT['cyan']};  /* Cyan for fuel names */
+                    }}
                 """],
                 configuration={
                     'columnDefaults': {
@@ -3777,30 +3963,33 @@ class EnergyDashboard(param.Parameterized):
             # Initialize with instruction message
             initial_message = pn.pane.HoloViews(
                 hv.Text(0.5, 0.5, "Price bands will appear here").opts(
-                    xlim=(0, 1), ylim=(0, 1), 
-                    bgcolor='#282a36', color='#f8f8f2', fontsize=14
+                    xlim=(0, 1), ylim=(0, 1),
+                    bgcolor=FLEXOKI_PAPER, color=FLEXOKI_BLACK, fontsize=14,
+                    hooks=[_text_background_hook]
                 ),
                 sizing_mode='stretch_width',
                 height=550
             )
             self.bands_plot_pane.clear()
             self.bands_plot_pane.append(initial_message)
-            
+
             # Create fuel relatives plot pane
             self.fuel_relatives_plot_pane = pn.pane.HoloViews(
                 hv.Text(0.5, 0.5, "Select a region and click Analyze to view fuel-weighted prices").opts(
                     xlim=(0, 1), ylim=(0, 1),
-                    bgcolor='#282a36', color='#f8f8f2', fontsize=14
+                    bgcolor=FLEXOKI_PAPER, color=FLEXOKI_BLACK, fontsize=14,
+                    hooks=[_text_background_hook]
                 ),
                 sizing_mode='stretch_both',
                 height=400
             )
-            
+
             # Create price index plot pane (normalized to flat load = 100)
             self.price_index_plot_pane = pn.pane.HoloViews(
                 hv.Text(0.5, 0.5, "Price index will appear here after analysis").opts(
                     xlim=(0, 1), ylim=(0, 1),
-                    bgcolor='#282a36', color='#f8f8f2', fontsize=14
+                    bgcolor=FLEXOKI_PAPER, color=FLEXOKI_BLACK, fontsize=14,
+                    hooks=[_text_background_hook]
                 ),
                 sizing_mode='stretch_both',
                 height=400
@@ -3813,7 +4002,7 @@ class EnergyDashboard(param.Parameterized):
                 sizing_mode='fixed',
                 width=550,  # Fixed width to show all columns
                 height=380,  # Increased height to use more space
-                theme='midnight',
+                theme='fast',
                 configuration={
                     'columnDefaults': {
                         'headerSort': False,
@@ -3825,16 +4014,31 @@ class EnergyDashboard(param.Parameterized):
                     'rowHeight': 20,  # Reduced row height
                     'headerHeight': 25  # Reduced header height
                 },
-                stylesheets=["""
-                .tabulator {
+                stylesheets=[f"""
+                .tabulator {{
                     font-size: 11px !important;
-                }
-                .tabulator-header {
+                    background-color: {FLEXOKI_PAPER};
+                    color: {FLEXOKI_BLACK};
+                }}
+                .tabulator-header {{
                     font-size: 11px !important;
-                }
-                .tabulator-cell {
+                    background-color: {FLEXOKI_BASE[100]};
+                    color: {FLEXOKI_BLACK};
+                    font-weight: bold;
+                }}
+                .tabulator-row {{
+                    background-color: {FLEXOKI_PAPER};
+                    color: {FLEXOKI_BLACK};
+                }}
+                .tabulator-row:nth-child(even) {{
+                    background-color: {FLEXOKI_BASE[50]};
+                }}
+                .tabulator-row:hover {{
+                    background-color: {FLEXOKI_BASE[100]};
+                }}
+                .tabulator-cell {{
                     padding: 2px 4px !important;
-                }
+                }}
                 """]
             )
             
@@ -3845,8 +4049,9 @@ class EnergyDashboard(param.Parameterized):
             )
             # Initialize with instruction message
             self.tod_plot_pane.object = hv.Text(0.5, 0.5, "Time of day analysis will appear here").opts(
-                xlim=(0, 1), ylim=(0, 1), 
-                bgcolor='#282a36', color='#f8f8f2', fontsize=14
+                xlim=(0, 1), ylim=(0, 1),
+                bgcolor=FLEXOKI_PAPER, color=FLEXOKI_BLACK, fontsize=14,
+                hooks=[_text_background_hook]
             )
             
             # Left column - all controls with compact layout
@@ -4119,7 +4324,7 @@ class EnergyDashboard(param.Parameterized):
                     # Show loading message
                     self.price_plot_pane.object = hv.Text(0.5, 0.5, 'Loading price data...').opts(
                         xlim=(0, 1), ylim=(0, 1), 
-                        bgcolor='#282a36', color='#f8f8f2', fontsize=14
+                        bgcolor=FLEXOKI_PAPER, color=FLEXOKI_BLACK, fontsize=14
                     )
                     
                     # Get current selections
@@ -4127,7 +4332,7 @@ class EnergyDashboard(param.Parameterized):
                     if not selected_regions:
                         self.price_plot_pane.object = hv.Text(0.5, 0.5, 'Please select at least one region').opts(
                             xlim=(0, 1), ylim=(0, 1), 
-                            bgcolor='#282a36', color='#ff5555', fontsize=14
+                            bgcolor=FLEXOKI_PAPER, color=FLEXOKI_ACCENT['red'], fontsize=14
                         )
                         # Clear statistics table
                         self.stats_pane.value = pd.DataFrame({'Message': ['Please select at least one region']})
@@ -4136,12 +4341,12 @@ class EnergyDashboard(param.Parameterized):
                         # Clear bands plot
                         self.bands_plot_pane.object = hv.Text(0.5, 0.5, 'Please select at least one region').opts(
                             xlim=(0, 1), ylim=(0, 1), 
-                            bgcolor='#282a36', color='#ff5555', fontsize=14
+                            bgcolor=FLEXOKI_PAPER, color=FLEXOKI_ACCENT['red'], fontsize=14
                         )
                         # Clear time-of-day plot
                         self.tod_plot_pane.object = hv.Text(0.5, 0.5, 'Please select at least one region').opts(
                             xlim=(0, 1), ylim=(0, 1), 
-                            bgcolor='#282a36', color='#ff5555', fontsize=14
+                            bgcolor=FLEXOKI_PAPER, color=FLEXOKI_ACCENT['red'], fontsize=14
                         )
                         return
                     
@@ -4165,7 +4370,7 @@ class EnergyDashboard(param.Parameterized):
                     if price_data.empty:
                         self.price_plot_pane.object = hv.Text(0.5, 0.5, 'No data available for selected period').opts(
                             xlim=(0, 1), ylim=(0, 1), 
-                            bgcolor='#282a36', color='#f8f8f2', fontsize=14
+                            bgcolor=FLEXOKI_PAPER, color=FLEXOKI_BLACK, fontsize=14
                         )
                         # Clear statistics table
                         self.stats_pane.value = pd.DataFrame({'Message': ['No data available for selected period']})
@@ -4174,12 +4379,12 @@ class EnergyDashboard(param.Parameterized):
                         # Clear bands plot
                         self.bands_plot_pane.object = hv.Text(0.5, 0.5, 'No data available').opts(
                             xlim=(0, 1), ylim=(0, 1), 
-                            bgcolor='#282a36', color='#f8f8f2', fontsize=14
+                            bgcolor=FLEXOKI_PAPER, color=FLEXOKI_BLACK, fontsize=14
                         )
                         # Clear time-of-day plot
                         self.tod_plot_pane.object = hv.Text(0.5, 0.5, 'No data available').opts(
                             xlim=(0, 1), ylim=(0, 1), 
-                            bgcolor='#282a36', color='#f8f8f2', fontsize=14
+                            bgcolor=FLEXOKI_PAPER, color=FLEXOKI_BLACK, fontsize=14
                         )
                         return
                     
@@ -4400,13 +4605,13 @@ class EnergyDashboard(param.Parameterized):
                                     # Fall back to original data if smoothing fails
                                     pass
                     
-                    # Define Dracula theme colors for regions
+                    # Define Flexoki theme colors for regions
                     region_colors = {
-                        'NSW1': '#8be9fd',  # Cyan
-                        'QLD1': '#50fa7b',  # Green  
-                        'SA1': '#ffb86c',   # Orange
-                        'TAS1': '#ff79c6',  # Pink
-                        'VIC1': '#bd93f9'   # Purple
+                        'NSW1': FLEXOKI_ACCENT['green'],    # Green
+                        'QLD1': FLEXOKI_ACCENT['orange'],   # Orange
+                        'SA1': FLEXOKI_ACCENT['magenta'],   # Magenta
+                        'TAS1': FLEXOKI_ACCENT['cyan'],     # Cyan
+                        'VIC1': FLEXOKI_ACCENT['purple']    # Purple
                     }
                     
                     # Format date range for title
@@ -4451,7 +4656,7 @@ class EnergyDashboard(param.Parameterized):
                         line_width=2,
                         hover=True,
                         hover_cols=['REGIONID', 'RRP'],  # Show original price in hover
-                        bgcolor=DRACULA_COLORS['bg'],  # Dracula background
+                        bgcolor=FLEXOKI_PAPER,  # Dracula background
                         fontsize={'title': 14, 'labels': 12, 'ticks': 10}
                     ).opts(
                         xlim=xlim,  # Set xlim in opts() for proper range control
@@ -4459,11 +4664,11 @@ class EnergyDashboard(param.Parameterized):
                         active_tools=['pan', 'wheel_zoom'],
                         tools=['hover', 'pan', 'wheel_zoom', 'box_zoom', 'reset', 'save'],
                         show_grid=True,
-                        gridstyle={'grid_line_color': DRACULA_COLORS['current'], 'grid_line_alpha': 0.3}
+                        gridstyle={'grid_line_color': FLEXOKI_BASE[100], 'grid_line_alpha': 0.3}
                     )
-                    
-                    # Apply attribution hook to the plot
-                    plot = plot.opts(hooks=[self._get_attribution_hook()])
+
+                    # Apply attribution hook and Flexoki background hook to the plot
+                    plot = plot.opts(hooks=[self._get_attribution_hook(), self._get_flexoki_background_hook()])
                     
                     self.price_plot_pane.object = plot
                     
@@ -4776,7 +4981,7 @@ class EnergyDashboard(param.Parameterized):
                         
                         # Create color list matching the band order
                         # Order is: Below $0, $0-$300, $301-$1000, Above $1000
-                        band_colors = ['#ff5555', '#50fa7b', '#ffb86c', '#ff79c6']
+                        band_colors = [FLEXOKI_ACCENT['red'], FLEXOKI_ACCENT['green'], FLEXOKI_ACCENT['orange'], FLEXOKI_ACCENT['magenta']]
                         
                         # Create TWO SEPARATE charts - price contribution and time percentage
                         
@@ -4792,16 +4997,17 @@ class EnergyDashboard(param.Parameterized):
                             ylabel='Price Contribution ($/MWh)',
                             title=f'Price Band Contribution ({date_range_text})',
                             color=band_colors,
-                            bgcolor=DRACULA_COLORS['bg'],
+                            bgcolor=FLEXOKI_PAPER,
                             legend='top',
                             toolbar='above'
                         ).opts(
                             xrotation=0,
                             show_grid=True,
-                            gridstyle={'grid_line_color': DRACULA_COLORS['current'], 'grid_line_alpha': 0.3},
-                            fontsize={'ticks': 10, 'title': 12, 'ylabel': 10}
+                            gridstyle={'grid_line_color': FLEXOKI_BASE[100], 'grid_line_alpha': 0.3},
+                            fontsize={'ticks': 10, 'title': 12, 'ylabel': 10},
+                            hooks=[self._get_flexoki_background_hook()]
                         )
-                        
+
                         # Add labels to contribution bars
                         contrib_overlays = []
                         for region in bands_df['Region'].unique():
@@ -4814,7 +5020,7 @@ class EnergyDashboard(param.Parameterized):
                                     y_pos = cumulative_height + row['Contribution'] / 2
                                     contrib_overlays.append(
                                         hv.Text(region, y_pos, label)
-                                            .opts(color='white', fontsize=8, text_align='center', text_baseline='middle')
+                                            .opts(color=FLEXOKI_BLACK, fontsize=8, text_align='center', text_baseline='middle')
                                     )
                                 cumulative_height += row['Contribution']
                         
@@ -4833,16 +5039,17 @@ class EnergyDashboard(param.Parameterized):
                             ylabel='Time Distribution (%)',
                             title='Time in Each Price Band',
                             color=band_colors,
-                            bgcolor=DRACULA_COLORS['bg'],
+                            bgcolor=FLEXOKI_PAPER,
                             legend='bottom',  # Different legend position
                             toolbar='above'
                         ).opts(
                             xrotation=0,
                             show_grid=True,
-                            gridstyle={'grid_line_color': DRACULA_COLORS['current'], 'grid_line_alpha': 0.3},
-                            fontsize={'ticks': 10, 'title': 12, 'ylabel': 10, 'xlabel': 10}
+                            gridstyle={'grid_line_color': FLEXOKI_BASE[100], 'grid_line_alpha': 0.3},
+                            fontsize={'ticks': 10, 'title': 12, 'ylabel': 10, 'xlabel': 10},
+                            hooks=[self._get_flexoki_background_hook()]
                         )
-                        
+
                         # Add labels to time distribution bars
                         time_overlays = []
                         for region in bands_df['Region'].unique():
@@ -4860,22 +5067,22 @@ class EnergyDashboard(param.Parameterized):
                                     y_pos = cumulative_height + row['Percentage'] / 2
                                     time_overlays.append(
                                         hv.Text(region, y_pos, label)
-                                            .opts(color='white', fontsize=8, text_align='center', text_baseline='middle')
+                                            .opts(color=FLEXOKI_BLACK, fontsize=8, text_align='center', text_baseline='middle')
                                     )
                                 cumulative_height += row['Percentage']
                         
                         if time_overlays:
                             time_plot = time_plot * hv.Overlay(time_overlays)
                         
-                        # Apply attribution hook to individual plots
+                        # Apply attribution hook and Flexoki background hook to individual plots
                         contrib_plot = contrib_plot.opts(
                             padding=(0.1, 0.1),
-                            hooks=[self._get_attribution_hook()]
+                            hooks=[self._get_attribution_hook(), self._get_flexoki_background_hook()]
                         )
-                        
+
                         time_plot = time_plot.opts(
                             padding=(0.1, 0.1),
-                            hooks=[self._get_attribution_hook()]
+                            hooks=[self._get_attribution_hook(), self._get_flexoki_background_hook()]
                         )
                         
                         # Create price band details table for all bands
@@ -5028,7 +5235,7 @@ class EnergyDashboard(param.Parameterized):
                         no_data_message = pn.pane.HoloViews(
                             hv.Text(0.5, 0.5, 'No price band data available\nPlease select regions and click "Analyze Prices"').opts(
                                 xlim=(0, 1), ylim=(0, 1), 
-                                bgcolor='#282a36', color='#f8f8f2', fontsize=14
+                                bgcolor=FLEXOKI_PAPER, color=FLEXOKI_BLACK, fontsize=14
                             ),
                             sizing_mode='stretch_width',
                             height=550
@@ -5061,20 +5268,20 @@ class EnergyDashboard(param.Parameterized):
                         ylabel='Average Price ($/MWh)',
                         title=f'Average Price by Hour ({date_range_text})',
                         color=tod_colors,
-                        bgcolor=DRACULA_COLORS['bg'],
+                        bgcolor=FLEXOKI_PAPER,
                         legend='top_right',
                         xticks=list(range(0, 24, 3)),  # Show every 3 hours
                         toolbar='above',
                         grid=True
                     ).opts(
                         show_grid=True,
-                        gridstyle={'grid_line_color': DRACULA_COLORS['current'], 'grid_line_alpha': 0.3},
+                        gridstyle={'grid_line_color': FLEXOKI_BASE[100], 'grid_line_alpha': 0.3},
                         fontsize={'xlabel': 10, 'ylabel': 10, 'ticks': 9}
                     )
-                    
-                    # Apply attribution hook to the plot
-                    tod_plot = tod_plot.opts(hooks=[self._get_attribution_hook()])
-                    
+
+                    # Apply attribution hook and Flexoki background hook to the plot
+                    tod_plot = tod_plot.opts(hooks=[self._get_attribution_hook(), self._get_flexoki_background_hook()])
+
                     self.tod_plot_pane.object = tod_plot
                     
                 except Exception as e:
@@ -5082,7 +5289,7 @@ class EnergyDashboard(param.Parameterized):
                     error_msg = f'Error: {str(e)}'
                     self.price_plot_pane.object = hv.Text(0.5, 0.5, error_msg).opts(
                         xlim=(0, 1), ylim=(0, 1), 
-                        bgcolor='#282a36', color='#ff5555', fontsize=14
+                        bgcolor=FLEXOKI_PAPER, color=FLEXOKI_ACCENT['red'], fontsize=14
                     )
                     # Clear statistics table with error message
                     self.stats_pane.value = pd.DataFrame({'Error': [str(e)]})
@@ -5091,12 +5298,12 @@ class EnergyDashboard(param.Parameterized):
                     # Clear bands plot
                     self.bands_plot_pane.object = hv.Text(0.5, 0.5, 'Error loading data').opts(
                         xlim=(0, 1), ylim=(0, 1), 
-                        bgcolor='#282a36', color='#ff5555', fontsize=14
+                        bgcolor=FLEXOKI_PAPER, color=FLEXOKI_ACCENT['red'], fontsize=14
                     )
                     # Clear time-of-day plot
                     self.tod_plot_pane.object = hv.Text(0.5, 0.5, 'Error loading data').opts(
                         xlim=(0, 1), ylim=(0, 1), 
-                        bgcolor='#282a36', color='#ff5555', fontsize=14
+                        bgcolor=FLEXOKI_PAPER, color=FLEXOKI_ACCENT['red'], fontsize=14
                     )
             
             # Set up callbacks for UI updates only
@@ -5119,7 +5326,7 @@ class EnergyDashboard(param.Parameterized):
                             "Select a region to view 90-day LOESS smoothed fuel-weighted prices\n(Uses all available data ~5.5 years, excludes biomass, includes battery discharge)"
                         ).opts(
                             xlim=(0, 1), ylim=(0, 1),
-                            bgcolor='#282a36', color='#f8f8f2', fontsize=14
+                            bgcolor=FLEXOKI_PAPER, color=FLEXOKI_BLACK, fontsize=14
                         )
                         return
                     
@@ -5132,7 +5339,7 @@ class EnergyDashboard(param.Parameterized):
                         f"Loading 5.5 years of data for {selected_fuel_region}...\nThis may take 20-30 seconds"
                     ).opts(
                         xlim=(0, 1), ylim=(0, 1),
-                        bgcolor='#282a36', color='#50fa7b', fontsize=14
+                        bgcolor=FLEXOKI_PAPER, color=FLEXOKI_ACCENT['green'], fontsize=14
                     )
                     
                     # Load ALL available data for long-term trend analysis
@@ -5230,7 +5437,7 @@ class EnergyDashboard(param.Parameterized):
                         self.fuel_relatives_plot_pane.object = hv.Text(0.5, 0.5, 
                             f'No data available for {selected_fuel_region}').opts(
                             xlim=(0, 1), ylim=(0, 1),
-                            bgcolor='#282a36', color='#f8f8f2', fontsize=14
+                            bgcolor=FLEXOKI_PAPER, color=FLEXOKI_BLACK, fontsize=14
                         )
                         return
                     
@@ -5359,17 +5566,17 @@ class EnergyDashboard(param.Parameterized):
                         
                         # Define custom colors for fuel types - create a list in the same order as columns
                         fuel_color_map = {
-                            'Flat Load': '#ffffff',  # White for flat load (will be dotted)
-                            'Wind': '#50fa7b',       # Green for wind
-                            'Solar': '#ffb86c',      # Orange for solar
-                            'Coal': '#b8b8b8',       # Light gray for coal (more visible)
-                            'Gas': '#ff5555',        # Red for gas
-                            'Water': '#8be9fd',      # Cyan for water/hydro
-                            'Battery Storage': '#bd93f9'  # Light purple for battery
+                            'Flat Load': FLEXOKI_BASE[600],  # Gray for flat load (will be dotted)
+                            'Wind': FLEXOKI_ACCENT['green'],  # Green for wind
+                            'Solar': FLEXOKI_ACCENT['yellow'],  # Yellow for solar
+                            'Coal': FLEXOKI_BASE[400],  # Gray for coal
+                            'Gas': FLEXOKI_ACCENT['red'],  # Red for gas
+                            'Water': FLEXOKI_ACCENT['cyan'],  # Cyan for water/hydro
+                            'Battery Storage': FLEXOKI_ACCENT['purple']  # Purple for battery
                         }
-                        
+
                         # Create color list in the same order as columns
-                        color_list = [fuel_color_map.get(col, '#f8f8f2') for col in smoothed_data.columns]
+                        color_list = [fuel_color_map.get(col, FLEXOKI_BASE[500]) for col in smoothed_data.columns]
                         
                         # Create line dash patterns - dotted for Flat Load, solid for others
                         line_dash_map = {col: 'dotted' if col == 'Flat Load' else 'solid' 
@@ -5388,32 +5595,32 @@ class EnergyDashboard(param.Parameterized):
                             color=color_list,
                             line_dash=list(line_dash_map.values())
                         ).opts(
-                            bgcolor='#282a36',
+                            bgcolor=FLEXOKI_PAPER,
                             active_tools=['pan', 'wheel_zoom'],
-                            hooks=[self._get_attribution_hook()]
+                            hooks=[self._get_attribution_hook(), self._get_flexoki_background_hook()]
                         )
-                        
+
                         self.fuel_relatives_plot_pane.object = fuel_relatives_plot
-                        
+
                         # Create price index plot (normalized to Flat Load = 100)
                         if 'Flat Load' in smoothed_data.columns:
                             # Create indexed data where Flat Load = 100
                             indexed_data = pd.DataFrame(index=smoothed_data.index)
-                            
+
                             for col in smoothed_data.columns:
                                 # Calculate index: (fuel_price / flat_load_price) * 100
                                 # Handle division by zero or NaN
                                 flat_load_values = smoothed_data['Flat Load'].values
                                 fuel_values = smoothed_data[col].values
-                                
+
                                 # Create mask for valid flat load values
                                 valid_mask = (flat_load_values != 0) & ~np.isnan(flat_load_values)
-                                
+
                                 indexed_values = np.full(len(fuel_values), np.nan)
                                 indexed_values[valid_mask] = (fuel_values[valid_mask] / flat_load_values[valid_mask]) * 100
-                                
+
                                 indexed_data[col] = indexed_values
-                            
+
                             # Create the index plot with same styling
                             price_index_plot = indexed_data.hvplot.line(
                                 y=indexed_data.columns.tolist(),
@@ -5428,9 +5635,9 @@ class EnergyDashboard(param.Parameterized):
                                 color=color_list,
                                 line_dash=list(line_dash_map.values())
                             ).opts(
-                                bgcolor='#282a36',
+                                bgcolor=FLEXOKI_PAPER,
                                 active_tools=['pan', 'wheel_zoom'],
-                                hooks=[self._get_attribution_hook()]
+                                hooks=[self._get_attribution_hook(), self._get_flexoki_background_hook()]
                             ) * hv.HLine(100).opts(color='gray', line_dash='dashed', line_width=1)
                             
                             self.price_index_plot_pane.object = price_index_plot
@@ -5438,18 +5645,18 @@ class EnergyDashboard(param.Parameterized):
                             self.price_index_plot_pane.object = hv.Text(0.5, 0.5, 
                                 'Flat Load data not available for indexing').opts(
                                 xlim=(0, 1), ylim=(0, 1),
-                                bgcolor='#282a36', color='#f8f8f2', fontsize=14
+                                bgcolor=FLEXOKI_PAPER, color=FLEXOKI_BLACK, fontsize=14
                             )
                     else:
                         self.fuel_relatives_plot_pane.object = hv.Text(0.5, 0.5, 
                             f'Insufficient data for smoothing').opts(
                             xlim=(0, 1), ylim=(0, 1),
-                            bgcolor='#282a36', color='#f8f8f2', fontsize=14
+                            bgcolor=FLEXOKI_PAPER, color=FLEXOKI_BLACK, fontsize=14
                         )
                         self.price_index_plot_pane.object = hv.Text(0.5, 0.5, 
                             f'Insufficient data for indexing').opts(
                             xlim=(0, 1), ylim=(0, 1),
-                            bgcolor='#282a36', color='#f8f8f2', fontsize=14
+                            bgcolor=FLEXOKI_PAPER, color=FLEXOKI_BLACK, fontsize=14
                         )
                 
                 except Exception as e:
@@ -5457,12 +5664,12 @@ class EnergyDashboard(param.Parameterized):
                     self.fuel_relatives_plot_pane.object = hv.Text(0.5, 0.5, 
                         f'Error: {str(e)}').opts(
                         xlim=(0, 1), ylim=(0, 1),
-                        bgcolor='#282a36', color='#f8f8f2', fontsize=14
+                        bgcolor=FLEXOKI_PAPER, color=FLEXOKI_BLACK, fontsize=14
                     )
                     self.price_index_plot_pane.object = hv.Text(0.5, 0.5, 
                         f'Error: {str(e)}').opts(
                         xlim=(0, 1), ylim=(0, 1),
-                        bgcolor='#282a36', color='#f8f8f2', fontsize=14
+                        bgcolor=FLEXOKI_PAPER, color=FLEXOKI_BLACK, fontsize=14
                     )
             
             # Set up callback for fuel relatives region selector - completely independent
@@ -5654,9 +5861,9 @@ def main():
         print("⚠️  No .env file found - using default settings")
         print("💡 Run 'python gen_dash.py --create-config' to create one")
     
-    # Set Panel to dark theme globally
-    pn.config.theme = 'dark'
-    
+    # Set Panel to light theme globally (using Flexoki Light)
+    pn.config.theme = 'default'
+
     # Check if required files exist (your existing code)
     if not os.path.exists(GEN_INFO_FILE):
         print(f"Error: {GEN_INFO_FILE} not found")
@@ -5679,11 +5886,11 @@ def main():
     print("Press Ctrl+C to stop the server")
     print("Auto-refresh: Page will reload every 9 minutes (2 data collector cycles)")
     
-    # Serve the app with dark theme and proper session handling
+    # Serve the app with Flexoki Light theme and proper session handling
     pn.serve(
-        app_factory, 
-        port=port, 
-        allow_websocket_origin=[f"localhost:{port}", "nemgen.itkservices2.com"],
+        app_factory,
+        port=port,
+        allow_websocket_origin=[f"localhost:{port}", "nemgen.itkservices2.com", "192.168.68.71:5008", "*"],
         show=True,
         autoreload=False,  # Disable autoreload in production
         threaded=True     # Enable threading for better concurrent handling

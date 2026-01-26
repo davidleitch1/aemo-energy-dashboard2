@@ -13,9 +13,67 @@ from pathlib import Path
 from typing import Optional
 
 from .curtailment_query_manager import CurtailmentQueryManager
+from ..shared.flexoki_theme import (
+    FLEXOKI_PAPER,
+    FLEXOKI_BLACK,
+    FLEXOKI_BASE,
+    FLEXOKI_ACCENT,
+)
 
 # NEM Regions
 NEM_REGIONS = ['NSW1', 'QLD1', 'SA1', 'TAS1', 'VIC1']
+
+# Tabulator CSS for Flexoki theme
+TABULATOR_CSS = f"""
+/* Tabulator Flexoki light theme */
+.tabulator {{
+    background-color: {FLEXOKI_PAPER};
+    border: 1px solid {FLEXOKI_BASE[150]};
+}}
+
+.tabulator-header {{
+    background-color: {FLEXOKI_BASE[50]};
+    border-bottom: 1px solid {FLEXOKI_BASE[150]};
+    color: {FLEXOKI_BLACK};
+}}
+
+.tabulator-row {{
+    background-color: {FLEXOKI_PAPER};
+    border-bottom: 1px solid {FLEXOKI_BASE[100]};
+    color: {FLEXOKI_BLACK};
+}}
+
+.tabulator-row:nth-child(even) {{
+    background-color: {FLEXOKI_BASE[50]};
+}}
+
+.tabulator-row:hover {{
+    background-color: {FLEXOKI_BASE[100]};
+}}
+
+.tabulator-cell {{
+    color: {FLEXOKI_BLACK};
+}}
+"""
+
+
+def set_flexoki_backgrounds(plot, element):
+    """Hook function to set Flexoki theme backgrounds on hvplot charts."""
+    try:
+        p = plot.state
+        # Set plot area background
+        p.background_fill_color = FLEXOKI_PAPER
+        p.border_fill_color = FLEXOKI_PAPER
+
+        # Style legend if present
+        if hasattr(p, 'legend') and p.legend:
+            for legend in p.legend:
+                legend.background_fill_color = FLEXOKI_PAPER
+                legend.border_line_color = FLEXOKI_BASE[150]
+                legend.border_line_width = 1
+                legend.label_text_color = FLEXOKI_BLACK
+    except Exception:
+        pass  # Silently handle any styling errors
 
 
 class CurtailmentTab:
@@ -297,12 +355,12 @@ class CurtailmentTab:
 
             title = " - ".join(title_parts)
 
-            # Create plot using Dracula theme colors
+            # Create plot using Flexoki theme colors
             plot = data.hvplot.area(
                 x='timestamp',
                 y='scada',
                 label='Actual Generation',
-                color='#50fa7b',  # Green
+                color=FLEXOKI_ACCENT['green'],  # Flexoki green
                 alpha=0.7,
                 height=450,
                 width=900,
@@ -310,8 +368,9 @@ class CurtailmentTab:
                 ylabel='Power (MW)',
                 legend='top_left'
             ).opts(
-                bgcolor='#282a36',
-                show_grid=True
+                bgcolor=FLEXOKI_PAPER,
+                show_grid=True,
+                hooks=[set_flexoki_backgrounds]
             )
 
             # Add curtailment
@@ -320,7 +379,7 @@ class CurtailmentTab:
                     x='timestamp',
                     y='curtailment',
                     label='Curtailment',
-                    color='#ff5555',  # Red
+                    color=FLEXOKI_ACCENT['red'],  # Flexoki red
                     alpha=0.4
                 )
 
@@ -330,7 +389,7 @@ class CurtailmentTab:
                     x='timestamp',
                     y='availgen',
                     label='Available Generation',
-                    color='#8be9fd',  # Cyan
+                    color=FLEXOKI_ACCENT['cyan'],  # Flexoki cyan
                     line_dash='dashed',
                     line_width=2
                 )
@@ -340,7 +399,7 @@ class CurtailmentTab:
                     x='timestamp',
                     y='dispatchcap',
                     label='Dispatch Cap',
-                    color='#ffb86c',  # Orange
+                    color=FLEXOKI_ACCENT['orange'],  # Flexoki orange
                     line_width=2
                 )
 
@@ -392,15 +451,15 @@ class CurtailmentTab:
             filter_text = ", ".join(filter_desc) if filter_desc else "All Data"
 
             stats_html = f"""
-            <h3>Summary Statistics</h3>
-            <table style='width:100%; font-size:13px; color:#f8f8f2;'>
+            <h3 style='color:{FLEXOKI_BLACK};'>Summary Statistics</h3>
+            <table style='width:100%; font-size:13px; color:{FLEXOKI_BLACK}; background-color:{FLEXOKI_PAPER};'>
             <tr><td colspan='2'><b>Period: {start} to {end}</b></td></tr>
             <tr><td colspan='2'><b>{filter_text}</b></td></tr>
-            <tr><td colspan='2'><hr></td></tr>
+            <tr><td colspan='2'><hr style='border-color:{FLEXOKI_BASE[150]};'></td></tr>
             <tr><td><b>Curtailment Rate:</b></td><td>{avg_curtailment_rate:.1f}%</td></tr>
             <tr><td><b>Total Curtailed:</b></td><td>{total_curtailment_mwh:,.0f} MWh</td></tr>
             <tr><td><b>Max Curtailment:</b></td><td>{max_curtailment_mw:.1f} MW</td></tr>
-            <tr><td colspan='2'><hr></td></tr>
+            <tr><td colspan='2'><hr style='border-color:{FLEXOKI_BASE[150]};'></td></tr>
             <tr><td><b>Network Curtailment:</b></td><td>{network_events:,}</td></tr>
             <tr><td><b>Economic Curtailment:</b></td><td>{economic_events:,}</td></tr>
             </table>
@@ -433,7 +492,8 @@ class CurtailmentTab:
                 display_df,
                 show_index=False,
                 height=200,
-                width=650
+                width=650,
+                stylesheets=[TABULATOR_CSS]
             )
 
         except Exception as e:
@@ -473,7 +533,8 @@ class CurtailmentTab:
                 display_df,
                 show_index=False,
                 height=300,
-                width=800
+                width=800,
+                stylesheets=[TABULATOR_CSS]
             )
 
         except Exception as e:

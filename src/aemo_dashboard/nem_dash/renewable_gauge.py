@@ -1,6 +1,7 @@
 """
 Renewable Energy Gauge Component for Nem-dash tab
 Uses Plotly gauge with reference markers on the rim
+Updated for Flexoki Light theme
 """
 
 import pandas as pd
@@ -17,6 +18,12 @@ from ..shared.fuel_categories import (
     RENEWABLE_FUELS,
     PUMPED_HYDRO_DUIDS,
     EXCLUDED_FROM_GENERATION
+)
+from ..shared.flexoki_theme import (
+    FLEXOKI_PAPER,
+    FLEXOKI_BLACK,
+    FLEXOKI_BASE,
+    FLEXOKI_ACCENT,
 )
 from .nem_dash_query_manager import NEMDashQueryManager
 
@@ -288,7 +295,8 @@ def update_records(current_percentage):
 def create_renewable_gauge_plotly(current_value, all_time_record=45.2, hour_record=38.7, last_update=None):
     """
     Create Plotly gauge with simple line markers for records
-    
+    Uses Flexoki Light theme colors
+
     Args:
         current_value: Current renewable percentage
         all_time_record: All-time renewable record percentage
@@ -297,13 +305,22 @@ def create_renewable_gauge_plotly(current_value, all_time_record=45.2, hour_reco
     """
     try:
         fig = go.Figure()
-        
+
+        # Flexoki theme colors
+        text_color = FLEXOKI_BLACK
+        gauge_bar_color = FLEXOKI_ACCENT['green']  # #66800B
+        gauge_bg_color = FLEXOKI_BASE[100]  # #E6E4D9
+        gauge_border_color = FLEXOKI_BASE[150]  # #DAD8CE
+        all_time_color = FLEXOKI_ACCENT['yellow']  # #AD8301 (gold-like)
+        hour_record_color = FLEXOKI_ACCENT['cyan']  # #24837B
+        paper_bg_color = FLEXOKI_PAPER  # #FFFCF0
+
         # Main gauge
         fig.add_trace(go.Indicator(
             mode="gauge+number",
             value=current_value,
-            title={'text': "Renewable Energy %", 'font': {'size': 16, 'color': "white"}},
-            number={'suffix': "%", 'font': {'size': 18, 'color': "white"}, 'valueformat': '.0f'},
+            title={'text': "Renewable Energy %", 'font': {'size': 16, 'color': text_color}},
+            number={'suffix': "%", 'font': {'size': 18, 'color': text_color}, 'valueformat': '.0f'},
             domain={'x': [0, 1], 'y': [0.20, 1]},  # Adjusted to make room for timestamp
             gauge={
                 'axis': {
@@ -312,22 +329,22 @@ def create_renewable_gauge_plotly(current_value, all_time_record=45.2, hour_reco
                     'tick0': 0,
                     'dtick': 20,
                     'tickwidth': 1,
-                    'tickcolor': "white",
-                    'tickfont': {'color': "white"}
+                    'tickcolor': text_color,
+                    'tickfont': {'color': text_color}
                 },
-                'bar': {'color': "#50fa7b", 'thickness': 0.6, 'line': {'color': "#50fa7b", 'width': 4}},
-                'bgcolor': "#44475a",
+                'bar': {'color': gauge_bar_color, 'thickness': 0.6, 'line': {'color': gauge_bar_color, 'width': 4}},
+                'bgcolor': gauge_bg_color,
                 'borderwidth': 2,
-                'bordercolor': "#6272a4",
+                'bordercolor': gauge_border_color,
                 'steps': [],
                 'threshold': {
-                    'line': {'color': "gold", 'width': 4},
+                    'line': {'color': all_time_color, 'width': 4},
                     'thickness': 0.75,
                     'value': all_time_record
                 }
             }
         ))
-        
+
         # Hour record gauge (invisible except for threshold)
         fig.add_trace(go.Indicator(
             mode="gauge",
@@ -339,13 +356,13 @@ def create_renewable_gauge_plotly(current_value, all_time_record=45.2, hour_reco
                 'bgcolor': "rgba(0,0,0,0)",
                 'borderwidth': 0,
                 'threshold': {
-                    'line': {'color': "#5DCED0", 'width': 4},
+                    'line': {'color': hour_record_color, 'width': 4},
                     'thickness': 0.75,
                     'value': hour_record
                 }
             }
         ))
-        
+
         # Add timestamp if provided
         if last_update:
             timestamp_str = last_update.strftime("%Y-%m-%d %H:%M")
@@ -355,9 +372,9 @@ def create_renewable_gauge_plotly(current_value, all_time_record=45.2, hour_reco
                 showarrow=False,
                 xref="paper", yref="paper",
                 align="center",
-                font=dict(size=11, color="white")
+                font=dict(size=11, color=text_color)
             )
-        
+
         # Add legend
         fig.add_annotation(
             x=0.5, y=0.10,
@@ -365,66 +382,70 @@ def create_renewable_gauge_plotly(current_value, all_time_record=45.2, hour_reco
             showarrow=False,
             xref="paper", yref="paper",
             align="center",
-            font=dict(size=10, color="white")
+            font=dict(size=10, color=text_color)
         )
-        
+
         # Add legend items horizontally side-by-side to avoid overlap
-        # Gold line and text (left side)
+        # All-time record line and text (left side)
         fig.add_shape(
             type="line",
             x0=0.15, y0=0.05,
             x1=0.20, y1=0.05,
-            line=dict(color="gold", width=4),
+            line=dict(color=all_time_color, width=4),
             xref="paper", yref="paper"
         )
-        
+
         fig.add_annotation(
             x=0.21, y=0.05,
             text=f"All-time: {all_time_record:.0f}%",
             showarrow=False,
             xref="paper", yref="paper",
             align="left",
-            font=dict(size=9, color="white")
+            font=dict(size=9, color=text_color)
         )
-        
-        # Light teal line and text (right side)
+
+        # Hour record line and text (right side)
         fig.add_shape(
             type="line",
             x0=0.55, y0=0.05,
             x1=0.60, y1=0.05,
-            line=dict(color="#5DCED0", width=4),  # Light teal color
+            line=dict(color=hour_record_color, width=4),
             xref="paper", yref="paper"
         )
-        
+
         fig.add_annotation(
             x=0.61, y=0.05,
             text=f"Hour: {hour_record:.0f}%",
             showarrow=False,
             xref="paper", yref="paper",
             align="left",
-            font=dict(size=9, color="white")
+            font=dict(size=9, color=text_color)
         )
-        
+
         fig.update_layout(
-            paper_bgcolor="#282a36",  # Dracula background
-            font={'color': "white"},
+            paper_bgcolor=paper_bg_color,  # Flexoki paper background
+            font={'color': text_color},
             margin=dict(l=20, r=20, t=30, b=30),
             height=380,  # Increased height to accommodate timestamp
             width=400,
             showlegend=False  # No automatic legend
         )
-        
+
         return fig
-        
+
     except Exception as e:
         logger.error(f"Error creating Plotly gauge: {e}")
-        # Return simple fallback gauge
+        # Return simple fallback gauge with Flexoki colors
         return go.Figure().add_trace(go.Indicator(
             mode="gauge+number",
             value=current_value,
-            title={'text': "Renewable Energy %"},
-            gauge={'axis': {'range': [0, 100]}}
-        ))
+            title={'text': "Renewable Energy %", 'font': {'color': FLEXOKI_BLACK}},
+            gauge={
+                'axis': {'range': [0, 100]},
+                'bar': {'color': FLEXOKI_ACCENT['green']},
+                'bgcolor': FLEXOKI_BASE[100],
+            }
+        )).update_layout(paper_bgcolor=FLEXOKI_PAPER)
 
 
 def create_renewable_gauge_component(dashboard_instance=None):

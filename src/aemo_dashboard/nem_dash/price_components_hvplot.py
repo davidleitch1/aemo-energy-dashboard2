@@ -10,42 +10,36 @@ from pathlib import Path
 
 from ..shared.config import config
 from ..shared.logging_config import get_logger
+from ..shared.flexoki_theme import (
+    FLEXOKI_PAPER,
+    FLEXOKI_BLACK,
+    FLEXOKI_BASE,
+    FLEXOKI_ACCENT,
+    FLEXOKI_TABLE_STYLES,
+)
 
 logger = get_logger(__name__)
 
-# ITK teal style for dataframe
-PRICE_TABLE_STYLES = [
-    dict(selector="caption",
-         props=[("text-align", "left"),
-                ("font-size", "150%"),
-                ("color", 'white'),
-                ("background-color", "teal"),
-                ("caption-side", "top")]),
-    dict(selector="",
-         props=[("color", "#f8f8f2"),
-                ("background-color", "#282a36"),
-                ("border-bottom", "1px dotted #6272a4")]),
-    dict(selector="th",
-         props=[("background-color", "#44475a"),
-                ("border-bottom", "1px dotted #6272a4"),
-                ("font-size", "14px"),
-                ("color", "#f8f8f2")]),
-    dict(selector="tr",
-         props=[("background-color", "#282a36"),
-                ("border-bottom", "1px dotted #6272a4"),
-                ("color", "#f8f8f2")]),
-    dict(selector="td",
-         props=[("font-size", "14px")]),
-    dict(selector="th.col_heading",
-         props=[("color", "black"),
-                ("font-size", "110%"),
-                ("background-color", "#00DCDC")]),
-    dict(selector="tr:last-child",
-         props=[("color", "#f8f8f2"),
-                ("border-bottom", "5px solid #6272a4")]),
-    dict(selector=".row_heading",
-         props=[("color", "#f8f8f2")])
-]
+# Use Flexoki Light table styles
+PRICE_TABLE_STYLES = FLEXOKI_TABLE_STYLES
+
+
+def set_flexoki_background(plot, element):
+    """
+    Hook to set Flexoki cream background for hvplot/Bokeh charts.
+    Sets plot area background, outline, and legend background.
+    """
+    # Set plot area background to Flexoki cream
+    plot.state.background_fill_color = FLEXOKI_PAPER
+    plot.state.border_fill_color = FLEXOKI_PAPER
+    plot.state.outline_line_color = FLEXOKI_BASE[150]
+
+    # Set legend background if legend exists
+    if plot.state.legend:
+        for legend in plot.state.legend:
+            legend.background_fill_color = FLEXOKI_PAPER
+            legend.border_line_color = FLEXOKI_BASE[150]
+            legend.background_fill_alpha = 1.0
 
 
 def load_price_data():
@@ -151,10 +145,10 @@ def create_price_chart(prices):
         
         # Create hvplot chart (10x faster than matplotlib)
         chart = last_48h_long.hvplot.line(
-            x='SETTLEMENTDATE', 
-            y='Price', 
+            x='SETTLEMENTDATE',
+            y='Price',
             by='Region',
-            width=550, 
+            width=550,
             height=250,
             title='Spot Prices - Last 48 Hours',
             ylabel='Price ($/MWh)',
@@ -164,9 +158,10 @@ def create_price_chart(prices):
             tools=['hover'],
             hover_cols=['Region', 'Price']
         ).opts(
-            bgcolor='#282a36',
-            gridstyle={'grid_line_alpha': 0.3},
-            fontsize={'title': 14, 'labels': 12, 'xticks': 10, 'yticks': 10}
+            bgcolor=FLEXOKI_PAPER,  # Flexoki Light background
+            gridstyle={'grid_line_alpha': 0.3, 'grid_line_color': FLEXOKI_BASE[150]},
+            fontsize={'title': 14, 'labels': 12, 'xticks': 10, 'yticks': 10},
+            hooks=[set_flexoki_background]  # Apply hook to set legend/border backgrounds
         )
         
         return pn.pane.HoloViews(chart, sizing_mode='fixed')

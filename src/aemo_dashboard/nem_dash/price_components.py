@@ -16,6 +16,15 @@ import threading
 
 from ..shared.config import config
 from ..shared.logging_config import get_logger
+from ..shared.flexoki_theme import (
+    FLEXOKI_PAPER,
+    FLEXOKI_BLACK,
+    FLEXOKI_BASE,
+    FLEXOKI_ACCENT,
+    FLEXOKI_TABLE_STYLES,
+    FLEXOKI_MATPLOTLIB_STYLE,
+    REGION_COLORS,
+)
 
 logger = get_logger(__name__)
 
@@ -24,58 +33,18 @@ import logging
 refresh_logger = logging.getLogger('refresh.price_components')
 refresh_logger.setLevel(logging.DEBUG)
 
-# ITK teal style for dataframe (from original)
-PRICE_TABLE_STYLES = [
-    dict(selector="caption",
-         props=[("text-align", "left"),
-                ("font-size", "150%"),
-                ("color", 'white'),
-                ("background-color", "teal"),
-                ("caption-side", "top")]),
-    dict(selector="",
-         props=[("color", "#f8f8f2"),
-                ("background-color", "#282a36"),
-                ("border-bottom", "1px dotted #6272a4")]),
-    dict(selector="th",
-         props=[("background-color", "#44475a"),
-                ("border-bottom", "1px dotted #6272a4"),
-                ("font-size", "14px"),
-                ("color", "#f8f8f2")]),
-    dict(selector="tr",
-         props=[("background-color", "#282a36"),
-                ("border-bottom", "1px dotted #6272a4"),
-                ("color", "#f8f8f2")]),
-    dict(selector="td",
-         props=[("font-size", "14px")]),
-    dict(selector="th.col_heading",
-         props=[("color", "black"),
-                ("font-size", "110%"),
-                ("background-color", "#00DCDC")]),
-    dict(selector="tr:last-child",
-         props=[("color", "#f8f8f2"),
-                ("border-bottom", "5px solid #6272a4")]),
-    dict(selector=".row_heading",
-         props=[("background-color", "#282a36"),
-                ("border-bottom", "1px dotted #6272a4"),
-                ("color", "#f8f8f2"),
-                ("font-size", "14px")]),
-    dict(selector="thead th:first-child",
-         props=[("background-color", "#00DCDC"),
-                ("color", "black")])
-]
+# Flexoki Light style for dataframe
+PRICE_TABLE_STYLES = FLEXOKI_TABLE_STYLES
 
-# Dracula style for matplotlib (from original)
-DRACULA_STYLE = {
-    "axes.facecolor": "#282a36",
-    "axes.edgecolor": "#44475a",
-    "axes.labelcolor": "#f8f8f2",
-    "figure.facecolor": "#282a36",
-    "grid.color": "#6272a4",
-    "text.color": "#f8f8f2",
-    "xtick.color": "#f8f8f2",
-    "ytick.color": "#f8f8f2",
-    "axes.prop_cycle": plt.cycler("color", ["#8be9fd", "#ff79c6", "#50fa7b", "#ffb86c", "#bd93f9", "#ff5555", "#f1fa8c"])
-}
+# Flexoki style for matplotlib
+FLEXOKI_STYLE = FLEXOKI_MATPLOTLIB_STYLE.copy()
+FLEXOKI_STYLE["axes.prop_cycle"] = plt.cycler("color", [
+    REGION_COLORS['NSW1'],  # green
+    REGION_COLORS['QLD1'],  # orange
+    REGION_COLORS['SA1'],   # magenta
+    REGION_COLORS['TAS1'],  # cyan
+    REGION_COLORS['VIC1'],  # purple
+])
 
 
 def load_price_data(start_date=None, end_date=None):
@@ -181,7 +150,7 @@ def create_price_table(prices):
             .set_caption("5 minute spot $/MWh " + prices.index[-1].strftime("%d %b %H:%M"))
             .set_table_styles(PRICE_TABLE_STYLES)
             .apply(lambda x: ['font-weight: bold' if x.name in display.tail(3).index else '' for _ in x], axis=1)
-            .apply(lambda x: ['color: #e0e0e0' if x.name not in display.tail(3).index else '' for _ in x], axis=1))
+            .apply(lambda x: [f'color: {FLEXOKI_BASE[600]}' if x.name not in display.tail(3).index else '' for _ in x], axis=1))
         
         return pn.pane.DataFrame(styled_table, sizing_mode='fixed', width=550, height=350)
         
@@ -224,15 +193,20 @@ def create_price_chart(prices):
         
         # Calculate EWM only on the rows we'll use
         df = prices.tail(rows_to_take).ewm(alpha=0.22, adjust=False).mean()
-        
-        # Apply Dracula style BEFORE creating figure
-        refresh_logger.debug("Applying Dracula style...")
-        plt.rcParams.update(DRACULA_STYLE)
-        
+
+        # Apply Flexoki style BEFORE creating figure
+        refresh_logger.debug("Applying Flexoki style...")
+        plt.rcParams.update(FLEXOKI_STYLE)
+
         # Create matplotlib figure
         refresh_logger.debug("Creating matplotlib figure...")
         fig, ax = plt.subplots()
         fig.set_size_inches(5.5, 4.0)  # Increased height to match generation chart
+
+        # EXPLICIT FIX: Force background colors to Flexoki cream
+        fig.patch.set_facecolor(FLEXOKI_PAPER)
+        ax.set_facecolor(FLEXOKI_PAPER)
+
         refresh_logger.debug("Matplotlib figure created successfully")
         
         # Show the timestamp of the last data point
@@ -261,9 +235,12 @@ def create_price_chart(prices):
         ax.spines['top'].set_visible(False)
         ax.spines['left'].set_visible(False)
         ax.spines['bottom'].set_visible(False)
-        ax.axhline(0, color='white', linewidth=0.3)
+        ax.axhline(0, color=FLEXOKI_BASE[300], linewidth=0.3)
         plt.figtext(0.97, 0.0, "©ITK", fontsize=7, horizontalalignment="right")
-        ax.legend(fontsize=7, frameon=False)
+
+        # Create legend with explicit Flexoki cream background
+        legend = ax.legend(fontsize=7, frameon=True, facecolor=FLEXOKI_PAPER,
+                          edgecolor=FLEXOKI_BASE[150], framealpha=1.0)
         
         plt.tight_layout()
         refresh_logger.debug("Matplotlib chart completed, creating Panel pane...")

@@ -22,6 +22,12 @@ from aemo_dashboard.shared.fuel_categories import (
 )
 from aemo_dashboard.generation.generation_query_manager import GenerationQueryManager
 from aemo_dashboard.shared.config import Config
+from aemo_dashboard.shared.flexoki_theme import (
+    FLEXOKI_PAPER,
+    FLEXOKI_BLACK,
+    FLEXOKI_BASE,
+    FLEXOKI_ACCENT,
+)
 
 logger = get_logger(__name__)
 
@@ -159,15 +165,17 @@ class PenetrationTab:
         """Show error plots instead of empty panes."""
         empty_df = pd.DataFrame({'x': [0], 'y': [0]})
         error_plot = empty_df.hvplot.line(x='x', y='y', label='Error').opts(
-            width=700, height=400, bgcolor='#2B2B3B', 
-            title=f'Error loading data: {error_msg}'
+            width=700, height=400, bgcolor=FLEXOKI_PAPER,
+            title=f'Error loading data: {error_msg}',
+            hooks=[self._get_legend_style_hook()]
         )
         self.vre_production_pane.object = error_plot
         self.vre_by_fuel_pane.object = error_plot
-        
+
         error_plot_wide = empty_df.hvplot.line(x='x', y='y', label='Error').opts(
-            width=1440, height=400, bgcolor='#2B2B3B', 
-            title=f'Error loading data: {error_msg}'
+            width=1440, height=400, bgcolor=FLEXOKI_PAPER,
+            title=f'Error loading data: {error_msg}',
+            hooks=[self._get_legend_style_hook()]
         )
         self.thermal_vs_renewables_pane.object = error_plot_wide
     
@@ -404,8 +412,9 @@ class PenetrationTab:
         if df.empty:
             empty_df = pd.DataFrame({'x': [0], 'y': [0]})
             return empty_df.hvplot.line(x='x', y='y', label='No data').opts(
-                width=700, height=400, bgcolor='#2B2B3B', 
-                title=f'{self.fuel_select.value} production - No data available'
+                width=700, height=400, bgcolor=FLEXOKI_PAPER,
+                title=f'{self.fuel_select.value} production - No data available',
+                hooks=[self._get_legend_style_hook()]
             )
         
         # Filter for selected fuel types
@@ -418,8 +427,9 @@ class PenetrationTab:
         if df_filtered.empty:
             empty_df = pd.DataFrame({'x': [0], 'y': [0]})
             return empty_df.hvplot.line(x='x', y='y', label='No data').opts(
-                width=700, height=400, bgcolor='#2B2B3B', 
-                title=f'{self.fuel_select.value} production - No data'
+                width=700, height=400, bgcolor=FLEXOKI_PAPER,
+                title=f'{self.fuel_select.value} production - No data',
+                hooks=[self._get_legend_style_hook()]
             )
         
         # Ensure datetime
@@ -461,8 +471,9 @@ class PenetrationTab:
         if not plots:
             empty_df = pd.DataFrame({'x': [0], 'y': [0]})
             return empty_df.hvplot.line(x='x', y='y', label='No data').opts(
-                width=700, height=400, bgcolor='#2B2B3B', 
-                title=f'{self.fuel_select.value} production - No data'
+                width=700, height=400, bgcolor=FLEXOKI_PAPER,
+                title=f'{self.fuel_select.value} production - No data',
+                hooks=[self._get_legend_style_hook()]
             )
         
         # Combine plots
@@ -474,7 +485,7 @@ class PenetrationTab:
         final_plot = combined_plot.opts(
             width=700,
             height=400,
-            bgcolor='#2B2B3B',
+            bgcolor=FLEXOKI_PAPER,
             title=f'{self.region_select.value} {self.fuel_select.value} production annualised',
             xlabel='day of year',
             ylabel='TWh',
@@ -485,15 +496,15 @@ class PenetrationTab:
             framewise=True,
             yformatter='%.0f',
             ylim=(None, None),
-            hooks=[self._get_attribution_hook(), self._get_smoothing_text_hook()]
+            hooks=[self._get_attribution_hook(), self._get_smoothing_text_hook(), self._get_legend_style_hook()]
         )
-        
+
         # Cache the plot
         self._cache[plot_cache_key] = final_plot
         self._cache_timestamps[plot_cache_key] = datetime.now()
-        
+
         return final_plot
-    
+
     def _create_vre_by_fuel_chart(self):
         """Create the VRE production by fuel type chart."""
         # Cache key for the plot
@@ -521,8 +532,9 @@ class PenetrationTab:
         if df.empty:
             empty_df = pd.DataFrame({'x': [0], 'y': [0]})
             return empty_df.hvplot.line(x='x', y='y', label='No data').opts(
-                width=700, height=400, bgcolor='#2B2B3B', 
-                title='VRE production by fuel - No data available'
+                width=700, height=400, bgcolor=FLEXOKI_PAPER,
+                title='VRE production by fuel - No data available',
+                hooks=[self._get_legend_style_hook()]
             )
         
         # Filter for VRE fuels
@@ -531,8 +543,9 @@ class PenetrationTab:
         if df_vre.empty:
             empty_df = pd.DataFrame({'x': [0], 'y': [0]})
             return empty_df.hvplot.line(x='x', y='y', label='No data').opts(
-                width=700, height=400, bgcolor='#2B2B3B', 
-                title='VRE production by fuel - No VRE data'
+                width=700, height=400, bgcolor=FLEXOKI_PAPER,
+                title='VRE production by fuel - No VRE data',
+                hooks=[self._get_legend_style_hook()]
             )
         
         # Ensure datetime
@@ -623,8 +636,9 @@ class PenetrationTab:
         if not plots:
             empty_df = pd.DataFrame({'x': [0], 'y': [0]})
             return empty_df.hvplot.line(x='x', y='y', label='No data').opts(
-                width=700, height=400, bgcolor='#2B2B3B', 
-                title='VRE production by fuel - No data to plot'
+                width=700, height=400, bgcolor=FLEXOKI_PAPER,
+                title='VRE production by fuel - No data to plot',
+                hooks=[self._get_legend_style_hook()]
             )
         
         # Combine plots
@@ -636,7 +650,7 @@ class PenetrationTab:
         final_plot = combined_plot.opts(
             width=700,
             height=400,
-            bgcolor='#2B2B3B',
+            bgcolor=FLEXOKI_PAPER,
             title=f'{self.region_select.value} VRE production by fuel',
             xlabel='date',
             ylabel='TWh annualised',
@@ -646,15 +660,15 @@ class PenetrationTab:
             legend_position='top_left',
             framewise=True,
             yformatter='%.0f',
-            hooks=[self._get_attribution_hook(), self._get_smoothing_text_hook()]
+            hooks=[self._get_attribution_hook(), self._get_smoothing_text_hook(), self._get_legend_style_hook()]
         )
-        
+
         # Cache the plot
         self._cache[plot_cache_key] = final_plot
         self._cache_timestamps[plot_cache_key] = datetime.now()
-        
+
         return final_plot
-    
+
     def _create_thermal_vs_renewables_chart(self):
         """Create the thermal vs renewables chart with 180-day moving average."""
         # Cache key for the plot
@@ -682,8 +696,9 @@ class PenetrationTab:
         if df.empty:
             empty_df = pd.DataFrame({'x': [0], 'y': [0]})
             return empty_df.hvplot.line(x='x', y='y', label='No data').opts(
-                width=1440, height=400, bgcolor='#2B2B3B', 
-                title='Thermal v Renewables - No data available'
+                width=1440, height=400, bgcolor=FLEXOKI_PAPER,
+                title='Thermal v Renewables - No data available',
+                hooks=[self._get_legend_style_hook()]
             )
         
         # Define fuel categories - imported from fuel_categories module
@@ -702,8 +717,9 @@ class PenetrationTab:
         if df_filtered.empty:
             empty_df = pd.DataFrame({'x': [0], 'y': [0]})
             return empty_df.hvplot.line(x='x', y='y', label='No data').opts(
-                width=1440, height=400, bgcolor='#2B2B3B', 
-                title='Thermal v Renewables - No thermal/renewable data'
+                width=1440, height=400, bgcolor=FLEXOKI_PAPER,
+                title='Thermal v Renewables - No thermal/renewable data',
+                hooks=[self._get_legend_style_hook()]
             )
         
         # Ensure datetime
@@ -807,7 +823,7 @@ class PenetrationTab:
         final_plot = combined_plot.opts(
             width=1440,
             height=400,
-            bgcolor='#2B2B3B',
+            bgcolor=FLEXOKI_PAPER,
             title=f'{self.region_select.value} Thermal v Renewables annualised',
             xlabel='',
             ylabel='TWh',
@@ -817,15 +833,15 @@ class PenetrationTab:
             legend_position='top_right',
             framewise=True,
             yformatter='%.0f',
-            hooks=[self._get_attribution_hook(), self._get_smoothing_text_hook()]
+            hooks=[self._get_attribution_hook(), self._get_smoothing_text_hook(), self._get_legend_style_hook()]
         )
-        
+
         # Cache the plot
         self._cache[plot_cache_key] = final_plot
         self._cache_timestamps[plot_cache_key] = datetime.now()
-        
+
         return final_plot
-    
+
     def _get_attribution_hook(self, align='right', offset=-5):
         """Get a reusable attribution hook for hvplot charts
         
@@ -857,12 +873,12 @@ class PenetrationTab:
     def _get_smoothing_text_hook(self):
         """Return a hook function that adds smoothing method text to the plot."""
         smoothing_text = self.smoothing_select.value
-        
+
         def add_smoothing_text(plot, element):
             """Add smoothing method text below the plot."""
             try:
                 import bokeh.models as bm
-                
+
                 # Create text annotation for smoothing method
                 smoothing_label = bm.Label(
                     text=f'Smoothing: {smoothing_text}',
@@ -873,12 +889,34 @@ class PenetrationTab:
                     background_fill_color=None,
                     border_line_color=None
                 )
-                
+
                 plot.state.add_layout(smoothing_label)
             except Exception as e:
                 logger.debug(f"Could not add smoothing text: {e}")
-        
+
         return add_smoothing_text
+
+    def _get_legend_style_hook(self):
+        """Return a hook function that styles the legend and plot backgrounds to match Flexoki theme."""
+        def style_legend(plot, element):
+            """Style the legend and plot backgrounds to match FLEXOKI_PAPER."""
+            try:
+                p = plot.state
+                # Explicitly set plot area and outer frame backgrounds
+                p.background_fill_color = FLEXOKI_PAPER
+                p.border_fill_color = FLEXOKI_PAPER
+
+                # Style legend if present
+                if p.legend:
+                    for legend in p.legend:
+                        legend.background_fill_color = FLEXOKI_PAPER
+                        legend.border_line_color = FLEXOKI_BASE[150]
+                        legend.border_line_width = 1
+                        legend.label_text_color = FLEXOKI_BLACK
+            except Exception as e:
+                logger.debug(f"Could not style legend: {e}")
+
+        return style_legend
     
     def create_layout(self) -> pn.Column:
         """Create the full penetration tab layout."""
