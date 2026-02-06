@@ -2129,6 +2129,307 @@ class EnergyDashboard(param.Parameterized):
         '''
         return pn.pane.HTML(html, sizing_mode='stretch_width')
 
+    def create_price_band_table_html(self, band_data, selected_regions):
+        """Create styled HTML table for price band details
+
+        Args:
+            band_data: dict of region -> list of band dicts with keys:
+                Price Band, Contr, Share, Time, Avg, Revenue
+            selected_regions: list of regions in display order
+        """
+        if not band_data:
+            return "<p><em>No price band data available</em></p>"
+
+        html = f'''
+        <style>
+            .band-table {{
+                font-family: Inter, -apple-system, sans-serif;
+                font-size: 12px;
+                border-collapse: collapse;
+                background-color: {FLEXOKI_PAPER};
+                color: {FLEXOKI_BLACK};
+                width: 100%;
+                max-width: 620px;
+            }}
+            .band-table th {{
+                text-align: right;
+                padding: 8px 10px;
+                border-bottom: 1.5px solid {FLEXOKI_BASE[300]};
+                font-weight: 600;
+                font-size: 11px;
+            }}
+            .band-table th:nth-child(1),
+            .band-table th:nth-child(2) {{ text-align: left; }}
+            .band-table td {{
+                text-align: right;
+                padding: 6px 10px;
+                border-bottom: 0.5px solid {FLEXOKI_BASE[100]};
+            }}
+            .band-table td:nth-child(1),
+            .band-table td:nth-child(2) {{ text-align: left; }}
+            .band-table td:nth-child(1) {{
+                font-weight: 600;
+            }}
+            /* Muted columns: Time, Avg, Revenue */
+            .band-table td:nth-child(5),
+            .band-table td:nth-child(6),
+            .band-table td:nth-child(7) {{
+                color: {FLEXOKI_BASE[600]};
+            }}
+            .band-table tr.total-row td {{
+                font-weight: 600;
+                color: {FLEXOKI_BLACK};
+            }}
+            .band-table tr.region-divider td {{
+                border-top: 1.5px solid {FLEXOKI_BASE[300]};
+            }}
+        </style>
+        <table class="band-table">
+            <thead>
+                <tr>
+                    <th>Region</th>
+                    <th>Price Band</th>
+                    <th>Contr. ($/MWh)</th>
+                    <th>Share (%)</th>
+                    <th>Time (%)</th>
+                    <th>Avg ($/MWh)</th>
+                    <th>Revenue ($m)</th>
+                </tr>
+            </thead>
+            <tbody>
+        '''
+
+        # Band order for sorting
+        band_order = ['Below $0', '$0-$300', '$301-$1000', 'Above $1000']
+
+        for region_idx, region in enumerate(selected_regions):
+            if region not in band_data:
+                continue
+
+            bands = band_data[region]
+            # Sort bands by order
+            sorted_bands = sorted(bands, key=lambda x: band_order.index(x['Price Band']) if x['Price Band'] in band_order else 99)
+
+            # Calculate totals
+            total_contr = sum(b['Contr'] for b in sorted_bands)
+            total_share = sum(b['Share'] for b in sorted_bands)
+            total_time = sum(b['Time'] for b in sorted_bands)
+            total_revenue = sum(b['Revenue'] for b in sorted_bands)
+
+            # Add divider class for regions after the first
+            divider_class = ' class="region-divider"' if region_idx > 0 else ''
+
+            # Band rows
+            for i, band in enumerate(sorted_bands):
+                row_class = divider_class if i == 0 else ''
+                region_display = region if i == 0 else ''
+                html += f'''
+                <tr{row_class}>
+                    <td>{region_display}</td>
+                    <td>{band['Price Band']}</td>
+                    <td>{band['Contr']:.1f}</td>
+                    <td>{band['Share']:.1f}</td>
+                    <td>{band['Time']:.1f}</td>
+                    <td>{band['Avg']:,.0f}</td>
+                    <td>{band['Revenue']:,.0f}</td>
+                </tr>
+                '''
+
+            # Total row
+            html += f'''
+                <tr class="total-row">
+                    <td></td>
+                    <td>Total</td>
+                    <td>{total_contr:.1f}</td>
+                    <td>{total_share:.1f}</td>
+                    <td>{total_time:.1f}</td>
+                    <td>{total_contr:,.0f}</td>
+                    <td>{total_revenue:,.0f}</td>
+                </tr>
+            '''
+
+        html += '''
+            </tbody>
+        </table>
+        '''
+        return html
+
+    def create_price_band_butterfly_chart(self, bands_df, selected_regions, date_range_text):
+        """Create butterfly chart showing Time % (left) vs Contribution $/MWh (right)
+
+        Args:
+            bands_df: DataFrame with columns: Region, Price Band, Contribution, Percentage, Band Average
+            selected_regions: list of regions to display
+            date_range_text: string describing the date range
+
+        Returns:
+            matplotlib figure
+        """
+        import matplotlib.pyplot as plt
+        import numpy as np
+
+        # Band colors matching Flexoki theme
+        BAND_COLORS = {
+            'Below $0': FLEXOKI_ACCENT['red'],
+            '$0-$300': FLEXOKI_ACCENT['green'],
+            '$301-$1000': FLEXOKI_ACCENT['orange'],
+            'Above $1000': FLEXOKI_ACCENT['magenta'],
+        }
+
+        band_order = ['Below $0', '$0-$300', '$301-$1000', 'Above $1000']
+
+        # Filter to selected regions only
+        regions = [r for r in selected_regions if r in bands_df['Region'].unique()]
+
+        if len(regions) == 0:
+            # Return empty figure with message
+            fig, ax = plt.subplots(figsize=(10, 6))
+            fig.patch.set_facecolor(FLEXOKI_PAPER)
+            ax.set_facecolor(FLEXOKI_PAPER)
+            ax.text(0.5, 0.5, 'No data available', ha='center', va='center',
+                   fontsize=14, color=FLEXOKI_BASE[600])
+            ax.axis('off')
+            return fig
+
+        # Calculate contribution % for each band (contribution / mean_price * 100)
+        # Mean price per region is the sum of contributions
+        region_means = bands_df.groupby('Region')['Contribution'].sum().to_dict()
+
+        # Add Contribution % column
+        bands_df = bands_df.copy()
+        bands_df['Contribution %'] = bands_df.apply(
+            lambda row: (row['Contribution'] / region_means[row['Region']] * 100)
+                        if region_means[row['Region']] > 0 else 0,
+            axis=1
+        )
+
+        # Determine grid layout based on number of regions
+        n_regions = len(regions)
+        if n_regions == 1:
+            fig, axes = plt.subplots(1, 1, figsize=(10, 5))
+            axes = [axes]
+        elif n_regions == 2:
+            fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+            axes = axes.flat
+        elif n_regions <= 4:
+            fig, axes = plt.subplots(2, 2, figsize=(12, 8))
+            axes = axes.flat
+        else:
+            # 5 regions - use 2x3 grid
+            fig, axes = plt.subplots(2, 3, figsize=(14, 8))
+            axes = axes.flat
+
+        fig.patch.set_facecolor(FLEXOKI_PAPER)
+
+        for idx, region in enumerate(regions):
+            ax = axes[idx]
+            ax.set_facecolor(FLEXOKI_PAPER)
+
+            # Remove spines
+            for spine in ax.spines.values():
+                spine.set_visible(False)
+
+            region_df = bands_df[bands_df['Region'] == region]
+            y_positions = np.arange(len(band_order))
+            bar_height = 0.65
+
+            # Get flat load avg for this region
+            flat_load_avg = region_means.get(region, 0)
+
+            for i, band in enumerate(band_order):
+                band_row = region_df[region_df['Price Band'] == band]
+                if len(band_row) == 0:
+                    continue
+
+                time_pct = band_row['Percentage'].values[0]
+                contrib_pct = band_row['Contribution %'].values[0]
+                contrib_dollars = band_row['Contribution'].values[0]
+                color = BAND_COLORS[band]
+
+                # Time % bar extends LEFT (negative direction) - lighter shade
+                ax.barh(i, -time_pct, height=bar_height, color=color, alpha=0.5,
+                        edgecolor='white', linewidth=0.5)
+
+                # Contribution % bar extends RIGHT (positive direction) - full color
+                ax.barh(i, contrib_pct, height=bar_height, color=color,
+                        edgecolor='white', linewidth=0.5)
+
+                # Label for Time % (outside left bar)
+                ax.text(-time_pct - 1, i, f'{time_pct:.1f}%',
+                        ha='right', va='center', fontsize=9, color=FLEXOKI_BASE[800])
+
+                # $/MWh CONTRIBUTION label INSIDE the bar
+                bar_width = abs(contrib_pct)
+                if bar_width > 12:  # Wide enough for text inside
+                    text_x = contrib_pct / 2 if contrib_pct > 0 else contrib_pct / 2
+                    ax.text(text_x, i, f'${contrib_dollars:.0f}',
+                            ha='center', va='center', fontsize=10, fontweight='bold',
+                            color='white')
+                elif bar_width > 5:  # Medium bar
+                    text_x = contrib_pct * 0.6 if contrib_pct > 0 else contrib_pct * 0.6
+                    ax.text(text_x, i, f'${contrib_dollars:.0f}',
+                            ha='center', va='center', fontsize=9, fontweight='bold',
+                            color='white')
+                elif abs(contrib_dollars) > 1:  # Small bar but significant $
+                    # Put label just outside the bar
+                    if contrib_pct >= 0:
+                        ax.text(contrib_pct + 8, i, f'${contrib_dollars:.0f}',
+                                ha='left', va='center', fontsize=8, color=color)
+                    else:
+                        ax.text(contrib_pct - 2, i, f'${contrib_dollars:.0f}',
+                                ha='right', va='center', fontsize=8, color=color)
+
+            # Center line
+            ax.axvline(x=0, color=FLEXOKI_BASE[300], linewidth=1.5, zorder=0)
+
+            # Formatting
+            ax.set_yticks(y_positions)
+            ax.set_yticklabels(band_order, fontsize=10, color=FLEXOKI_BLACK)
+            ax.tick_params(axis='x', colors=FLEXOKI_BASE[600], length=0)
+            ax.tick_params(axis='y', length=0)
+
+            # Title with flat load avg
+            ax.set_title(f'{region}  (Flat load: ${flat_load_avg:.0f}/MWh)',
+                         fontsize=12, fontweight='bold', color=FLEXOKI_BLACK, pad=8)
+
+            # X-axis labels
+            ax.set_xlabel('<-- Time %                    Contribution $/MWh -->',
+                         fontsize=9, color=FLEXOKI_BASE[800])
+
+            # X-axis grid
+            ax.xaxis.grid(True, color=FLEXOKI_BASE[100], linewidth=0.5, alpha=0.5)
+            ax.set_axisbelow(True)
+
+            # Set symmetric x limits
+            max_val = max(100,
+                         region_df['Percentage'].max() if len(region_df) > 0 else 100,
+                         abs(region_df['Contribution %']).max() if len(region_df) > 0 else 100)
+            ax.set_xlim(-max_val - 12, max_val + 12)
+
+            ax.invert_yaxis()  # Put first band at top
+
+        # Hide unused axes
+        for idx in range(len(regions), len(axes)):
+            axes[idx].set_visible(False)
+
+        # Main title
+        fig.suptitle(f'Price Band Contribution ({date_range_text})',
+                     fontsize=14, fontweight='bold', color=FLEXOKI_BLACK, y=0.98)
+
+        # Subtitle
+        fig.text(0.5, 0.93,
+                 'Left = % of time  |  Right = $/MWh contribution to flat load average',
+                 ha='center', fontsize=10, color=FLEXOKI_BASE[600])
+
+        # Attribution
+        fig.text(0.99, 0.01, "Data: AEMO", ha='right', va='bottom',
+                 color=FLEXOKI_BASE[600], fontsize=9, style='italic')
+
+        plt.tight_layout()
+        plt.subplots_adjust(top=0.88, bottom=0.08, hspace=0.35)
+
+        return fig
+
     def get_cache_stats_display(self):
         """Get cache statistics for display"""
         global _cache_stats
@@ -3933,30 +4234,30 @@ class EnergyDashboard(param.Parameterized):
             end_date = self.end_date
             start_date = self.start_date  # This should already be 5 years of data
             
-            # Date preset radio buttons (vertical like frequency)
+            # Date preset radio buttons (vertical)
             date_presets = pn.widgets.RadioBoxGroup(
-                name='',  # Empty name, we'll add label separately
+                name='',
                 options=['1 day', '7 days', '30 days', '90 days', '1 year', 'All data'],
-                value='30 days',
-                inline=False,  # Vertical layout
+                value='1 year',
+                inline=False,
                 width=100
             )
             
             # Date pickers - simpler without start/end constraints that cause issues
             # Use explicit date objects to avoid timezone issues
             default_end = pd.Timestamp.now().date()
-            default_start = default_end - pd.Timedelta(days=30)
-            
+            default_start = default_end - pd.Timedelta(days=365)  # Match 1 year preset
+
             start_date_picker = pn.widgets.DatePicker(
-                name='Start Date',
+                name='',  # Label handled externally
                 value=default_start,
-                width=120
+                width=110
             )
-            
+
             end_date_picker = pn.widgets.DatePicker(
-                name='End Date',
+                name='',  # Label handled externally
                 value=default_end,
-                width=120
+                width=110
             )
             
             # Show selected dates clearly
@@ -3976,13 +4277,13 @@ class EnergyDashboard(param.Parameterized):
                 margin=(0, 0, 0, 0)
             )
             
-            # Aggregate level radio buttons (compact)
+            # Aggregate level radio buttons (only 5 min and 30 min)
             aggregate_selector = pn.widgets.RadioBoxGroup(
                 name='',
                 value='30 min',
-                options=['5 min', '30 min', '1 hour', 'Daily', 'Monthly', 'Quarterly', 'Yearly'],
-                inline=False,  # Vertical for frequency options
-                width=120
+                options=['5 min', '30 min'],
+                inline=False,
+                width=80
             )
             
             # Smoothing options
@@ -4011,12 +4312,52 @@ class EnergyDashboard(param.Parameterized):
                 width=150
             )
             
-            # Add Analyze button
+            # Add Analyze button (prominent, at top)
+            # Use inline CSS for reliable coloring - orange when dirty, blue when clean
             analyze_button = pn.widgets.Button(
-                name='Analyze Prices',
-                button_type='primary',
-                width=150
+                name='▶ Analyze Prices',
+                button_type='default',
+                width=180,
+                height=40
             )
+            # Apply initial orange style via stylesheets
+            analyze_button.stylesheets = [f'''
+                :host(.solid) .bk-btn {{
+                    background: {FLEXOKI_ACCENT['orange']} !important;
+                    color: white !important;
+                    font-weight: bold !important;
+                    border: none !important;
+                }}
+            ''']
+
+            # Track if controls have changed
+            controls_dirty = [True]  # Start dirty - needs initial analysis
+
+            def mark_controls_dirty(event=None):
+                """Mark that controls have changed and analysis needs re-running"""
+                controls_dirty[0] = True
+                analyze_button.name = '▶ Analyze Prices (update)'
+                analyze_button.stylesheets = [f'''
+                    :host(.solid) .bk-btn {{
+                        background: {FLEXOKI_ACCENT['orange']} !important;
+                        color: white !important;
+                        font-weight: bold !important;
+                        border: none !important;
+                    }}
+                ''']
+
+            def mark_controls_clean():
+                """Mark that analysis is up-to-date"""
+                controls_dirty[0] = False
+                analyze_button.name = '▶ Analyze Prices ✓'
+                analyze_button.stylesheets = [f'''
+                    :host(.solid) .bk-btn {{
+                        background: {FLEXOKI_ACCENT['cyan']} !important;
+                        color: white !important;
+                        font-weight: bold !important;
+                        border: none !important;
+                    }}
+                ''']
             
             # Create price plot pane - will be updated by load_price_data
             self.price_plot_pane = pn.pane.HoloViews(
@@ -4167,73 +4508,39 @@ class EnergyDashboard(param.Parameterized):
             self.bands_plot_pane.clear()
             self.bands_plot_pane.append(initial_message)
 
-            # Create fuel relatives plot pane
-            self.fuel_relatives_plot_pane = pn.pane.HoloViews(
-                hv.Text(0.5, 0.5, "Select a region and click Analyze to view fuel-weighted prices").opts(
-                    xlim=(0, 1), ylim=(0, 1),
-                    bgcolor=FLEXOKI_PAPER, color=FLEXOKI_BLACK, fontsize=14,
-                    hooks=[_text_background_hook]
+            # Create fuel relatives plot pane (Plotly)
+            self.fuel_relatives_plot_pane = pn.pane.Plotly(
+                go.Figure().add_annotation(
+                    text="Click '▶ Load Data' button above to load 5.5 years of price data",
+                    xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False,
+                    font=dict(size=16, color=FLEXOKI_ACCENT['orange'])
+                ).update_layout(
+                    paper_bgcolor=FLEXOKI_PAPER, plot_bgcolor=FLEXOKI_PAPER,
+                    xaxis=dict(visible=False), yaxis=dict(visible=False)
                 ),
                 sizing_mode='stretch_both',
                 height=400
             )
 
-            # Create price index plot pane (normalized to flat load = 100)
-            self.price_index_plot_pane = pn.pane.HoloViews(
-                hv.Text(0.5, 0.5, "Price index will appear here after analysis").opts(
-                    xlim=(0, 1), ylim=(0, 1),
-                    bgcolor=FLEXOKI_PAPER, color=FLEXOKI_BLACK, fontsize=14,
-                    hooks=[_text_background_hook]
+            # Create price band contribution plot pane (Plotly stacked area)
+            self.price_index_plot_pane = pn.pane.Plotly(
+                go.Figure().add_annotation(
+                    text="Price band contributions will appear here after loading data",
+                    xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False,
+                    font=dict(size=14, color=FLEXOKI_BLACK)
+                ).update_layout(
+                    paper_bgcolor=FLEXOKI_PAPER, plot_bgcolor=FLEXOKI_PAPER,
+                    xaxis=dict(visible=False), yaxis=dict(visible=False)
                 ),
                 sizing_mode='stretch_both',
                 height=400
             )
             
-            # Create price band details table pane
-            self.high_price_events_pane = pn.widgets.Tabulator(
-                pd.DataFrame(),
-                show_index=False,
-                sizing_mode='fixed',
-                width=550,  # Fixed width to show all columns
-                height=380,  # Increased height to use more space
-                theme='fast',
-                configuration={
-                    'columnDefaults': {
-                        'headerSort': False,
-                        'resizable': True,
-                        'cellVertAlign': 'middle'
-                    },
-                    'layout': 'fitColumns',
-                    'responsiveLayout': 'hide',
-                    'rowHeight': 20,  # Reduced row height
-                    'headerHeight': 25  # Reduced header height
-                },
-                stylesheets=[f"""
-                .tabulator {{
-                    font-size: 11px !important;
-                    background-color: {FLEXOKI_PAPER};
-                    color: {FLEXOKI_BLACK};
-                }}
-                .tabulator-header {{
-                    font-size: 11px !important;
-                    background-color: {FLEXOKI_BASE[100]};
-                    color: {FLEXOKI_BLACK};
-                    font-weight: bold;
-                }}
-                .tabulator-row {{
-                    background-color: {FLEXOKI_PAPER};
-                    color: {FLEXOKI_BLACK};
-                }}
-                .tabulator-row:nth-child(even) {{
-                    background-color: {FLEXOKI_BASE[50]};
-                }}
-                .tabulator-row:hover {{
-                    background-color: {FLEXOKI_BASE[100]};
-                }}
-                .tabulator-cell {{
-                    padding: 2px 4px !important;
-                }}
-                """]
+            # Create price band details table pane (HTML table for better styling control)
+            self.high_price_events_pane = pn.pane.HTML(
+                "<p><em>Select regions and click 'Analyze Prices' to see price band details</em></p>",
+                sizing_mode='stretch_width',
+                styles={'background': FLEXOKI_PAPER}
             )
             
             # Create time-of-day price pattern pane
@@ -4249,65 +4556,63 @@ class EnergyDashboard(param.Parameterized):
             )
             
             # Left column - all controls with compact layout
-            
-            # Row 1: Region and Frequency side by side
+
+            # Region selector
             region_group = pn.Column(
-                "### Region",
+                "**Region**",
                 region_selector,
-                align='start',  # Left align
-                width=120
+                align='start',
+                width=80
             )
-            
+
+            # Frequency selector (horizontal buttons)
             frequency_group = pn.Column(
-                "### Frequency",
+                "**Frequency**",
                 aggregate_selector,
-                width=120
-            )
-            
-            top_controls = pn.Row(
-                region_group,
-                pn.Spacer(width=10),
-                frequency_group,
                 align='start'
             )
-            
-            # Row 2: Date controls in one row
-            date_controls = pn.Row(
-                pn.Column(
-                    "Start Date",
-                    start_date_picker,
-                    width=100
-                ),
-                pn.Column(
-                    "End Date", 
-                    end_date_picker,
-                    width=100
-                ),
-                pn.Column(
-                    "Quick Select",
-                    date_presets,
-                    width=100
-                ),
+
+            # Period quick select (vertical)
+            period_group = pn.Column(
+                "**Period**",
+                date_presets,
+                align='start',
+                width=100
+            )
+
+            # Date pickers in a column
+            date_pickers = pn.Column(
+                pn.Row("**Start**", start_date_picker, align='center'),
+                pn.Row("**End**", end_date_picker, align='center'),
                 align='start'
             )
-            
-            # Combine all controls
+
+            # Smoothing and options row
+            options_group = pn.Row(
+                pn.Column(
+                    "**Smoothing**",
+                    smoothing_selector,
+                    width=200
+                ),
+                pn.Column(
+                    pn.Spacer(height=20),  # Align with smoothing label
+                    log_scale_checkbox,
+                    width=120
+                ),
+                align='end'
+            )
+
+            # Combine all controls - button at top
             controls_column = pn.Column(
-                "## Price Analysis Controls",
-                pn.Spacer(height=10),
-                top_controls,
-                pn.Spacer(height=15),
-                "### Date Range",
-                date_controls,
-                date_display,
-                pn.Spacer(height=15),
-                "### Smoothing",
-                smoothing_selector,
-                pn.Spacer(height=10),
-                log_scale_checkbox,
-                pn.Spacer(height=15),
                 analyze_button,
-                width=350,  # Wider to accommodate side-by-side layout
+                pn.Spacer(height=15),
+                pn.Row(region_group, pn.Spacer(width=15), frequency_group, align='start'),
+                pn.Spacer(height=10),
+                pn.Row(period_group, pn.Spacer(width=15), date_pickers, align='start'),
+                date_display,
+                pn.Spacer(height=10),
+                options_group,
+                width=350,
                 margin=(0, 20, 0, 0),
                 align='start'
             )
@@ -4423,21 +4728,31 @@ class EnergyDashboard(param.Parameterized):
                 button_type='primary',
                 button_style='outline'
             )
-            
+
+            # Add Load button for fuel relatives - prominent styling
+            fuel_relatives_load_button = pn.widgets.Button(
+                name='▶ Load Data (20-30 sec)',
+                button_type='warning',
+                width=180,
+                height=35
+            )
+
             fuel_relatives_content = pn.Column(
                 pn.Row(
+                    fuel_relatives_load_button,
+                    pn.Spacer(width=20),
                     pn.Column(
-                        "### Select Region",
+                        "**Region:**",
                         fuel_relatives_region_selector,
-                        width=150
-                    )
+                    ),
+                    align='center'
                 ),
                 pn.Spacer(height=10),
                 pn.Column(
                     "## Fuel-Weighted vs Flat Load Prices (90-day LOESS smoothed)",
                     self.fuel_relatives_plot_pane,
                     pn.Spacer(height=20),
-                    "## Price Index (Flat Load = 100)",
+                    "## Price Band Contribution to Flat Load Average (90-day LOESS smoothed)",
                     self.price_index_plot_pane,
                     sizing_mode='stretch_both'
                 ),
@@ -4531,7 +4846,7 @@ class EnergyDashboard(param.Parameterized):
                         # Clear statistics table
                         self.stats_pane.value = pd.DataFrame({'Message': ['Please select at least one region']})
                         # Clear high price events table
-                        self.high_price_events_pane.value = pd.DataFrame({'Message': ['Please select at least one region']})
+                        self.high_price_events_pane.object = "<p><em>Please select at least one region</em></p>"
                         # Clear bands plot
                         self.bands_plot_pane.object = hv.Text(0.5, 0.5, 'Please select at least one region').opts(
                             xlim=(0, 1), ylim=(0, 1), 
@@ -4569,7 +4884,7 @@ class EnergyDashboard(param.Parameterized):
                         # Clear statistics table
                         self.stats_pane.value = pd.DataFrame({'Message': ['No data available for selected period']})
                         # Clear high price events table
-                        self.high_price_events_pane.value = pd.DataFrame({'Message': ['No data available for selected period']})
+                        self.high_price_events_pane.object = "<p><em>No data available for selected period</em></p>"
                         # Clear bands plot
                         self.bands_plot_pane.object = hv.Text(0.5, 0.5, 'No data available').opts(
                             xlim=(0, 1), ylim=(0, 1), 
@@ -5214,110 +5529,9 @@ class EnergyDashboard(param.Parameterized):
                         # Sort by Price Band to ensure consistent ordering
                         bands_df = bands_df.sort_values(['Region', 'Price Band'])
                         
-                        # Create color list matching the band order
-                        # Order is: Below $0, $0-$300, $301-$1000, Above $1000
-                        band_colors = [FLEXOKI_ACCENT['red'], FLEXOKI_ACCENT['green'], FLEXOKI_ACCENT['orange'], FLEXOKI_ACCENT['magenta']]
-                        
-                        # Create TWO SEPARATE charts - price contribution and time percentage
-                        
-                        # Chart 1: Price Contribution ($/MWh)
-                        contrib_plot = bands_df.hvplot.bar(
-                            x='Region',
-                            y='Contribution',
-                            by='Price Band',
-                            stacked=True,
-                            responsive=True,
-                            height=250,  # Reduced height for stacking
-                            xlabel='',
-                            ylabel='Price Contribution ($/MWh)',
-                            title=f'Price Band Contribution ({date_range_text})',
-                            color=band_colors,
-                            bgcolor=FLEXOKI_PAPER,
-                            legend='top',
-                            toolbar='above'
-                        ).opts(
-                            xrotation=0,
-                            show_grid=True,
-                            gridstyle={'grid_line_color': FLEXOKI_BASE[100], 'grid_line_alpha': 0.3},
-                            fontsize={'ticks': 10, 'title': 12, 'ylabel': 10},
-                            hooks=[self._get_flexoki_background_hook()]
-                        )
-
-                        # Add labels to contribution bars
-                        contrib_overlays = []
-                        for region in bands_df['Region'].unique():
-                            region_bands = bands_df[bands_df['Region'] == region]
-                            cumulative_height = 0
-                            
-                            for _, row in region_bands.iterrows():
-                                label = f"${int(row['Contribution'])}"
-                                if row['Contribution'] > 3:  # Show labels for contributions > $3
-                                    y_pos = cumulative_height + row['Contribution'] / 2
-                                    contrib_overlays.append(
-                                        hv.Text(region, y_pos, label)
-                                            .opts(color=FLEXOKI_BLACK, fontsize=8, text_align='center', text_baseline='middle')
-                                    )
-                                cumulative_height += row['Contribution']
-                        
-                        if contrib_overlays:
-                            contrib_plot = contrib_plot * hv.Overlay(contrib_overlays)
-                        
-                        # Chart 2: Time Distribution (%)
-                        time_plot = bands_df.hvplot.bar(
-                            x='Region',
-                            y='Percentage',
-                            by='Price Band',
-                            stacked=True,
-                            responsive=True,
-                            height=250,  # Reduced height for stacking
-                            xlabel='Region',
-                            ylabel='Time Distribution (%)',
-                            title='Time in Each Price Band',
-                            color=band_colors,
-                            bgcolor=FLEXOKI_PAPER,
-                            legend='bottom',  # Different legend position
-                            toolbar='above'
-                        ).opts(
-                            xrotation=0,
-                            show_grid=True,
-                            gridstyle={'grid_line_color': FLEXOKI_BASE[100], 'grid_line_alpha': 0.3},
-                            fontsize={'ticks': 10, 'title': 12, 'ylabel': 10, 'xlabel': 10},
-                            hooks=[self._get_flexoki_background_hook()]
-                        )
-
-                        # Add labels to time distribution bars
-                        time_overlays = []
-                        for region in bands_df['Region'].unique():
-                            region_bands = bands_df[bands_df['Region'] == region]
-                            cumulative_height = 0
-                            
-                            for _, row in region_bands.iterrows():
-                                # Format percentage labels
-                                if row['Percentage'] < 1:
-                                    label = f"{row['Percentage']:.2f}%"
-                                else:
-                                    label = f"{row['Percentage']:.0f}%"
-                                
-                                if row['Percentage'] > 5:  # Show labels for percentages > 5%
-                                    y_pos = cumulative_height + row['Percentage'] / 2
-                                    time_overlays.append(
-                                        hv.Text(region, y_pos, label)
-                                            .opts(color=FLEXOKI_BLACK, fontsize=8, text_align='center', text_baseline='middle')
-                                    )
-                                cumulative_height += row['Percentage']
-                        
-                        if time_overlays:
-                            time_plot = time_plot * hv.Overlay(time_overlays)
-                        
-                        # Apply attribution hook and Flexoki background hook to individual plots
-                        contrib_plot = contrib_plot.opts(
-                            padding=(0.1, 0.1),
-                            hooks=[self._get_attribution_hook(), self._get_flexoki_background_hook()]
-                        )
-
-                        time_plot = time_plot.opts(
-                            padding=(0.1, 0.1),
-                            hooks=[self._get_attribution_hook(), self._get_flexoki_background_hook()]
+                        # Create butterfly chart showing Time % (left) vs Contribution $/MWh (right)
+                        butterfly_fig = self.create_price_band_butterfly_chart(
+                            bands_df, selected_regions, date_range_text
                         )
                         
                         # Create price band details table for all bands
@@ -5398,72 +5612,50 @@ class EnergyDashboard(param.Parameterized):
                             for region in selected_regions:
                                 region_avg_demand[region] = default_demands.get(region, 1500)
 
+                        # Build price band data for HTML table
+                        # Collect data by region for the HTML table generator
+                        region_band_data = {}
+
                         for _, row in bands_df.iterrows():
-                            # Include all price bands in the table
-                            if True:  # Changed to include all bands including $0-$300
-                                # Calculate percentage contribution to mean
-                                mean_price = region_means[row['Region']]
-                                pct_contribution = (row['Contribution'] / mean_price) * 100 if mean_price > 0 else 0
-                                
-                                # Calculate revenue in this band
-                                # Revenue = Average Price ($/MWh) * Time in band (hours) * Average demand (MW)
-                                # Uses actual calculated demand from generation data for each region
-                                # This correctly handles both 5-min and 30-min data by converting periods to hours
-                                hours_in_band = (row['Percentage'] / 100) * total_hours
-                                avg_demand_mw = region_avg_demand.get(row['Region'], 1500)  # Use calculated demand per region
-                                revenue_millions = (row['Band Average'] * hours_in_band * avg_demand_mw) / 1_000_000
-                                
-                                # Format revenue as $Xbn or $Xm
-                                if revenue_millions >= 1000:
-                                    revenue_str = f"${revenue_millions/1000:.1f}bn"
-                                else:
-                                    revenue_str = f"${revenue_millions:.0f}m"
-                                
-                                high_price_rows.append({
-                                    'Region': row['Region'],
-                                    'Price Band': row['Price Band'],
-                                    '% of Time': f"{row['Percentage']:.1f}%",
-                                    'Avg Price': f"${row['Band Average']:.0f}",
-                                    'Revenue': revenue_str,
-                                    'Contribution': f"${row['Contribution']:.1f}",
-                                    '% Contribution': f"{pct_contribution:.1f}%"
-                                })
-                        
-                        # Update high price events table
-                        if high_price_rows:
-                            high_price_df = pd.DataFrame(high_price_rows)
-                            # Sort by Region and Price Band for better grouping
-                            high_price_df = high_price_df.sort_values(['Region', 'Price Band'])
-                            
-                            # Create a modified display where region only appears once per group
-                            # Add a display column that blanks out repeated regions
-                            high_price_df['_Region'] = high_price_df['Region']
-                            prev_region = None
-                            for idx in high_price_df.index:
-                                if high_price_df.loc[idx, 'Region'] == prev_region:
-                                    high_price_df.loc[idx, '_Region'] = ''
-                                else:
-                                    prev_region = high_price_df.loc[idx, 'Region']
-                            
-                            # Reorder columns with the display region first
-                            high_price_df = high_price_df[['_Region', 'Price Band', '% of Time', 'Avg Price', 
-                                                         'Revenue', 'Contribution', '% Contribution']]
-                            # Rename the display column
-                            high_price_df = high_price_df.rename(columns={'_Region': 'Region'})
-                            
-                            self.high_price_events_pane.value = high_price_df
+                            region = row['Region']
+                            if region not in region_band_data:
+                                region_band_data[region] = []
+
+                            # Calculate percentage contribution to mean (Share %)
+                            mean_price = region_means[region]
+                            pct_contribution = (row['Contribution'] / mean_price) * 100 if mean_price > 0 else 0
+
+                            # Calculate revenue in this band
+                            hours_in_band = (row['Percentage'] / 100) * total_hours
+                            avg_demand_mw = region_avg_demand.get(region, 1500)
+                            revenue_millions = (row['Band Average'] * hours_in_band * avg_demand_mw) / 1_000_000
+
+                            # Store numeric values for HTML table
+                            region_band_data[region].append({
+                                'Price Band': row['Price Band'],
+                                'Contr': row['Contribution'],
+                                'Share': pct_contribution,
+                                'Time': row['Percentage'],
+                                'Avg': row['Band Average'],
+                                'Revenue': revenue_millions,
+                            })
+
+                        # Generate HTML table and update pane
+                        if region_band_data:
+                            table_html = self.create_price_band_table_html(region_band_data, selected_regions)
+                            self.high_price_events_pane.object = table_html
                         else:
-                            self.high_price_events_pane.value = pd.DataFrame({'Info': ['No price band data in selected period']})
+                            self.high_price_events_pane.object = "<p><em>No price band data in selected period</em></p>"
                         
-                        # Clear the column and add both charts
+                        # Clear the column and add butterfly chart
                         self.bands_plot_pane.clear()
-                        
-                        # Wrap each plot in a HoloViews pane and add to column
-                        contrib_pane = pn.pane.HoloViews(contrib_plot, sizing_mode='stretch_width', height=275)
-                        time_pane = pn.pane.HoloViews(time_plot, sizing_mode='stretch_width', height=275)
-                        
-                        self.bands_plot_pane.append(contrib_pane)
-                        self.bands_plot_pane.append(time_pane)
+
+                        # Wrap matplotlib figure in a pane and add to column
+                        import matplotlib.pyplot as plt
+                        butterfly_pane = pn.pane.Matplotlib(butterfly_fig, sizing_mode='stretch_width', tight=True)
+                        plt.close(butterfly_fig)  # Close to free memory
+
+                        self.bands_plot_pane.append(butterfly_pane)
                     else:
                         # No band contributions data - show message
                         self.bands_plot_pane.clear()
@@ -5476,7 +5668,7 @@ class EnergyDashboard(param.Parameterized):
                             height=550
                         )
                         self.bands_plot_pane.append(no_data_message)
-                        self.high_price_events_pane.value = pd.DataFrame({'Info': ['No price band data available']})
+                        self.high_price_events_pane.object = "<p><em>No price band data available</em></p>"
                     
                     # Fuel relatives are now handled independently by update_fuel_relatives()
                     # which is triggered by the region selector change
@@ -5529,7 +5721,7 @@ class EnergyDashboard(param.Parameterized):
                     # Clear statistics table with error message
                     self.stats_pane.value = pd.DataFrame({'Error': [str(e)]})
                     # Clear high price events table
-                    self.high_price_events_pane.value = pd.DataFrame({'Error': [str(e)]})
+                    self.high_price_events_pane.object = f"<p><em>Error: {str(e)}</em></p>"
                     # Clear bands plot
                     self.bands_plot_pane.object = hv.Text(0.5, 0.5, 'Error loading data').opts(
                         xlim=(0, 1), ylim=(0, 1), 
@@ -5545,37 +5737,41 @@ class EnergyDashboard(param.Parameterized):
             date_presets.param.watch(update_date_range, 'value')
             start_date_picker.param.watch(update_date_display, 'value')
             end_date_picker.param.watch(update_date_display, 'value')
-            
-            # Set up button click handler
-            analyze_button.on_click(lambda event: load_and_plot_prices())
+
+            # Mark controls dirty when any input changes
+            region_selector.param.watch(mark_controls_dirty, 'value')
+            aggregate_selector.param.watch(mark_controls_dirty, 'value')
+            date_presets.param.watch(mark_controls_dirty, 'value')
+            start_date_picker.param.watch(mark_controls_dirty, 'value')
+            end_date_picker.param.watch(mark_controls_dirty, 'value')
+            smoothing_selector.param.watch(mark_controls_dirty, 'value')
+            log_scale_checkbox.param.watch(mark_controls_dirty, 'value')
+
+            # Set up button click handler - mark clean after analysis
+            def on_analyze_click(event):
+                load_and_plot_prices()
+                mark_controls_clean()
+
+            analyze_button.on_click(on_analyze_click)
             
             # Create standalone function for fuel relatives calculation
             def update_fuel_relatives(event=None):
                 """Update fuel relatives plot - completely independent of other price analysis"""
                 try:
-                    # Don't auto-load on initialization - wait for user to select region
-                    if event is None:
-                        # This is the initial setup, just show instruction
-                        self.fuel_relatives_plot_pane.object = hv.Text(
-                            0.5, 0.5, 
-                            "Select a region to view 90-day LOESS smoothed fuel-weighted prices\n(Uses all available data ~5.5 years, excludes biomass, includes battery discharge)"
-                        ).opts(
-                            xlim=(0, 1), ylim=(0, 1),
-                            bgcolor=FLEXOKI_PAPER, color=FLEXOKI_BLACK, fontsize=14
-                        )
-                        return
                     
                     selected_fuel_region = fuel_relatives_region_selector.value
                     logger.info(f"Updating fuel relatives for region: {selected_fuel_region}")
                     
                     # Show loading message
-                    self.fuel_relatives_plot_pane.object = hv.Text(
-                        0.5, 0.5, 
-                        f"Loading 5.5 years of data for {selected_fuel_region}...\nThis may take 20-30 seconds"
-                    ).opts(
-                        xlim=(0, 1), ylim=(0, 1),
-                        bgcolor=FLEXOKI_PAPER, color=FLEXOKI_ACCENT['green'], fontsize=14
+                    loading_fig = go.Figure().add_annotation(
+                        text=f"Loading 5.5 years of data for {selected_fuel_region}...<br>This may take 20-30 seconds",
+                        xref='paper', yref='paper', x=0.5, y=0.5, showarrow=False,
+                        font=dict(size=14, color=FLEXOKI_ACCENT['green'])
+                    ).update_layout(
+                        paper_bgcolor=FLEXOKI_PAPER, plot_bgcolor=FLEXOKI_PAPER,
+                        xaxis=dict(visible=False), yaxis=dict(visible=False)
                     )
+                    self.fuel_relatives_plot_pane.object = loading_fig
                     
                     # Load ALL available data for long-term trend analysis
                     import sys
@@ -5669,11 +5865,16 @@ class EnergyDashboard(param.Parameterized):
                     result_df = duckdb_data_service.conn.execute(query).df()
                     
                     if result_df.empty:
-                        self.fuel_relatives_plot_pane.object = hv.Text(0.5, 0.5, 
-                            f'No data available for {selected_fuel_region}').opts(
-                            xlim=(0, 1), ylim=(0, 1),
-                            bgcolor=FLEXOKI_PAPER, color=FLEXOKI_BLACK, fontsize=14
+                        no_data_fig = go.Figure().add_annotation(
+                            text=f'No data available for {selected_fuel_region}',
+                            xref='paper', yref='paper', x=0.5, y=0.5, showarrow=False,
+                            font=dict(size=14, color=FLEXOKI_BLACK)
+                        ).update_layout(
+                            paper_bgcolor=FLEXOKI_PAPER, plot_bgcolor=FLEXOKI_PAPER,
+                            xaxis=dict(visible=False), yaxis=dict(visible=False)
                         )
+                        self.fuel_relatives_plot_pane.object = no_data_fig
+                        self.price_index_plot_pane.object = no_data_fig
                         return
                     
                     logger.info(f"Query returned {len(result_df)} rows")
@@ -5791,15 +5992,15 @@ class EnergyDashboard(param.Parameterized):
                         else:
                             logger.info(f"  Insufficient data for {col} ({valid_count} points), skipping")
                     
-                    # Create plot
+                    # Create plots
                     logger.info(f"Smoothed data shape: {smoothed_data.shape}")
                     logger.info(f"Smoothed data columns: {smoothed_data.columns.tolist()}")
                     logger.info(f"Smoothed data empty: {smoothed_data.empty}")
                     logger.info(f"Smoothed data has any non-NaN: {smoothed_data.notna().any().any()}")
-                    
+
                     if not smoothed_data.empty and smoothed_data.notna().any().any():
-                        
-                        # Define custom colors for fuel types - create a list in the same order as columns
+
+                        # Define custom colors for fuel types
                         fuel_color_map = {
                             'Flat Load': FLEXOKI_BASE[600],  # Gray for flat load (will be dotted)
                             'Wind': FLEXOKI_ACCENT['green'],  # Green for wind
@@ -5810,107 +6011,228 @@ class EnergyDashboard(param.Parameterized):
                             'Battery Storage': FLEXOKI_ACCENT['purple']  # Purple for battery
                         }
 
-                        # Create color list in the same order as columns
-                        color_list = [fuel_color_map.get(col, FLEXOKI_BASE[500]) for col in smoothed_data.columns]
-                        
-                        # Create line dash patterns - dotted for Flat Load, solid for others
-                        line_dash_map = {col: 'dotted' if col == 'Flat Load' else 'solid' 
-                                        for col in smoothed_data.columns}
-                        
-                        fuel_relatives_plot = smoothed_data.hvplot.line(
-                            y=smoothed_data.columns.tolist(),
-                            xlabel='Date',
-                            ylabel='Price ($/MWh)',
-                            title=f'90-Day LOESS Smoothed Fuel-Weighted Prices - {selected_fuel_region} (Gas combined, Battery discharge only)',
-                            height=400,
-                            width=900,
-                            line_width=2,
-                            legend='top_right',
-                            grid=True,
-                            color=color_list,
-                            line_dash=list(line_dash_map.values())
-                        ).opts(
-                            bgcolor=FLEXOKI_PAPER,
-                            active_tools=['pan', 'wheel_zoom'],
-                            hooks=[self._get_attribution_hook(), self._get_flexoki_background_hook()]
+                        # Create Plotly figure for fuel-weighted prices
+                        fig1 = go.Figure()
+
+                        for col in smoothed_data.columns:
+                            color = fuel_color_map.get(col, FLEXOKI_BASE[500])
+                            dash = 'dot' if col == 'Flat Load' else 'solid'
+                            fig1.add_trace(go.Scatter(
+                                x=smoothed_data.index,
+                                y=smoothed_data[col],
+                                mode='lines',
+                                name=col,
+                                line=dict(color=color, width=2, dash=dash),
+                                hovertemplate=f'{col}: $%{{y:.0f}}/MWh<extra></extra>'
+                            ))
+
+                        fig1.update_layout(
+                            title=f'90-Day LOESS Smoothed Fuel-Weighted Prices - {selected_fuel_region}',
+                            xaxis_title='Date',
+                            yaxis_title='Price ($/MWh)',
+                            paper_bgcolor=FLEXOKI_PAPER,
+                            plot_bgcolor=FLEXOKI_PAPER,
+                            font=dict(color=FLEXOKI_BLACK),
+                            legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1),
+                            hovermode='x unified',
+                            margin=dict(l=60, r=20, t=60, b=40),
+                            annotations=[dict(
+                                text='Data: AEMO',
+                                xref='paper', yref='paper',
+                                x=1, y=-0.12,
+                                showarrow=False,
+                                font=dict(size=9, color=FLEXOKI_BASE[600], style='italic')
+                            )]
                         )
+                        fig1.update_xaxes(gridcolor=FLEXOKI_BASE[100], showgrid=True)
+                        fig1.update_yaxes(gridcolor=FLEXOKI_BASE[100], showgrid=True)
 
-                        self.fuel_relatives_plot_pane.object = fuel_relatives_plot
+                        self.fuel_relatives_plot_pane.object = fig1
 
-                        # Create price index plot (normalized to Flat Load = 100)
-                        if 'Flat Load' in smoothed_data.columns:
-                            # Create indexed data where Flat Load = 100
-                            indexed_data = pd.DataFrame(index=smoothed_data.index)
-
-                            for col in smoothed_data.columns:
-                                # Calculate index: (fuel_price / flat_load_price) * 100
-                                # Handle division by zero or NaN
-                                flat_load_values = smoothed_data['Flat Load'].values
-                                fuel_values = smoothed_data[col].values
-
-                                # Create mask for valid flat load values
-                                valid_mask = (flat_load_values != 0) & ~np.isnan(flat_load_values)
-
-                                indexed_values = np.full(len(fuel_values), np.nan)
-                                indexed_values[valid_mask] = (fuel_values[valid_mask] / flat_load_values[valid_mask]) * 100
-
-                                indexed_data[col] = indexed_values
-
-                            # Create the index plot with same styling
-                            price_index_plot = indexed_data.hvplot.line(
-                                y=indexed_data.columns.tolist(),
-                                xlabel='Date',
-                                ylabel='Price Index (Flat Load = 100)',
-                                title=f'Price Index Relative to Flat Load - {selected_fuel_region}',
-                                height=400,
-                                width=900,
-                                line_width=2,
-                                legend='top_right',
-                                grid=True,
-                                color=color_list,
-                                line_dash=list(line_dash_map.values())
-                            ).opts(
-                                bgcolor=FLEXOKI_PAPER,
-                                active_tools=['pan', 'wheel_zoom'],
-                                hooks=[self._get_attribution_hook(), self._get_flexoki_background_hook()]
-                            ) * hv.HLine(100).opts(color='gray', line_dash='dashed', line_width=1)
-                            
-                            self.price_index_plot_pane.object = price_index_plot
-                        else:
-                            self.price_index_plot_pane.object = hv.Text(0.5, 0.5, 
-                                'Flat Load data not available for indexing').opts(
-                                xlim=(0, 1), ylim=(0, 1),
-                                bgcolor=FLEXOKI_PAPER, color=FLEXOKI_BLACK, fontsize=14
+                        # Now calculate price band contributions for the second chart
+                        # Query daily price band contributions
+                        band_query = f"""
+                            WITH daily_bands AS (
+                                SELECT
+                                    DATE(settlementdate) as date,
+                                    CASE
+                                        WHEN rrp < 0 THEN 'Below $0'
+                                        WHEN rrp >= 0 AND rrp < 300 THEN '$0-$300'
+                                        WHEN rrp >= 300 AND rrp < 1000 THEN '$301-$1000'
+                                        ELSE 'Above $1000'
+                                    END as price_band,
+                                    rrp,
+                                    COUNT(*) OVER (PARTITION BY DATE(settlementdate)) as daily_count
+                                FROM prices_30min
+                                WHERE settlementdate >= '{start_dt.isoformat()}'
+                                  AND settlementdate <= '{end_dt.isoformat()}'
+                                  AND regionid = '{selected_fuel_region}'
                             )
+                            SELECT
+                                date,
+                                price_band,
+                                -- Contribution = (count_in_band / total_count) * avg_price_in_band
+                                (COUNT(*) * 1.0 / MAX(daily_count)) * AVG(rrp) as contribution
+                            FROM daily_bands
+                            GROUP BY date, price_band
+                            ORDER BY date, price_band
+                        """
+
+                        logger.info("Executing price band contribution query...")
+                        band_result_df = duckdb_data_service.conn.execute(band_query).df()
+
+                        if not band_result_df.empty:
+                            # Pivot to get bands as columns
+                            band_pivot = band_result_df.pivot(
+                                index='date',
+                                columns='price_band',
+                                values='contribution'
+                            ).fillna(0)
+
+                            # Ensure consistent column order
+                            band_order = ['Below $0', '$0-$300', '$301-$1000', 'Above $1000']
+                            for band in band_order:
+                                if band not in band_pivot.columns:
+                                    band_pivot[band] = 0
+                            band_pivot = band_pivot[band_order]
+
+                            # Reindex to fill missing dates
+                            date_range = pd.date_range(start=band_pivot.index.min(),
+                                                      end=band_pivot.index.max(),
+                                                      freq='D')
+                            band_pivot = band_pivot.reindex(date_range).fillna(0)
+
+                            logger.info(f"Band pivot shape: {band_pivot.shape}")
+
+                            # Apply 90-day LOESS smoothing to each band
+                            smoothed_bands = pd.DataFrame(index=band_pivot.index)
+
+                            for col in band_pivot.columns:
+                                y = band_pivot[col].values.copy()
+                                mask = ~np.isnan(y)
+                                valid_count = mask.sum()
+
+                                if valid_count > 90:
+                                    try:
+                                        x_numeric = np.arange(len(y))
+                                        frac = min(90.0 / valid_count, 0.5)
+                                        smoothed = lowess(y[mask], x_numeric[mask], frac=frac, it=0)
+
+                                        smoothed_values = np.full(len(y), np.nan)
+                                        smoothed_values[mask] = smoothed[:, 1]
+
+                                        smoothed_series = pd.Series(smoothed_values, index=band_pivot.index)
+                                        smoothed_series = smoothed_series.interpolate(method='linear', limit_direction='both')
+                                        smoothed_bands[col] = smoothed_series
+                                        logger.info(f"  Applied LOESS smoothing to band {col}")
+                                    except Exception as e:
+                                        logger.warning(f"  LOESS failed for band {col}: {e}")
+                                        smoothed_bands[col] = band_pivot[col]
+                                else:
+                                    smoothed_bands[col] = band_pivot[col]
+
+                            # Price band colors matching the butterfly chart
+                            band_color_map = {
+                                'Below $0': FLEXOKI_ACCENT['red'],
+                                '$0-$300': FLEXOKI_ACCENT['green'],
+                                '$301-$1000': FLEXOKI_ACCENT['orange'],
+                                'Above $1000': FLEXOKI_ACCENT['magenta'],
+                            }
+
+                            # Create Plotly stacked area chart
+                            fig2 = go.Figure()
+
+                            # Add "Below $0" as separate area below zero (not in stack)
+                            if 'Below $0' in smoothed_bands.columns:
+                                fig2.add_trace(go.Scatter(
+                                    x=smoothed_bands.index,
+                                    y=smoothed_bands['Below $0'],
+                                    mode='lines',
+                                    name='Below $0',
+                                    fill='tozeroy',
+                                    fillcolor=FLEXOKI_ACCENT['red'],
+                                    line=dict(color=FLEXOKI_ACCENT['red'], width=0.5),
+                                    hovertemplate='Below $0: $%{y:.1f}/MWh<extra></extra>'
+                                ))
+
+                            # Stack positive bands (in order from bottom to top)
+                            positive_bands = ['$0-$300', '$301-$1000', 'Above $1000']
+                            for band in positive_bands:
+                                if band in smoothed_bands.columns:
+                                    color = band_color_map.get(band, FLEXOKI_BASE[500])
+                                    fig2.add_trace(go.Scatter(
+                                        x=smoothed_bands.index,
+                                        y=smoothed_bands[band],
+                                        mode='lines',
+                                        name=band,
+                                        stackgroup='positive',
+                                        fillcolor=color,
+                                        line=dict(color=color, width=0.5),
+                                        hovertemplate=f'{band}: $%{{y:.1f}}/MWh<extra></extra>'
+                                    ))
+
+                            fig2.update_layout(
+                                title=f'Price Band Contribution to Flat Load Average - {selected_fuel_region}',
+                                xaxis_title='Date',
+                                yaxis_title='Contribution ($/MWh)',
+                                paper_bgcolor=FLEXOKI_PAPER,
+                                plot_bgcolor=FLEXOKI_PAPER,
+                                font=dict(color=FLEXOKI_BLACK),
+                                legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1),
+                                hovermode='x unified',
+                                margin=dict(l=60, r=20, t=60, b=40),
+                                annotations=[dict(
+                                    text='Data: AEMO',
+                                    xref='paper', yref='paper',
+                                    x=1, y=-0.12,
+                                    showarrow=False,
+                                    font=dict(size=9, color=FLEXOKI_BASE[600], style='italic')
+                                )]
+                            )
+                            fig2.update_xaxes(gridcolor=FLEXOKI_BASE[100], showgrid=True)
+                            fig2.update_yaxes(gridcolor=FLEXOKI_BASE[100], showgrid=True, zeroline=True, zerolinecolor=FLEXOKI_BASE[300])
+
+                            self.price_index_plot_pane.object = fig2
+                        else:
+                            # No band data - show message
+                            fig2 = go.Figure().add_annotation(
+                                text='No price band data available',
+                                xref='paper', yref='paper', x=0.5, y=0.5, showarrow=False,
+                                font=dict(size=14, color=FLEXOKI_BLACK)
+                            ).update_layout(
+                                paper_bgcolor=FLEXOKI_PAPER, plot_bgcolor=FLEXOKI_PAPER,
+                                xaxis=dict(visible=False), yaxis=dict(visible=False)
+                            )
+                            self.price_index_plot_pane.object = fig2
                     else:
-                        self.fuel_relatives_plot_pane.object = hv.Text(0.5, 0.5, 
-                            f'Insufficient data for smoothing').opts(
-                            xlim=(0, 1), ylim=(0, 1),
-                            bgcolor=FLEXOKI_PAPER, color=FLEXOKI_BLACK, fontsize=14
+                        # Insufficient data - show messages
+                        fig_empty = go.Figure().add_annotation(
+                            text='Insufficient data for smoothing',
+                            xref='paper', yref='paper', x=0.5, y=0.5, showarrow=False,
+                            font=dict(size=14, color=FLEXOKI_BLACK)
+                        ).update_layout(
+                            paper_bgcolor=FLEXOKI_PAPER, plot_bgcolor=FLEXOKI_PAPER,
+                            xaxis=dict(visible=False), yaxis=dict(visible=False)
                         )
-                        self.price_index_plot_pane.object = hv.Text(0.5, 0.5, 
-                            f'Insufficient data for indexing').opts(
-                            xlim=(0, 1), ylim=(0, 1),
-                            bgcolor=FLEXOKI_PAPER, color=FLEXOKI_BLACK, fontsize=14
-                        )
+                        self.fuel_relatives_plot_pane.object = fig_empty
+                        self.price_index_plot_pane.object = fig_empty
                 
                 except Exception as e:
                     logger.error(f"Error in fuel relatives calculation: {e}", exc_info=True)
-                    self.fuel_relatives_plot_pane.object = hv.Text(0.5, 0.5, 
-                        f'Error: {str(e)}').opts(
-                        xlim=(0, 1), ylim=(0, 1),
-                        bgcolor=FLEXOKI_PAPER, color=FLEXOKI_BLACK, fontsize=14
+                    fig_error = go.Figure().add_annotation(
+                        text=f'Error: {str(e)}',
+                        xref='paper', yref='paper', x=0.5, y=0.5, showarrow=False,
+                        font=dict(size=14, color=FLEXOKI_BLACK)
+                    ).update_layout(
+                        paper_bgcolor=FLEXOKI_PAPER, plot_bgcolor=FLEXOKI_PAPER,
+                        xaxis=dict(visible=False), yaxis=dict(visible=False)
                     )
-                    self.price_index_plot_pane.object = hv.Text(0.5, 0.5, 
-                        f'Error: {str(e)}').opts(
-                        xlim=(0, 1), ylim=(0, 1),
-                        bgcolor=FLEXOKI_PAPER, color=FLEXOKI_BLACK, fontsize=14
-                    )
+                    self.fuel_relatives_plot_pane.object = fig_error
+                    self.price_index_plot_pane.object = fig_error
             
-            # Set up callback for fuel relatives region selector - completely independent
+            # Set up callbacks for fuel relatives - button click or region change triggers load
             fuel_relatives_region_selector.param.watch(update_fuel_relatives, 'value')
-            
-            # Don't load data automatically - wait for user to click button
+            fuel_relatives_load_button.on_click(update_fuel_relatives)
             
             logger.info("Prices tab created successfully")
             logger.info(f"Returning prices_tab of type: {type(prices_tab)}")
