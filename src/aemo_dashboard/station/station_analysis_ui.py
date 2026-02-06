@@ -17,186 +17,212 @@ from .station_analysis import StationAnalysisMotor
 from .station_search import StationSearchEngine
 from .coal_analysis import create_coal_tab, create_coal_evolution_tab
 from ..shared.logging_config import get_logger
+from ..shared.flexoki_theme import (
+    FLEXOKI_PAPER,
+    FLEXOKI_BLACK,
+    FLEXOKI_BASE,
+    FLEXOKI_ACCENT,
+)
 
 logger = get_logger(__name__)
 
-# Custom CSS for Material Design styling
-MATERIAL_CSS = """
+# Custom CSS for Material Design styling with Flexoki Light Theme
+MATERIAL_CSS = f"""
 /* Material Design Card styling */
-.material-card {
-    background-color: #1e1e1e;
+.material-card {{
+    background-color: {FLEXOKI_PAPER};
     border-radius: 8px;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
     padding: 16px;
     margin: 8px;
-}
+    border: 1px solid {FLEXOKI_BASE[150]};
+}}
+"""
 
+MATERIAL_CSS += f"""
 /* Improved button styling */
-.bk-btn-group .bk-btn {
-    font-family: Roboto, Arial, sans-serif;
+.bk-btn-group .bk-btn {{
+    font-family: 'IBM Plex Sans', Arial, sans-serif;
     font-size: 14px;
     padding: 8px 16px;
     border-radius: 4px;
     transition: all 0.2s ease;
     text-transform: none;
     font-weight: 500;
-}
+    background-color: {FLEXOKI_BASE[50]} !important;
+    color: {FLEXOKI_BLACK} !important;
+}}
 
-.bk-btn-group .bk-btn:hover {
-    background-color: rgba(25, 118, 210, 0.08);
-}
+.bk-btn-group .bk-btn:hover {{
+    background-color: {FLEXOKI_BASE[100]} !important;
+}}
 
-.bk-btn-group .bk-btn-primary.bk-active {
-    background-color: #1976d2 !important;
-    color: white !important;
-}
+.bk-btn-group .bk-btn-primary.bk-active {{
+    background-color: {FLEXOKI_ACCENT['cyan']} !important;
+    color: {FLEXOKI_PAPER} !important;
+}}
+"""
 
+MATERIAL_CSS += f"""
 /* Input field styling */
-.bk-input {
-    font-family: Roboto, Arial, sans-serif;
-    background-color: #2a2a2a;
-    border: 1px solid #444;
+.bk-input {{
+    font-family: 'IBM Plex Sans', Arial, sans-serif;
+    background-color: {FLEXOKI_PAPER} !important;
+    border: 1px solid {FLEXOKI_BASE[150]} !important;
     border-radius: 4px;
-    color: #fff;
+    color: {FLEXOKI_BLACK} !important;
     padding: 8px 12px;
-}
+}}
 
-.bk-input:focus {
-    border-color: #1976d2;
+.bk-input:focus {{
+    border-color: {FLEXOKI_ACCENT['cyan']} !important;
     outline: none;
-    box-shadow: 0 0 0 2px rgba(25, 118, 210, 0.2);
-}
+    box-shadow: 0 0 0 2px {FLEXOKI_ACCENT['cyan']}33 !important;
+}}
+"""
 
+MATERIAL_CSS += f"""
 /* Select dropdown styling */
-select.bk-input {
-    background-color: #2a2a2a;
-    color: #fff;
+select.bk-input {{
+    background-color: {FLEXOKI_PAPER} !important;
+    color: {FLEXOKI_BLACK} !important;
     cursor: pointer;
-}
+}}
 
 /* Date picker styling */
-input[type="date"].bk-input {
-    background-color: #2a2a2a;
-    color: #fff;
-}
+input[type="date"].bk-input {{
+    background-color: {FLEXOKI_PAPER} !important;
+    color: {FLEXOKI_BLACK} !important;
+}}
+"""
 
+MATERIAL_CSS += f"""
 /* Section headers */
-.section-header {
-    font-family: Roboto, Arial, sans-serif;
+.section-header {{
+    font-family: 'IBM Plex Sans', Arial, sans-serif;
     font-size: 14px;
     font-weight: 500;
-    color: #aaa;
+    color: {FLEXOKI_BASE[600]};
     margin: 16px 0 8px 0;
     text-transform: uppercase;
     letter-spacing: 0.5px;
-}
+}}
+"""
 
-/* Tabulator dark theme overrides */
-.tabulator {
-    background-color: #1e1e1e;
-    border: none;
-}
+MATERIAL_CSS += f"""
+/* Tabulator light theme */
+.tabulator {{
+    background-color: {FLEXOKI_PAPER};
+    border: 1px solid {FLEXOKI_BASE[150]};
+}}
 
-.tabulator-header {
-    background-color: #2a2a2a;
-    border-bottom: 1px solid #444;
-}
+.tabulator-header {{
+    background-color: {FLEXOKI_BASE[50]};
+    border-bottom: 1px solid {FLEXOKI_BASE[150]};
+    color: {FLEXOKI_BLACK};
+}}
 
-.tabulator-row {
-    background-color: #1e1e1e;
-    border-bottom: 1px solid #333;
-}
+.tabulator-row {{
+    background-color: {FLEXOKI_PAPER};
+    border-bottom: 1px solid {FLEXOKI_BASE[100]};
+    color: {FLEXOKI_BLACK};
+}}
 
-.tabulator-row:nth-child(even) {
-    background-color: #252525;
-}
+.tabulator-row:nth-child(even) {{
+    background-color: {FLEXOKI_BASE[50]};
+}}
 
-.tabulator-row:hover {
-    background-color: #2a2a2a;
-}
+.tabulator-row:hover {{
+    background-color: {FLEXOKI_BASE[100]};
+}}
 
-/* Radio button styling for dark mode */
-.bk-input[type="radio"] {
+.tabulator-cell {{
+    color: {FLEXOKI_BLACK};
+}}
+"""
+
+MATERIAL_CSS += f"""
+/* Radio button styling for light mode */
+.bk-input[type="radio"] {{
     margin-right: 6px;
-}
+}}
 
-.bk-input-group label {
-    color: #fff;
-    font-family: Roboto, Arial, sans-serif;
+.bk-input-group label {{
+    color: {FLEXOKI_BLACK} !important;
+    font-family: 'IBM Plex Sans', Arial, sans-serif;
     font-size: 14px;
     margin-right: 16px;
     cursor: pointer;
     display: inline-flex;
     align-items: center;
-}
+}}
 
-.bk-input-group label:hover {
-    color: #1976d2;
-}
+.bk-input-group label:hover {{
+    color: {FLEXOKI_ACCENT['cyan']} !important;
+}}
 
-.bk-input-group {
+.bk-input-group {{
     display: flex;
     align-items: center;
     gap: 12px;
     margin-bottom: 24px;
-}
+}}
+"""
 
-/* Remove ALL tab underlines and borders using shadow DOM selectors */
-:host .bk-tabs-header {
+MATERIAL_CSS += f"""
+/* Tab styling with Flexoki theme */
+:host .bk-tabs-header {{
     border: none !important;
     border-bottom: none !important;
     box-shadow: none !important;
     background: transparent !important;
-}
+}}
 
-:host .bk-tabs-header .bk-headers {
+:host .bk-tabs-header .bk-headers {{
     border: none !important;
     border-bottom: none !important;
     background: transparent !important;
-}
+}}
 
-/* Target the tab wrapper that creates the underline */
-:host .bk-tabs-header .bk-headers .bk-tabs-header-contents {
+:host .bk-tabs-header .bk-headers .bk-tabs-header-contents {{
     border-bottom: none !important;
-}
+}}
 
-:host .bk-tabs-header .bk-tab {
+:host .bk-tabs-header .bk-tab {{
     border: none !important;
     border-bottom: 2px solid transparent !important;
     background: transparent !important;
     text-decoration: none !important;
-}
+    color: {FLEXOKI_BLACK} !important;
+}}
 
-:host .bk-tabs-header .bk-tab.bk-active {
+:host .bk-tabs-header .bk-tab.bk-active {{
     border: none !important;
-    border-bottom: 2px solid #1976d2 !important;
+    border-bottom: 2px solid {FLEXOKI_ACCENT['cyan']} !important;
     background: transparent !important;
-}
+    color: {FLEXOKI_ACCENT['cyan']} !important;
+}}
 
-/* Remove any lines from tab content area */
-:host .bk-tabs-panel {
+:host .bk-tabs-panel {{
     border: none !important;
     box-shadow: none !important;
-}
+}}
 
-/* Additional removal of borders */
-.bk-root .bk-tabs-header {
+.bk-root .bk-tabs-header {{
     border-bottom: none !important;
-}
+}}
 
-.bk-root .bk-tabs-header .bk-tab:not(.bk-active) {
+.bk-root .bk-tabs-header .bk-tab:not(.bk-active) {{
     border-bottom-color: transparent !important;
-}
+}}
 
-/* Additional spacing in the material card */
-.material-card .bk-input-group:last-child {
+.material-card .bk-input-group:last-child {{
     margin-bottom: 8px;
-}
+}}
 
-/* Add horizontal spacing to radio button groups */
-.bk-input-group {
+.bk-input-group {{
     margin-right: 32px;
-}
+}}
 """
 
 # Apply custom CSS
@@ -436,17 +462,22 @@ class StationAnalysisUI(param.Parameterized):
                 self.search_input,
                 pn.Spacer(height=12),
                 pn.Row(
-                    pn.Column(pn.pane.HTML("<div style='color: #aaa; font-size: 11px; margin-bottom: 2px;'>From</div>"), self.start_picker),
-                    pn.Column(pn.pane.HTML("<div style='color: #aaa; font-size: 11px; margin-bottom: 2px;'>To</div>"), self.end_picker),
+                    pn.Column(pn.pane.HTML(f"<div style='color: {FLEXOKI_BASE[600]}; font-size: 11px; margin-bottom: 2px;'>From</div>"), self.start_picker),
+                    pn.Column(pn.pane.HTML(f"<div style='color: {FLEXOKI_BASE[600]}; font-size: 11px; margin-bottom: 2px;'>To</div>"), self.end_picker),
                 ),
-                pn.pane.HTML("<div style='color: #aaa; font-size: 11px; margin: 8px 0 2px 0;'>Days</div>"),
+                pn.pane.HTML(f"<div style='color: {FLEXOKI_BASE[600]}; font-size: 11px; margin: 8px 0 2px 0;'>Days</div>"),
                 self.preset_buttons,
                 pn.Spacer(height=12),
-                pn.pane.HTML("<div style='color: #aaa; font-size: 11px; margin: 8px 0 2px 0;'>Smoothing</div>"),
+                pn.pane.HTML(f"<div style='color: {FLEXOKI_BASE[600]}; font-size: 11px; margin: 8px 0 2px 0;'>Smoothing</div>"),
                 self.smoothing_selector,
                 css_classes=['material-card'],
                 width=330,  # Increased width for better layout
-                styles={'background-color': '#1e1e1e', 'border-radius': '8px', 'padding': '14px'}
+                styles={
+                    'background-color': FLEXOKI_PAPER,
+                    'border-radius': '8px',
+                    'padding': '14px',
+                    'border': f'1px solid {FLEXOKI_BASE[150]}'
+                }
             )
             
             return search_card
@@ -888,7 +919,11 @@ class StationAnalysisUI(param.Parameterized):
                 height=500,   # Increased height
                 tools='pan,wheel_zoom,box_zoom,reset,save,hover'
             )
-            
+
+            # Apply Flexoki theme - set plot background to cream color
+            p.background_fill_color = FLEXOKI_PAPER
+            p.border_fill_color = FLEXOKI_PAPER
+
             # Remove grid
             p.grid.visible = False
             
@@ -928,17 +963,19 @@ class StationAnalysisUI(param.Parameterized):
             # Configure legend and axes
             p.legend.location = "top_left"
             p.legend.click_policy = "hide"
+            p.legend.background_fill_color = FLEXOKI_PAPER
+            p.legend.border_line_color = FLEXOKI_BASE[150]
             p.xaxis.axis_label = 'Time'
-            
+
             # Add attribution
             from bokeh.models import Title
-            attribution = Title(text='Design: ITK, Data: AEMO', 
+            attribution = Title(text='Design: ITK, Data: AEMO',
                               text_font_size='9pt',
                               text_color='#6272a4',
                               align='right',
                               offset=-5)
             p.add_layout(attribution, 'below')
-            
+
             return pn.pane.Bokeh(p, sizing_mode='stretch_width', height=500)
             
         except Exception as e:
@@ -975,7 +1012,11 @@ class StationAnalysisUI(param.Parameterized):
                 height=500,   # Increased height
                 tools='pan,wheel_zoom,box_zoom,reset,save,hover'
             )
-            
+
+            # Apply Flexoki theme - set plot background to cream color
+            p.background_fill_color = FLEXOKI_PAPER
+            p.border_fill_color = FLEXOKI_PAPER
+
             # Remove grid
             p.grid.visible = False
             
@@ -1017,18 +1058,20 @@ class StationAnalysisUI(param.Parameterized):
             # Configure legend and axes
             p.legend.location = "top_left"
             p.legend.click_policy = "hide"
+            p.legend.background_fill_color = FLEXOKI_PAPER
+            p.legend.border_line_color = FLEXOKI_BASE[150]
             p.xaxis.axis_label = 'Hour of Day'
             p.xaxis.ticker = list(range(0, 24, 3))  # Show every 3 hours
-            
+
             # Add attribution
             from bokeh.models import Title
-            attribution = Title(text='Design: ITK, Data: AEMO', 
+            attribution = Title(text='Design: ITK, Data: AEMO',
                               text_font_size='9pt',
                               text_color='#6272a4',
                               align='right',
                               offset=-5)
             p.add_layout(attribution, 'below')
-            
+
             return pn.pane.Bokeh(p, sizing_mode='stretch_width', height=500)
             
         except Exception as e:
@@ -1108,7 +1151,7 @@ class StationAnalysisUI(param.Parameterized):
                 page_size=10,
                 width=250,  # Reduced width to give more space to chart
                 height=280,  # Increased height to show all 7 rows without scrolling
-                theme='midnight',  # Dark theme
+                theme='simple',  # Light theme
                 show_index=False  # Remove index column
             )
             

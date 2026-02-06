@@ -16,62 +16,35 @@ import threading
 
 from ..shared.config import config
 from ..shared.logging_config import get_logger
+from ..shared.flexoki_theme import (
+    FLEXOKI_PAPER,
+    FLEXOKI_BLACK,
+    FLEXOKI_BASE,
+    FLEXOKI_ACCENT,
+    FLEXOKI_TABLE_STYLES,
+    FLEXOKI_MATPLOTLIB_STYLE,
+    REGION_COLORS,
+)
 
 logger = get_logger(__name__)
 
+# Add debug logging for refresh issues
+import logging
+refresh_logger = logging.getLogger('refresh.price_components')
+refresh_logger.setLevel(logging.DEBUG)
 
-# ITK teal style for dataframe (from original)
-PRICE_TABLE_STYLES = [
-    dict(selector="caption",
-         props=[("text-align", "left"),
-                ("font-size", "150%"),
-                ("color", 'white'),
-                ("background-color", "teal"),
-                ("caption-side", "top")]),
-    dict(selector="",
-         props=[("color", "#f8f8f2"),
-                ("background-color", "#282a36"),
-                ("border-bottom", "1px dotted #6272a4")]),
-    dict(selector="th",
-         props=[("background-color", "#44475a"),
-                ("border-bottom", "1px dotted #6272a4"),
-                ("font-size", "14px"),
-                ("color", "#f8f8f2")]),
-    dict(selector="tr",
-         props=[("background-color", "#282a36"),
-                ("border-bottom", "1px dotted #6272a4"),
-                ("color", "#f8f8f2")]),
-    dict(selector="td",
-         props=[("font-size", "14px")]),
-    dict(selector="th.col_heading",
-         props=[("color", "black"),
-                ("font-size", "110%"),
-                ("background-color", "#00DCDC")]),
-    dict(selector="tr:last-child",
-         props=[("color", "#f8f8f2"),
-                ("border-bottom", "5px solid #6272a4")]),
-    dict(selector=".row_heading",
-         props=[("background-color", "#282a36"),
-                ("border-bottom", "1px dotted #6272a4"),
-                ("color", "#f8f8f2"),
-                ("font-size", "14px")]),
-    dict(selector="thead th:first-child",
-         props=[("background-color", "#00DCDC"),
-                ("color", "black")])
-]
+# Flexoki Light style for dataframe
+PRICE_TABLE_STYLES = FLEXOKI_TABLE_STYLES
 
-# Dracula style for matplotlib (from original)
-DRACULA_STYLE = {
-    "axes.facecolor": "#282a36",
-    "axes.edgecolor": "#44475a",
-    "axes.labelcolor": "#f8f8f2",
-    "figure.facecolor": "#282a36",
-    "grid.color": "#6272a4",
-    "text.color": "#f8f8f2",
-    "xtick.color": "#f8f8f2",
-    "ytick.color": "#f8f8f2",
-    "axes.prop_cycle": plt.cycler("color", ["#8be9fd", "#ff79c6", "#50fa7b", "#ffb86c", "#bd93f9", "#ff5555", "#f1fa8c"])
-}
+# Flexoki style for matplotlib
+FLEXOKI_STYLE = FLEXOKI_MATPLOTLIB_STYLE.copy()
+FLEXOKI_STYLE["axes.prop_cycle"] = plt.cycler("color", [
+    REGION_COLORS['NSW1'],  # green
+    REGION_COLORS['QLD1'],  # orange
+    REGION_COLORS['SA1'],   # magenta
+    REGION_COLORS['TAS1'],  # cyan
+    REGION_COLORS['VIC1'],  # purple
+])
 
 
 def load_price_data(start_date=None, end_date=None):
@@ -82,28 +55,28 @@ def load_price_data(start_date=None, end_date=None):
         start_date: Start date for price data (defaults to 48 hours ago)
         end_date: End date for price data (defaults to now)
     """
-    logger.debug(f"load_price_data called at {time.time()} with dates: {start_date} to {end_date}")
+    refresh_logger.debug(f"load_price_data called at {time.time()} with dates: {start_date} to {end_date}")
     
     # If no dates provided, default to last 48 hours to prevent loading all data
     if start_date is None or end_date is None:
         end_date = pd.Timestamp.now()
         start_date = end_date - pd.Timedelta(hours=48)
-        logger.info(f"No dates provided, using default range: {start_date} to {end_date}")
+        refresh_logger.info(f"No dates provided, using default range: {start_date} to {end_date}")
     else:
         # Convert date objects to pandas Timestamps if needed
-        logger.debug(f"Date types received: start_date={type(start_date)}, end_date={type(end_date)}")
+        refresh_logger.debug(f"Date types received: start_date={type(start_date)}, end_date={type(end_date)}")
         if hasattr(start_date, 'date'):  # It's already a datetime/Timestamp
             pass
         else:  # It's likely a date object, convert to Timestamp
             start_date = pd.Timestamp(start_date)
             end_date = pd.Timestamp(end_date) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)  # End of day
-        logger.info(f"Using provided dates (converted): {start_date} to {end_date}")
+        refresh_logger.info(f"Using provided dates (converted): {start_date} to {end_date}")
     
     try:
         from ..shared.adapter_selector import load_price_data as load_price_adapter
         
         logger.info(f"Loading price data for {start_date} to {end_date}")
-        logger.debug("About to call load_price_adapter with date filtering...")
+        refresh_logger.debug("About to call load_price_adapter with date filtering...")
         
         # Load data using the adapter with date filtering
         data = load_price_adapter(start_date=start_date, end_date=end_date)
@@ -177,7 +150,7 @@ def create_price_table(prices):
             .set_caption("5 minute spot $/MWh " + prices.index[-1].strftime("%d %b %H:%M"))
             .set_table_styles(PRICE_TABLE_STYLES)
             .apply(lambda x: ['font-weight: bold' if x.name in display.tail(3).index else '' for _ in x], axis=1)
-            .apply(lambda x: ['color: #e0e0e0' if x.name not in display.tail(3).index else '' for _ in x], axis=1))
+            .apply(lambda x: [f'color: {FLEXOKI_BASE[600]}' if x.name not in display.tail(3).index else '' for _ in x], axis=1))
         
         return pn.pane.DataFrame(styled_table, sizing_mode='fixed', width=550, height=350)
         
@@ -191,13 +164,13 @@ def create_price_chart(prices):
     Create smoothed price chart
     Adapted from display_spot.py pcht function
     """
-    logger.debug(f"create_price_chart called with {len(prices) if not prices.empty else 0} price records")
+    refresh_logger.debug(f"create_price_chart called with {len(prices) if not prices.empty else 0} price records")
     
     if prices.empty:
         return pn.pane.HTML("<div>No price data available</div>", width=550, height=400)
     
     try:
-        logger.debug("Starting matplotlib figure creation...")
+        refresh_logger.debug("Starting matplotlib figure creation...")
         # Count consecutive valid points from the end for each column
         valid_counts = {}
         for col in prices.columns:
@@ -220,16 +193,21 @@ def create_price_chart(prices):
         
         # Calculate EWM only on the rows we'll use
         df = prices.tail(rows_to_take).ewm(alpha=0.22, adjust=False).mean()
-        
-        # Apply Dracula style BEFORE creating figure
-        logger.debug("Applying Dracula style...")
-        plt.rcParams.update(DRACULA_STYLE)
-        
+
+        # Apply Flexoki style BEFORE creating figure
+        refresh_logger.debug("Applying Flexoki style...")
+        plt.rcParams.update(FLEXOKI_STYLE)
+
         # Create matplotlib figure
-        logger.debug("Creating matplotlib figure...")
+        refresh_logger.debug("Creating matplotlib figure...")
         fig, ax = plt.subplots()
         fig.set_size_inches(5.5, 4.0)  # Increased height to match generation chart
-        logger.debug("Matplotlib figure created successfully")
+
+        # EXPLICIT FIX: Force background colors to Flexoki cream
+        fig.patch.set_facecolor(FLEXOKI_PAPER)
+        ax.set_facecolor(FLEXOKI_PAPER)
+
+        refresh_logger.debug("Matplotlib figure created successfully")
         
         # Show the timestamp of the last data point
         # The real issue is data not updating after midnight, not the display
@@ -257,15 +235,18 @@ def create_price_chart(prices):
         ax.spines['top'].set_visible(False)
         ax.spines['left'].set_visible(False)
         ax.spines['bottom'].set_visible(False)
-        ax.axhline(0, color='white', linewidth=0.3)
+        ax.axhline(0, color=FLEXOKI_BASE[300], linewidth=0.3)
         plt.figtext(0.97, 0.0, "©ITK", fontsize=7, horizontalalignment="right")
-        ax.legend(fontsize=7, frameon=False)
+
+        # Create legend with explicit Flexoki cream background
+        legend = ax.legend(fontsize=7, frameon=True, facecolor=FLEXOKI_PAPER,
+                          edgecolor=FLEXOKI_BASE[150], framealpha=1.0)
         
         plt.tight_layout()
-        logger.debug("Matplotlib chart completed, creating Panel pane...")
+        refresh_logger.debug("Matplotlib chart completed, creating Panel pane...")
         
         pane = pn.pane.Matplotlib(fig, sizing_mode='fixed', width=550, height=400)
-        logger.debug(f"Panel Matplotlib pane created: {type(pane)}")
+        refresh_logger.debug(f"Panel Matplotlib pane created: {type(pane)}")
         
         return pane
         
@@ -282,28 +263,28 @@ def create_price_section(start_date=None, end_date=None):
         start_date: Start date for price data
         end_date: End date for price data
     """
-    logger.info("="*60)
-    logger.info(f"create_price_section called at {time.time()}")
-    logger.info(f"Date range: {start_date} to {end_date}")
-    logger.info(f"Thread: {threading.current_thread().name}")
-    logger.info(f"Panel state: {hasattr(pn.state, 'curdoc')}")
-    logger.info("="*60)
+    refresh_logger.info("="*60)
+    refresh_logger.info(f"create_price_section called at {time.time()}")
+    refresh_logger.info(f"Date range: {start_date} to {end_date}")
+    refresh_logger.info(f"Thread: {threading.current_thread().name}")
+    refresh_logger.info(f"Panel state: {hasattr(pn.state, 'curdoc')}")
+    refresh_logger.info("="*60)
     
     # FIX for midnight rollover bug: Create and return components directly
     # without pn.pane.panel wrapper so they can be refreshed via object property
     start_time = time.time()
     
     try:
-        logger.debug("Loading price data with date filtering...")
+        refresh_logger.debug("Loading price data with date filtering...")
         prices = load_price_data(start_date, end_date)
         
-        logger.debug(f"Creating price table with {len(prices) if not prices.empty else 0} records...")
+        refresh_logger.debug(f"Creating price table with {len(prices) if not prices.empty else 0} records...")
         table = create_price_table(prices)
         
-        logger.debug("Creating price chart...")
+        refresh_logger.debug("Creating price chart...")
         chart = create_price_chart(prices)
         
-        logger.debug(f"Components created in {time.time() - start_time:.2f}s")
+        refresh_logger.debug(f"Components created in {time.time() - start_time:.2f}s")
         
         result = pn.Column(
             table,
@@ -313,11 +294,11 @@ def create_price_section(start_date=None, end_date=None):
             margin=(5, 5)
         )
         
-        logger.debug(f"create_price_section returning: {type(result)}")
+        refresh_logger.debug(f"create_price_section returning: {type(result)}")
         return result
         
     except Exception as e:
-        logger.error(f"Error in create_price_section: {e}", exc_info=True)
+        refresh_logger.error(f"Error in create_price_section: {e}", exc_info=True)
         raise
 
 
@@ -360,7 +341,7 @@ class PriceDisplay:
     
     def __init__(self):
         """Initialize with persistent panes"""
-        logger.info("PriceDisplay: Creating persistent panes")
+        refresh_logger.info("PriceDisplay: Creating persistent panes")
         
         # Load initial data (last 48 hours by default)
         initial_prices = load_price_data()
@@ -369,12 +350,12 @@ class PriceDisplay:
         if not initial_prices.empty:
             self.chart_pane = create_price_chart(initial_prices)
             self.table_pane = create_price_table(initial_prices)
-            logger.info(f"PriceDisplay: Created panes with {len(initial_prices)} price records")
+            refresh_logger.info(f"PriceDisplay: Created panes with {len(initial_prices)} price records")
         else:
             # Fallback if no data available
             self.chart_pane = pn.pane.HTML("<div>No price data available</div>", width=550, height=400)
             self.table_pane = pn.pane.HTML("<div>No price data available</div>", width=550, height=350)
-            logger.warning("PriceDisplay: No initial price data available")
+            refresh_logger.warning("PriceDisplay: No initial price data available")
         
         # Store last update info for debugging
         self.last_update_time = pd.Timestamp.now()
@@ -390,7 +371,7 @@ class PriceDisplay:
             end_date: End date for price data
         """
         update_start = time.time()
-        logger.info(f"PriceDisplay.update called with dates: {start_date} to {end_date}")
+        refresh_logger.info(f"PriceDisplay.update called with dates: {start_date} to {end_date}")
         
         # Load fresh data
         prices = load_price_data(start_date, end_date)
@@ -404,19 +385,19 @@ class PriceDisplay:
             # We update the content of existing panes rather than replacing them
             if hasattr(new_chart, 'object'):
                 self.chart_pane.object = new_chart.object
-                logger.debug("PriceDisplay: Updated chart_pane.object")
+                refresh_logger.debug("PriceDisplay: Updated chart_pane.object")
             else:
                 # If new_chart is already a figure, assign directly
                 self.chart_pane.object = new_chart
-                logger.debug("PriceDisplay: Updated chart_pane.object (direct)")
+                refresh_logger.debug("PriceDisplay: Updated chart_pane.object (direct)")
             
             if hasattr(new_table, 'object'):
                 self.table_pane.object = new_table.object
-                logger.debug("PriceDisplay: Updated table_pane.object")
+                refresh_logger.debug("PriceDisplay: Updated table_pane.object")
             else:
                 # If new_table is already styled data, assign directly
                 self.table_pane.object = new_table
-                logger.debug("PriceDisplay: Updated table_pane.object (direct)")
+                refresh_logger.debug("PriceDisplay: Updated table_pane.object (direct)")
             
             # Log successful update
             self.last_update_time = pd.Timestamp.now()
@@ -424,15 +405,15 @@ class PriceDisplay:
             
             # Check for midnight rollover
             if start_date and end_date:
-                logger.info(f"PriceDisplay: Updated with {len(prices)} records for {start_date} to {end_date}")
+                refresh_logger.info(f"PriceDisplay: Updated with {len(prices)} records for {start_date} to {end_date}")
                 if hasattr(self, '_last_end_date') and self._last_end_date:
                     if self._last_end_date.date() != end_date.date() if hasattr(end_date, 'date') else end_date != self._last_end_date:
-                        logger.info(f"PriceDisplay: MIDNIGHT ROLLOVER DETECTED - Date changed from {self._last_end_date} to {end_date}")
+                        refresh_logger.info(f"PriceDisplay: MIDNIGHT ROLLOVER DETECTED - Date changed from {self._last_end_date} to {end_date}")
                 self._last_end_date = end_date
             
-            logger.info(f"PriceDisplay: Update completed in {time.time() - update_start:.2f}s")
+            refresh_logger.info(f"PriceDisplay: Update completed in {time.time() - update_start:.2f}s")
         else:
-            logger.warning("PriceDisplay: No price data available for update")
+            refresh_logger.warning("PriceDisplay: No price data available for update")
             # Update with empty message
             self.chart_pane.object = pn.pane.HTML("<div>No price data available</div>", width=550, height=400).object
             self.table_pane.object = pn.pane.HTML("<div>No price data available</div>", width=550, height=350).object

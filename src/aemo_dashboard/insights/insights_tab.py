@@ -18,6 +18,18 @@ from aemo_dashboard.generation.generation_query_manager import GenerationQueryMa
 
 logger = get_logger(__name__)
 
+# Flexoki theme constants
+FLEXOKI_PAPER = '#FFFCF0'
+FLEXOKI_BORDER = '#B7B5AC'
+
+def set_flexoki_backgrounds(plot, element):
+    """Hook function to set Flexoki cream background for plot areas and legends."""
+    plot.state.background_fill_color = FLEXOKI_PAPER
+    if hasattr(plot.state, 'legend') and plot.state.legend:
+        for legend in plot.state.legend:
+            legend.background_fill_color = FLEXOKI_PAPER
+            legend.border_line_color = FLEXOKI_BORDER
+
 # Optional LOESS import
 try:
     from statsmodels.nonparametric.smoothers_lowess import lowess
@@ -113,14 +125,14 @@ class InsightsTab:
         )
         
         # Region radio button group
-        # Define region colors
+        # Define region colors - Flexoki Light compatible
         self.region_colors = {
-            'NSW1': '#50fa7b',  # Green
-            'QLD1': '#ffb86c',  # Orange
-            'SA1': '#ff79c6',   # Pink
-            'TAS1': '#8be9fd',  # Cyan
-            'VIC1': '#bd93f9',  # Purple
-            'NEM': '#f8f8f2'    # White for NEM (all regions)
+            'NSW1': '#879A39',  # Flexoki Green
+            'QLD1': '#BC5215',  # Flexoki Orange
+            'SA1': '#CE5D97',   # Flexoki Magenta
+            'TAS1': '#3AA99F',  # Flexoki Cyan
+            'VIC1': '#8B7EC8',  # Flexoki Purple
+            'NEM': '#100F0F'    # Flexoki Black for NEM (all regions)
         }
         
         # Create standard RadioBoxGroup (no color styling)
@@ -182,12 +194,12 @@ class InsightsTab:
         self.battery_info_pane = pn.pane.HTML(
             """
             <div style="
-                background-color: #1a1a1a;
-                border: 2px solid #666;
+                background-color: #FFFCF0;
+                border: 2px solid #B7B5AC;
                 border-radius: 10px;
                 padding: 15px;
                 margin: 10px;
-                color: #e0e0e0;
+                color: #100F0F;
             ">
                 <p>Click 'Update Battery Analysis' to generate the battery performance chart.</p>
             </div>
@@ -271,8 +283,8 @@ class InsightsTab:
         # Results panes
         self.bess_info_pane = pn.pane.HTML(
             """
-            <div style="background-color: #1a1a1a; border: 1px solid #666; padding: 10px; border-radius: 5px;">
-                <p style="color: #e0e0e0;">Select a battery and click Analyze to view details.</p>
+            <div style="background-color: #FFFCF0; border: 1px solid #B7B5AC; padding: 10px; border-radius: 5px;">
+                <p style="color: #100F0F;">Select a battery and click Analyze to view details.</p>
             </div>
             """,
             sizing_mode='stretch_width'
@@ -324,8 +336,8 @@ class InsightsTab:
             
             if not selected_duid:
                 self.bess_info_pane.object = """
-                <div style="background-color: #1a1a1a; border: 1px solid #666; padding: 10px; border-radius: 5px;">
-                    <p style="color: #ff5555;">No battery selected.</p>
+                <div style="background-color: #FFFCF0; border: 1px solid #B7B5AC; padding: 10px; border-radius: 5px;">
+                    <p style="color: #AF3029;">No battery selected.</p>
                 </div>
                 """
                 return
@@ -545,16 +557,16 @@ class InsightsTab:
                                 
                                 discharge_plot = power_df['Discharge'].hvplot.step(
                                     where='mid',
-                                    color='#50fa7b',
+                                    color='#879A39',  # Flexoki Green
                                     line_width=1,
                                     label='Discharge'
                                 ).redim(x='BatteryTime').opts(
                                     xlim=xlim  # Set xlim in opts() for proper range control
                                 )
-                                
+
                                 charge_plot = power_df['Charge'].hvplot.step(
                                     where='mid',
-                                    color='#ff5555',
+                                    color='#AF3029',  # Flexoki Red
                                     line_width=1,
                                     label='Charge'
                                 ).redim(x='BatteryTime').opts(
@@ -569,16 +581,17 @@ class InsightsTab:
                                     width=800,
                                     title=f"{battery['Site Name']} - Charge/Discharge Profile",
                                     legend_position='top_right',
-                                    bgcolor='#282a36',
+                                    bgcolor=FLEXOKI_PAPER,
                                     show_grid=True,
-                                    gridstyle={'grid_line_alpha': 0.2, 'grid_line_color': '#44475a'},
-                                    xaxis='top'  # Show x-axis at the top of the first plot
+                                    gridstyle={'grid_line_alpha': 0.3, 'grid_line_color': FLEXOKI_BORDER},
+                                    xaxis='top',  # Show x-axis at the top of the first plot
+                                    hooks=[set_flexoki_backgrounds]  # Set legend background
                                 )
-                                
+
                                 # Create a horizontal line at y=0 for the price plot
                                 import holoviews as hv
                                 zero_line = hv.HLine(0).opts(
-                                    color='white',
+                                    color='#100F0F',
                                     line_width=0.5,
                                     alpha=0.8
                                 )  # HLine doesn't need redim as it has no x dimension
@@ -615,7 +628,7 @@ class InsightsTab:
                                     
                                     # Create the plot with transformed data and explicit xlim
                                     price_line = price_data_transformed.hvplot.line(
-                                        color='#f1fa8c',  # Yellow for price
+                                        color='#D0A215',  # Flexoki Yellow for price
                                         line_width=2,
                                         ylabel=ylabel_text,
                                         xlabel='Date',
@@ -623,19 +636,20 @@ class InsightsTab:
                                         height=280,  # Increased height for price plot
                                         width=800
                                     ).redim(x='BatteryTime').opts(  # Keep unique dimension name
-                                        bgcolor='#282a36',
+                                        bgcolor=FLEXOKI_PAPER,
                                         show_grid=True,
-                                        gridstyle={'grid_line_alpha': 0.2, 'grid_line_color': '#44475a'},
+                                        gridstyle={'grid_line_alpha': 0.3, 'grid_line_color': FLEXOKI_BORDER},
                                         line_join='round',
                                         line_cap='round',
-                                        xlim=xlim  # Set xlim in opts() for proper range control
+                                        xlim=xlim,  # Set xlim in opts() for proper range control
+                                        hooks=[set_flexoki_backgrounds]  # Set legend background
                                     )
                                     
                                 else:
                                     ylabel_text = 'Price ($/MWh)'
                                     # Create normal linear scale price plot with explicit xlim
                                     price_line = plot_data['RRP'].hvplot.line(
-                                        color='#f1fa8c',  # Yellow for price
+                                        color='#D0A215',  # Flexoki Yellow for price
                                         line_width=2,
                                         ylabel=ylabel_text,
                                         xlabel='Date',
@@ -643,12 +657,13 @@ class InsightsTab:
                                         height=280,  # Increased height for price plot
                                         width=800
                                     ).redim(x='BatteryTime').opts(  # Keep unique dimension name
-                                        bgcolor='#282a36',
+                                        bgcolor=FLEXOKI_PAPER,
                                         show_grid=True,
-                                        gridstyle={'grid_line_alpha': 0.2, 'grid_line_color': '#44475a'},
+                                        gridstyle={'grid_line_alpha': 0.3, 'grid_line_color': FLEXOKI_BORDER},
                                         line_join='round',
                                         line_cap='round',
-                                        xlim=xlim  # Set xlim in opts() for proper range control
+                                        xlim=xlim,  # Set xlim in opts() for proper range control
+                                        hooks=[set_flexoki_backgrounds]  # Set legend background
                                     )
                                 
                                 # Always overlay the zero line (visible in both linear and symlog)
@@ -715,75 +730,75 @@ class InsightsTab:
                                 
                                 # Create performance metrics table
                                 metrics_html = f"""
-                                <hr style="border-color: #666; margin: 15px 0;">
-                                <table style="color: #e0e0e0; width: 100%; border-collapse: collapse;">
-                                    <tr><td colspan="2" style="color: #bd93f9; padding-bottom: 10px;"><strong>Performance Metrics:</strong></td></tr>
-                                    <tr style="border-bottom: 1px solid #444;">
+                                <hr style="border-color: #B7B5AC; margin: 15px 0;">
+                                <table style="color: #100F0F; width: 100%; border-collapse: collapse;">
+                                    <tr><td colspan="2" style="color: #24837B; padding-bottom: 10px;"><strong>Performance Metrics:</strong></td></tr>
+                                    <tr style="border-bottom: 1px solid #DAD8CE;">
                                         <td style="padding: 5px;"><strong>Average Discharge Price:</strong></td>
                                         <td style="padding: 5px; text-align: right;">${avg_discharge_price:.0f}/MWh</td>
                                     </tr>
-                                    <tr style="border-bottom: 1px solid #444;">
+                                    <tr style="border-bottom: 1px solid #DAD8CE;">
                                         <td style="padding: 5px;"><strong>Average Charge Price:</strong></td>
                                         <td style="padding: 5px; text-align: right;">${avg_charge_price:.0f}/MWh</td>
                                     </tr>
-                                    <tr style="border-bottom: 1px solid #444;">
+                                    <tr style="border-bottom: 1px solid #DAD8CE;">
                                         <td style="padding: 5px;"><strong>Average Spread:</strong></td>
-                                        <td style="padding: 5px; text-align: right; color: #50fa7b; font-weight: bold;">${avg_spread:.0f}/MWh</td>
+                                        <td style="padding: 5px; text-align: right; color: #24837B; font-weight: bold;">${avg_spread:.0f}/MWh</td>
                                     </tr>
-                                    <tr style="border-bottom: 1px solid #444;">
+                                    <tr style="border-bottom: 1px solid #DAD8CE;">
                                         <td style="padding: 5px;"><strong>Total Discharge Revenue:</strong></td>
-                                        <td style="padding: 5px; text-align: right; color: #50fa7b;">{revenue_str}</td>
+                                        <td style="padding: 5px; text-align: right; color: #24837B;">{revenue_str}</td>
                                     </tr>
-                                    <tr style="border-bottom: 1px solid #444;">
+                                    <tr style="border-bottom: 1px solid #DAD8CE;">
                                         <td style="padding: 5px;"><strong>Total Charge Cost:</strong></td>
-                                        <td style="padding: 5px; text-align: right; color: #ff5555;">{cost_str}</td>
+                                        <td style="padding: 5px; text-align: right; color: #AF3029;">{cost_str}</td>
                                     </tr>
-                                    <tr style="border-bottom: 1px solid #444;">
+                                    <tr style="border-bottom: 1px solid #DAD8CE;">
                                         <td style="padding: 5px;"><strong>Total Spread (Gross Profit):</strong></td>
-                                        <td style="padding: 5px; text-align: right; color: #ffb86c; font-weight: bold;">{total_spread_str}</td>
+                                        <td style="padding: 5px; text-align: right; color: #BC5215; font-weight: bold;">{total_spread_str}</td>
                                     </tr>
-                                    <tr style="border-bottom: 1px solid #444;">
+                                    <tr style="border-bottom: 1px solid #DAD8CE;">
                                         <td style="padding: 5px;"><strong>Total Discharge Energy:</strong></td>
                                         <td style="padding: 5px; text-align: right;">{total_discharge_mwh:,.1f} MWh</td>
                                     </tr>
-                                    <tr style="border-bottom: 1px solid #444;">
+                                    <tr style="border-bottom: 1px solid #DAD8CE;">
                                         <td style="padding: 5px;"><strong>Total Charge Energy:</strong></td>
                                         <td style="padding: 5px; text-align: right;">{total_charge_mwh:,.1f} MWh</td>
                                     </tr>
-                                    <tr style="border-bottom: 1px solid #444;">
+                                    <tr style="border-bottom: 1px solid #DAD8CE;">
                                         <td style="padding: 5px;"><strong>Days Discharged:</strong></td>
                                         <td style="padding: 5px; text-align: right;">{pct_days_discharged:.1f}% ({days_discharged}/{total_days} days)</td>
                                     </tr>
-                                    <tr style="border-bottom: 1px solid #444;">
+                                    <tr style="border-bottom: 1px solid #DAD8CE;">
                                         <td style="padding: 5px;"><strong>Days Charged:</strong></td>
                                         <td style="padding: 5px; text-align: right;">{pct_days_charged:.1f}% ({days_charged}/{total_days} days)</td>
                                     </tr>
                                     <tr>
                                         <td style="padding: 5px;"><strong>Capacity Utilization:</strong></td>
-                                        <td style="padding: 5px; text-align: right; color: #ffb86c;">{capacity_utilization:.1f}%</td>
+                                        <td style="padding: 5px; text-align: right; color: #BC5215;">{capacity_utilization:.1f}%</td>
                                     </tr>
                                 </table>
                                 """
                             else:
-                                metrics_html = '<p style="color: #ff5555;">No price data available for analysis period.</p>'
+                                metrics_html = '<p style="color: #AF3029;">No price data available for analysis period.</p>'
                                 self.bess_chart_pane.object = None  # Clear chart
                         else:
-                            metrics_html = '<p style="color: #ff5555;">No generation data found for this battery in the selected period.</p>'
+                            metrics_html = '<p style="color: #AF3029;">No generation data found for this battery in the selected period.</p>'
                             self.bess_chart_pane.object = None  # Clear chart
                     else:
-                        metrics_html = '<p style="color: #ff5555;">No generation data available for analysis period.</p>'
+                        metrics_html = '<p style="color: #AF3029;">No generation data available for analysis period.</p>'
                         self.bess_chart_pane.object = None  # Clear chart
                         
                 except Exception as e:
                     logger.error(f"Error analyzing battery: {e}")
-                    metrics_html = f'<p style="color: #ff5555;">Error analyzing battery: {str(e)}</p>'
+                    metrics_html = f'<p style="color: #AF3029;">Error analyzing battery: {str(e)}</p>'
                     self.bess_chart_pane.object = None  # Clear chart on error
                 
                 # Create info display with analysis parameters and metrics
                 info_html = f"""
-                <div style="background-color: #1a1a1a; border: 2px solid #bd93f9; padding: 15px; border-radius: 5px;">
-                    <h3 style="color: #bd93f9; margin-top: 0;">{battery['Site Name']}</h3>
-                    <table style="color: #e0e0e0; width: 100%;">
+                <div style="background-color: #FFFCF0; border: 2px solid #24837B; padding: 15px; border-radius: 5px;">
+                    <h3 style="color: #24837B; margin-top: 0;">{battery['Site Name']}</h3>
+                    <table style="color: #100F0F; width: 100%;">
                         <tr><td><strong>DUID:</strong></td><td>{battery['DUID']}</td></tr>
                         <tr><td><strong>Region:</strong></td><td>{battery['Region']}</td></tr>
                         <tr><td><strong>Power Capacity:</strong></td><td>{capacity_mw:.0f} MW</td></tr>
@@ -791,9 +806,9 @@ class InsightsTab:
                         <tr><td><strong>Duration:</strong></td><td>{duration:.1f} hours</td></tr>
                         <tr><td><strong>Technology:</strong></td><td>Battery Storage</td></tr>
                     </table>
-                    <hr style="border-color: #666; margin: 10px 0;">
-                    <table style="color: #e0e0e0; width: 100%;">
-                        <tr><td colspan="2" style="color: #bd93f9;"><strong>Analysis Parameters:</strong></td></tr>
+                    <hr style="border-color: #B7B5AC; margin: 10px 0;">
+                    <table style="color: #100F0F; width: 100%;">
+                        <tr><td colspan="2" style="color: #24837B;"><strong>Analysis Parameters:</strong></td></tr>
                         <tr><td><strong>Date Range:</strong></td><td>{start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}</td></tr>
                         <tr><td><strong>Frequency:</strong></td><td>{frequency}</td></tr>
                     </table>
@@ -852,15 +867,15 @@ class InsightsTab:
             self.battery_content_pane.clear()
             self.battery_content_pane.append(pn.pane.HTML("""
             <div style="
-                background-color: #1a1a1a;
-                border: 2px solid #666;
+                background-color: #FFFCF0;
+                border: 2px solid #B7B5AC;
                 border-radius: 10px;
                 padding: 20px;
                 margin: 10px;
-                color: #ffffff;
+                color: #100F0F;
             ">
-                <h2 style="color: #bd93f9;">Battery Analysis Updated</h2>
-                <p style="color: #e0e0e0;">Analysis for selected regions and date range will appear here.</p>
+                <h2 style="color: #24837B;">Battery Analysis Updated</h2>
+                <p style="color: #100F0F;">Analysis for selected regions and date range will appear here.</p>
             </div>
             """))
         
@@ -1006,8 +1021,8 @@ class InsightsTab:
             
             if metrics_df.empty:
                 self.battery_info_pane.object = """
-                <div style="background-color: #1a1a1a; border: 2px solid #ff5555; padding: 15px; border-radius: 10px;">
-                    <p style="color: #ff5555;">No battery data available for the selected regions and date range.</p>
+                <div style="background-color: #FFFCF0; border: 2px solid #AF3029; padding: 15px; border-radius: 10px;">
+                    <p style="color: #AF3029;">No battery data available for the selected regions and date range.</p>
                 </div>
                 """
                 self.battery_content_pane.clear()
@@ -1029,20 +1044,20 @@ class InsightsTab:
             selected_region = self.region_selector.value
             if selected_region == 'NEM':
                 # Use different colors for different regions (defined in __init__)
-                colors = [self.region_colors.get(region, '#f8f8f2') for region in metrics_df['Region']]
+                colors = [self.region_colors.get(region, '#100F0F') for region in metrics_df['Region']]
             else:
-                # Use metric-based colors for single region
+                # Use metric-based colors for single region - Flexoki Light compatible
                 if selected_metric in ['Discharge Revenue', 'Discharge Energy', 'Price Spread']:
-                    base_color = '#50fa7b' if selected_metric != 'Price Spread' else None
+                    base_color = '#879A39' if selected_metric != 'Price Spread' else None  # Flexoki Green
                     if selected_metric == 'Price Spread':
                         # Use green for positive, red for negative
-                        colors = ['#50fa7b' if x > 0 else '#ff5555' for x in metrics_df[selected_metric]]
+                        colors = ['#879A39' if x > 0 else '#AF3029' for x in metrics_df[selected_metric]]
                     else:
                         colors = [base_color] * len(metrics_df)
                 elif selected_metric in ['Charge Cost', 'Charge Energy']:
-                    colors = ['#ff5555'] * len(metrics_df)
+                    colors = ['#AF3029'] * len(metrics_df)  # Flexoki Red
                 else:
-                    colors = ['#8be9fd'] * len(metrics_df)
+                    colors = ['#3AA99F'] * len(metrics_df)  # Flexoki Cyan
             
             # Format values for display with zero decimal places
             if selected_metric in ['Discharge Revenue', 'Charge Cost']:
@@ -1063,31 +1078,31 @@ class InsightsTab:
             else:
                 metrics_df['Formatted Value'] = metrics_df[selected_metric].round(0).astype(int).astype(str)
             
-            # Create lollipop chart using matplotlib
+            # Create lollipop chart using matplotlib - Flexoki Light theme
             import matplotlib.pyplot as plt
             import matplotlib.patches as mpatches
-            
-            fig, ax = plt.subplots(figsize=(12, 6), facecolor='#282a36')
-            ax.set_facecolor('#282a36')
-            
+
+            fig, ax = plt.subplots(figsize=(12, 6), facecolor=FLEXOKI_PAPER)
+            ax.set_facecolor(FLEXOKI_PAPER)
+
             # X positions
             x_pos = range(len(metrics_df))
             y_values = metrics_df[selected_metric].values
-            
+
             # Draw stems (vertical lines)
             for i, y in enumerate(y_values):
-                ax.plot([i, i], [0, y], color='#666666', linewidth=2, alpha=0.7)
-            
+                ax.plot([i, i], [0, y], color=FLEXOKI_BORDER, linewidth=2, alpha=0.7)
+
             # Draw dots
-            ax.scatter(x_pos, y_values, s=150, c=colors, zorder=5, edgecolors='white', linewidth=0.5)
-            
+            ax.scatter(x_pos, y_values, s=150, c=colors, zorder=5, edgecolors='#100F0F', linewidth=0.5)
+
             # Set x-axis labels
             ax.set_xticks(x_pos)
-            ax.set_xticklabels(metrics_df['Display Name'].values, rotation=45, ha='right', color='#f8f8f2')
-            
+            ax.set_xticklabels(metrics_df['Display Name'].values, rotation=45, ha='right', color='#100F0F')
+
             # Set y-axis label and format
-            ax.set_ylabel(selected_metric, color='#f8f8f2', fontsize=12)
-            
+            ax.set_ylabel(selected_metric, color='#100F0F', fontsize=12)
+
             # Format y-axis values based on metric type
             if selected_metric in ['Discharge Revenue', 'Charge Cost']:
                 # Format as currency
@@ -1109,24 +1124,24 @@ class InsightsTab:
                 ax.yaxis.set_major_formatter(plt.FuncFormatter(
                     lambda x, p: f'${x:.0f}'
                 ))
-            
+
             # Title
-            ax.set_title(f'Top 20 Batteries by {selected_metric}', 
-                        color='#f8f8f2', fontsize=14, pad=20)
-            
+            ax.set_title(f'Top 20 Batteries by {selected_metric}',
+                        color='#100F0F', fontsize=14, pad=20)
+
             # Grid
-            ax.grid(True, axis='y', alpha=0.2, color='#44475a')
+            ax.grid(True, axis='y', alpha=0.3, color=FLEXOKI_BORDER)
             ax.set_axisbelow(True)
-            
+
             # Add horizontal line at y=0
-            ax.axhline(y=0, color='#44475a', linewidth=1, alpha=0.5)
-            
+            ax.axhline(y=0, color=FLEXOKI_BORDER, linewidth=1, alpha=0.5)
+
             # Tick colors
-            ax.tick_params(colors='#f8f8f2')
-            
+            ax.tick_params(colors='#100F0F')
+
             # Spine colors
             for spine in ax.spines.values():
-                spine.set_edgecolor('#44475a')
+                spine.set_edgecolor(FLEXOKI_BORDER)
                 spine.set_linewidth(1)
             
             # Add value labels with alternating heights to avoid overlap
@@ -1138,14 +1153,14 @@ class InsightsTab:
                         offset = val * 0.02 if val > 0 else 5  # Small offset above the dot
                     else:
                         offset = val * 0.08 if val > 0 else 15  # Larger offset for odd indices
-                    ax.text(i, val + offset, fmt_val, ha='center', va='bottom', color='#f8f8f2', 
+                    ax.text(i, val + offset, fmt_val, ha='center', va='bottom', color='#100F0F',
                            fontsize=8, fontweight='bold')
                 else:
                     # For negative values, place below
                     offset = val * 0.05 if val < 0 else -5
-                    ax.text(i, val + offset, fmt_val, ha='center', va='top', color='#f8f8f2', 
+                    ax.text(i, val + offset, fmt_val, ha='center', va='top', color='#100F0F',
                            fontsize=8, fontweight='bold')
-            
+
             # Add legend if NEM is selected to show region colors
             if selected_region == 'NEM':
                 # Create custom legend entries for regions (excluding NEM itself)
@@ -1154,32 +1169,32 @@ class InsightsTab:
                 for region in ['NSW1', 'QLD1', 'SA1', 'TAS1', 'VIC1']:
                     if region in self.region_colors:
                         legend_elements.append(
-                            Patch(facecolor=self.region_colors[region], 
-                                  edgecolor='none', label=region)
+                            Patch(facecolor=self.region_colors[region],
+                                  edgecolor='#100F0F', label=region)
                         )
-                
+
                 # Add legend to the plot
                 if legend_elements:
-                    ax.legend(handles=legend_elements, 
+                    ax.legend(handles=legend_elements,
                              loc='upper right',
                              frameon=True,
                              fancybox=True,
                              shadow=False,
-                             facecolor='#282a36',
-                             edgecolor='#44475a',
-                             labelcolor='#f8f8f2',
+                             facecolor=FLEXOKI_PAPER,
+                             edgecolor=FLEXOKI_BORDER,
+                             labelcolor='#100F0F',
                              fontsize=9,
                              title='Regions',
                              title_fontsize=10)
                     # Style the legend title
                     legend = ax.get_legend()
                     if legend:
-                        legend.get_title().set_color('#f8f8f2')
-            
+                        legend.get_title().set_color('#100F0F')
+
             # Add attribution at bottom right
-            ax.text(0.99, 0.01, 'Data: AEMO, Plot: ITK', 
+            ax.text(0.99, 0.01, 'Data: AEMO, Plot: ITK',
                    transform=ax.transAxes, ha='right', va='bottom',
-                   fontsize=8, color='#6272a4', alpha=0.8)
+                   fontsize=8, color='#6F6E69', alpha=0.8)
             
             # Tight layout
             plt.tight_layout()
@@ -1208,9 +1223,9 @@ class InsightsTab:
                     avg_text = f"{avg_value:.2f}"
             
             info_html = f"""
-            <div style="background-color: #1a1a1a; border: 2px solid #bd93f9; padding: 15px; border-radius: 10px;">
-                <h3 style="color: #bd93f9; margin-top: 0;">Battery Analysis Summary</h3>
-                <table style="color: #e0e0e0; width: 100%;">
+            <div style="background-color: #FFFCF0; border: 2px solid #24837B; padding: 15px; border-radius: 10px;">
+                <h3 style="color: #24837B; margin-top: 0;">Battery Analysis Summary</h3>
+                <table style="color: #100F0F; width: 100%;">
                     <tr><td><strong>Regions:</strong></td><td>{selected_regions_text}</td></tr>
                     <tr><td><strong>Date Range:</strong></td><td>{self.start_date_picker.value} to {self.end_date_picker.value}</td></tr>
                     <tr><td><strong>Metric:</strong></td><td>{selected_metric}</td></tr>
@@ -1221,14 +1236,14 @@ class InsightsTab:
             </div>
             """
             self.battery_info_pane.object = info_html
-            
+
             logger.info(f"Lollipop chart created for {total_batteries} batteries")
-            
+
         except Exception as e:
             logger.error(f"Error creating lollipop chart: {e}")
             self.battery_info_pane.object = f"""
-            <div style="background-color: #1a1a1a; border: 2px solid #ff5555; padding: 15px; border-radius: 10px;">
-                <p style="color: #ff5555;">Error creating chart: {str(e)}</p>
+            <div style="background-color: #FFFCF0; border: 2px solid #AF3029; padding: 15px; border-radius: 10px;">
+                <p style="color: #AF3029;">Error creating chart: {str(e)}</p>
             </div>
             """
             self.battery_content_pane.clear()
@@ -1255,18 +1270,19 @@ class InsightsTab:
         import pandas as pd
         empty_df = pd.DataFrame({'x': [0], 'y': [0]})
         placeholder = empty_df.hvplot.scatter(
-            x='x', y='y', 
+            x='x', y='y',
             size=0,  # Make points invisible
             label=''
         ).opts(
             width=1000,
             height=500,
-            bgcolor='#2B2B3B',
+            bgcolor=FLEXOKI_PAPER,
             title='Select a region and smoothing window to generate the volatility chart',
             fontsize={'title': 14},
             toolbar=None,
             xaxis=None,
-            yaxis=None
+            yaxis=None,
+            hooks=[set_flexoki_backgrounds]  # Set legend background
         )
         self.volatility_chart_pane.object = placeholder
     
@@ -1536,11 +1552,11 @@ class InsightsTab:
                 # Symlog transformation not implemented for multi-region yet
                 # For now, just add symlog to title
                 title = title + ' - Symlog Scale'
-                
+
                 plot_opts = dict(
                     width=1000,
                     height=500,
-                    bgcolor='#2B2B3B',
+                    bgcolor=FLEXOKI_PAPER,
                     title=title,
                     xlabel='Date',
                     ylabel='Price ($/MWh) - Symlog Scale',
@@ -1551,13 +1567,14 @@ class InsightsTab:
                     legend_position='top_right',
                     framewise=True,
                     yformatter='%.0f',
-                    logy=True  # Use built-in log scale
+                    logy=True,  # Use built-in log scale
+                    hooks=[set_flexoki_backgrounds]  # Set legend background
                 )
             else:
                 plot_opts = dict(
                     width=1000,
                     height=500,
-                    bgcolor='#2B2B3B',
+                    bgcolor=FLEXOKI_PAPER,
                     title=title,
                     xlabel='Date',
                     ylabel='Price ($/MWh)',
@@ -1568,7 +1585,8 @@ class InsightsTab:
                     legend_position='top_right',
                     framewise=True,
                     yformatter='%.0f',
-                    ylim=(None, None)  # Allow negative values
+                    ylim=(None, None),  # Allow negative values
+                    hooks=[set_flexoki_backgrounds]  # Set legend background
                 )
             
             # Style the plot
@@ -1720,44 +1738,44 @@ class InsightsTab:
                 
                 # Pivot to get regions as column groups
                 html = '<div style="margin: 20px 0;">'
-                html += '<h3 style="color: #008B8B;">Regional Comparison: 2020 vs Last 12 Months</h3>'
-                html += f'<table style="border-collapse: collapse; width: {table_width}px; font-size: 13px;">'
-                
+                html += '<h3 style="color: #24837B;">Regional Comparison: 2020 vs Last 12 Months</h3>'
+                html += f'<table style="border-collapse: collapse; width: {table_width}px; font-size: 13px; color: #100F0F;">'
+
                 # Header row
-                html += '<thead><tr style="background-color: #2B2B3B;">'
-                html += '<th style="border: 1px solid #555; padding: 5px 8px; text-align: left;">Metric</th>'
+                html += '<thead><tr style="background-color: #E6E4D9;">'
+                html += '<th style="border: 1px solid #B7B5AC; padding: 5px 8px; text-align: left;">Metric</th>'
                 for region in regions:
-                    html += f'<th colspan="2" style="border: 1px solid #555; padding: 5px 8px; text-align: center;">{region}</th>'
+                    html += f'<th colspan="2" style="border: 1px solid #B7B5AC; padding: 5px 8px; text-align: center;">{region}</th>'
                 html += '</tr>'
-                
+
                 # Sub-header row
-                html += '<tr style="background-color: #3B3B4B;">'
-                html += '<th style="border: 1px solid #555; padding: 5px 8px;"></th>'
+                html += '<tr style="background-color: #F2F0E5;">'
+                html += '<th style="border: 1px solid #B7B5AC; padding: 5px 8px;"></th>'
                 for region in regions:
-                    html += '<th style="border: 1px solid #555; padding: 5px 8px; text-align: center; font-size: 12px;">2020</th>'
-                    html += '<th style="border: 1px solid #555; padding: 5px 8px; text-align: center; font-size: 12px;">Last 12mo</th>'
+                    html += '<th style="border: 1px solid #B7B5AC; padding: 5px 8px; text-align: center; font-size: 12px;">2020</th>'
+                    html += '<th style="border: 1px solid #B7B5AC; padding: 5px 8px; text-align: center; font-size: 12px;">Last 12mo</th>'
                 html += '</tr></thead>'
-                
+
                 # Data rows
                 html += '<tbody>'
                 metrics = ['Avg Price ($/MWh)', 'Variability* (%)', 'VRE Share (%)']
-                
+
                 for metric in metrics:
-                    html += '<tr>'
-                    html += f'<td style="border: 1px solid #555; padding: 5px 8px; font-weight: bold; font-size: 12px;">{metric}</td>'
-                    
+                    html += '<tr style="background-color: #FFFCF0;">'
+                    html += f'<td style="border: 1px solid #B7B5AC; padding: 5px 8px; font-weight: bold; font-size: 12px;">{metric}</td>'
+
                     for region in regions:
                         # Get 2020 value
                         val_2020 = df_table[(df_table['Region'] == region) & (df_table['Period'] == '2020')][metric].values[0]
                         val_last12 = df_table[(df_table['Region'] == region) & (df_table['Period'] == 'Last 12mo')][metric].values[0]
-                        
-                        html += f'<td style="border: 1px solid #555; padding: 5px 8px; text-align: right; font-size: 12px;">{val_2020}</td>'
-                        html += f'<td style="border: 1px solid #555; padding: 5px 8px; text-align: right; font-size: 12px;">{val_last12}</td>'
-                    
+
+                        html += f'<td style="border: 1px solid #B7B5AC; padding: 5px 8px; text-align: right; font-size: 12px;">{val_2020}</td>'
+                        html += f'<td style="border: 1px solid #B7B5AC; padding: 5px 8px; text-align: right; font-size: 12px;">{val_last12}</td>'
+
                     html += '</tr>'
-                
+
                 html += '</tbody></table>'
-                html += '<p style="font-size: 11px; color: #999; margin-top: 5px; font-style: italic;">* Variability = Coefficient of Variation (CV) = Standard Deviation / Mean × 100%</p>'
+                html += '<p style="font-size: 11px; color: #6F6E69; margin-top: 5px; font-style: italic;">* Variability = Coefficient of Variation (CV) = Standard Deviation / Mean x 100%</p>'
                 html += '</div>'
                 
                 self.comparison_table_pane.object = html

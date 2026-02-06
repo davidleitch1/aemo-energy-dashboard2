@@ -13,6 +13,12 @@ from datetime import datetime, timedelta
 
 from .price_analysis import PriceAnalysisMotor
 from ..shared.logging_config import get_logger
+from ..shared.flexoki_theme import (
+    FLEXOKI_PAPER,
+    FLEXOKI_BLACK,
+    FLEXOKI_BASE,
+    FLEXOKI_ACCENT,
+)
 
 logger = get_logger(__name__)
 
@@ -862,7 +868,71 @@ class PriceAnalysisUI(param.Parameterized):
                     show_index=False,
                     sortable=True,
                     selectable=1,
-                    theme='midnight',  # Dark theme
+                    theme='simple',  # Simple theme works better with custom styling
+                    stylesheets=[f"""
+                        .tabulator {{
+                            background-color: {FLEXOKI_PAPER} !important;
+                            color: {FLEXOKI_BLACK} !important;
+                            border: 1px solid {FLEXOKI_BASE[150]} !important;
+                        }}
+                        .tabulator-tableholder {{
+                            background-color: {FLEXOKI_PAPER} !important;
+                        }}
+                        .tabulator-table {{
+                            background-color: {FLEXOKI_PAPER} !important;
+                        }}
+                        .tabulator-header {{
+                            background-color: {FLEXOKI_BASE[100]} !important;
+                            color: {FLEXOKI_BLACK} !important;
+                            font-weight: bold;
+                        }}
+                        .tabulator-header .tabulator-col {{
+                            background-color: {FLEXOKI_BASE[100]} !important;
+                            color: {FLEXOKI_BLACK} !important;
+                            border-bottom: 2px solid {FLEXOKI_BASE[200]} !important;
+                        }}
+                        .tabulator-header .tabulator-col-content {{
+                            background-color: {FLEXOKI_BASE[100]} !important;
+                        }}
+                        .tabulator-row {{
+                            background-color: {FLEXOKI_PAPER} !important;
+                            color: {FLEXOKI_BLACK} !important;
+                        }}
+                        .tabulator-row:nth-child(even) {{
+                            background-color: {FLEXOKI_BASE[50]} !important;
+                        }}
+                        .tabulator-row:hover {{
+                            background-color: {FLEXOKI_BASE[100]} !important;
+                        }}
+                        .tabulator-row.tabulator-selected {{
+                            background-color: {FLEXOKI_BASE[150]} !important;
+                        }}
+                        .tabulator-cell {{
+                            color: {FLEXOKI_BLACK} !important;
+                            border-right: 1px solid {FLEXOKI_BASE[100]} !important;
+                            background-color: inherit !important;
+                        }}
+                        .tabulator-group {{
+                            background-color: {FLEXOKI_BASE[50]} !important;
+                            color: {FLEXOKI_BLACK} !important;
+                        }}
+                        .tabulator-group-header {{
+                            background-color: {FLEXOKI_BASE[100]} !important;
+                            color: {FLEXOKI_BLACK} !important;
+                            font-weight: bold;
+                        }}
+                        .tabulator-footer {{
+                            background-color: {FLEXOKI_BASE[50]} !important;
+                            color: {FLEXOKI_BLACK} !important;
+                        }}
+                        .tabulator-page {{
+                            background-color: {FLEXOKI_PAPER} !important;
+                            color: {FLEXOKI_BLACK} !important;
+                        }}
+                        .tabulator-page.active {{
+                            background-color: {FLEXOKI_BASE[100]} !important;
+                        }}
+                    """],
                     configuration={
                         'groupStartOpen': True,  # Start with groups expanded to show DUIDs
                         'groupToggleElement': 'header',  # Make entire header clickable to toggle
@@ -870,46 +940,7 @@ class PriceAnalysisUI(param.Parameterized):
                         'columnHeaderSortMulti': True,
                         'headerFilterPlaceholder': '',
                         'layout': 'fitColumns',
-                        'responsiveLayout': 'collapse',
-                        'tableBuilt': '''function(){
-                            this.element.style.backgroundColor = "#2F2F2F";
-                            this.element.style.color = "#FFFFFF";
-                        }''',
-                        'renderComplete': '''function(){
-                            // Style headers with highlight background
-                            var headers = this.element.querySelectorAll('.tabulator-header .tabulator-col');
-                            headers.forEach(function(header) {
-                                header.style.backgroundColor = "#404040";
-                                header.style.color = "#FFFFFF";
-                                header.style.borderBottom = "2px solid #555555";
-                            });
-                            
-                            // Style group headers
-                            var groupHeaders = this.element.querySelectorAll('.tabulator-group-header');
-                            groupHeaders.forEach(function(groupHeader) {
-                                groupHeader.style.backgroundColor = "#404040";
-                                groupHeader.style.color = "#FFFFFF";
-                                groupHeader.style.fontWeight = "bold";
-                            });
-                            
-                            // Style data cells
-                            var cells = this.element.querySelectorAll('.tabulator-cell');
-                            cells.forEach(function(cell) {
-                                if (!cell.classList.contains('tabulator-group')) {
-                                    cell.style.backgroundColor = "#2F2F2F";
-                                    cell.style.color = "#FFFFFF";
-                                    cell.style.borderRight = "1px solid #444444";
-                                }
-                            });
-                            
-                            // Style alternating rows
-                            var rows = this.element.querySelectorAll('.tabulator-row');
-                            rows.forEach(function(row, index) {
-                                if (index % 2 === 1) {
-                                    row.style.backgroundColor = "#353535";
-                                }
-                            });
-                        }'''
+                        'responsiveLayout': 'collapse'
                     }
                 )
             else:
@@ -923,41 +954,67 @@ class PriceAnalysisUI(param.Parameterized):
                     show_index=False,
                     sortable=True,
                     selectable=1,
-                    theme='midnight',  # Dark theme
+                    theme='simple',  # Simple theme works better with custom styling
+                    stylesheets=[f"""
+                        .tabulator {{
+                            background-color: {FLEXOKI_PAPER} !important;
+                            color: {FLEXOKI_BLACK} !important;
+                            border: 1px solid {FLEXOKI_BASE[150]} !important;
+                        }}
+                        .tabulator-tableholder {{
+                            background-color: {FLEXOKI_PAPER} !important;
+                        }}
+                        .tabulator-table {{
+                            background-color: {FLEXOKI_PAPER} !important;
+                        }}
+                        .tabulator-header {{
+                            background-color: {FLEXOKI_BASE[100]} !important;
+                            color: {FLEXOKI_BLACK} !important;
+                            font-weight: bold;
+                        }}
+                        .tabulator-header .tabulator-col {{
+                            background-color: {FLEXOKI_BASE[100]} !important;
+                            color: {FLEXOKI_BLACK} !important;
+                            border-bottom: 2px solid {FLEXOKI_BASE[200]} !important;
+                        }}
+                        .tabulator-header .tabulator-col-content {{
+                            background-color: {FLEXOKI_BASE[100]} !important;
+                        }}
+                        .tabulator-row {{
+                            background-color: {FLEXOKI_PAPER} !important;
+                            color: {FLEXOKI_BLACK} !important;
+                        }}
+                        .tabulator-row:nth-child(even) {{
+                            background-color: {FLEXOKI_BASE[50]} !important;
+                        }}
+                        .tabulator-row:hover {{
+                            background-color: {FLEXOKI_BASE[100]} !important;
+                        }}
+                        .tabulator-row.tabulator-selected {{
+                            background-color: {FLEXOKI_BASE[150]} !important;
+                        }}
+                        .tabulator-cell {{
+                            color: {FLEXOKI_BLACK} !important;
+                            border-right: 1px solid {FLEXOKI_BASE[100]} !important;
+                            background-color: inherit !important;
+                        }}
+                        .tabulator-footer {{
+                            background-color: {FLEXOKI_BASE[50]} !important;
+                            color: {FLEXOKI_BLACK} !important;
+                        }}
+                        .tabulator-page {{
+                            background-color: {FLEXOKI_PAPER} !important;
+                            color: {FLEXOKI_BLACK} !important;
+                        }}
+                        .tabulator-page.active {{
+                            background-color: {FLEXOKI_BASE[100]} !important;
+                        }}
+                    """],
                     configuration={
                         'virtualDomBuffer': 300,  # Enable virtual scrolling for performance
                         'initialSort': [  # Set initial sort order based on hierarchy
                             {'column': col, 'dir': 'asc'} for col in hierarchy_columns
-                        ] if hierarchy_columns else [],
-                        'tableBuilt': '''function(){
-                            this.element.style.backgroundColor = "#2F2F2F";
-                            this.element.style.color = "#FFFFFF";
-                        }''',
-                        'renderComplete': '''function(){
-                            // Style headers with highlight background
-                            var headers = this.element.querySelectorAll('.tabulator-header .tabulator-col');
-                            headers.forEach(function(header) {
-                                header.style.backgroundColor = "#404040";
-                                header.style.color = "#FFFFFF";
-                                header.style.borderBottom = "2px solid #555555";
-                            });
-                            
-                            // Style data cells
-                            var cells = this.element.querySelectorAll('.tabulator-cell');
-                            cells.forEach(function(cell) {
-                                cell.style.backgroundColor = "#2F2F2F";
-                                cell.style.color = "#FFFFFF";
-                                cell.style.borderRight = "1px solid #444444";
-                            });
-                            
-                            // Style alternating rows
-                            var rows = this.element.querySelectorAll('.tabulator-row');
-                            rows.forEach(function(row, index) {
-                                if (index % 2 === 1) {
-                                    row.style.backgroundColor = "#353535";
-                                }
-                            });
-                        }'''
+                        ] if hierarchy_columns else []
                     }
                 )
             

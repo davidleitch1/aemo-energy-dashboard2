@@ -16,6 +16,12 @@ from ..shared.fuel_categories import (
     THERMAL_FUELS
 )
 from ..generation.generation_query_manager import GenerationQueryManager
+from ..shared.flexoki_theme import (
+    FLEXOKI_PAPER,
+    FLEXOKI_BLACK,
+    FLEXOKI_BASE,
+    FLEXOKI_ACCENT,
+)
 
 logger = get_logger(__name__)
 
@@ -330,18 +336,18 @@ def create_summary_table(metrics: Dict, insights: List[str]) -> str:
     Create HTML table with metrics and insights
     """
     try:
-        html = """
-        <div style="width: 100%; padding: 10px; background-color: #282a36; border-radius: 5px;">
-            <h4 style="color: #50fa7b; margin: 0 0 10px 0; font-size: 14px;">Daily Summary (Last 24 Hours)</h4>
-            <table style="width: 100%; border-collapse: collapse; font-size: 11px; color: #f8f8f2;">
+        html = f"""
+        <div style="width: 100%; padding: 10px; background-color: {FLEXOKI_PAPER}; border-radius: 5px; border: 1px solid {FLEXOKI_BASE[150]};">
+            <h4 style="color: {FLEXOKI_ACCENT['green']}; margin: 0 0 10px 0; font-size: 14px;">Daily Summary (Last 24 Hours)</h4>
+            <table style="width: 100%; border-collapse: collapse; font-size: 11px; color: {FLEXOKI_BLACK};">
                 <thead>
-                    <tr style="border-bottom: 1px solid #44475a;">
-                        <th style="text-align: left; padding: 4px; color: #8be9fd;"></th>
+                    <tr style="border-bottom: 1px solid {FLEXOKI_BASE[150]};">
+                        <th style="text-align: left; padding: 4px; color: {FLEXOKI_ACCENT['cyan']};"></th>
         """
         
         # Add region headers
         for region in REGIONS + ['NEM']:
-            html += f'<th style="text-align: right; padding: 4px; color: #8be9fd;">{region.replace("1", "")}</th>'
+            html += f'<th style="text-align: right; padding: 4px; color: {FLEXOKI_ACCENT["cyan"]};">{region.replace("1", "")}</th>'
         
         html += """
                     </tr>
@@ -355,19 +361,19 @@ def create_summary_table(metrics: Dict, insights: List[str]) -> str:
         
         if has_price_data:
             price_rows = [
-                ('Avg $/MWh', 'prices', 'avg', '#f8f8f2'),
-                ('High', 'prices', 'high', '#f8f8f2'),  # White like average
-                ('Low', 'prices', 'low', '#f8f8f2'),    # White like average
+                ('Avg $/MWh', 'prices', 'avg', FLEXOKI_BLACK),
+                ('High', 'prices', 'high', FLEXOKI_BLACK),
+                ('Low', 'prices', 'low', FLEXOKI_BLACK),
             ]
         else:
             price_rows = []
-            
+
         if has_gen_data:
             gen_rows = [
-                ('Gen GWh', 'generation', 'total_gwh', '#f1fa8c'),
-                ('Renew %', 'generation', 'renewable_pct', '#50fa7b'),
-                ('Gas %', 'generation', 'gas_pct', '#ffb86c'),
-                ('Coal %', 'generation', 'coal_pct', '#ff5555')
+                ('Gen GWh', 'generation', 'total_gwh', FLEXOKI_ACCENT['yellow']),
+                ('Renew %', 'generation', 'renewable_pct', FLEXOKI_ACCENT['green']),
+                ('Gas %', 'generation', 'gas_pct', FLEXOKI_ACCENT['orange']),
+                ('Coal %', 'generation', 'coal_pct', FLEXOKI_ACCENT['red'])
             ]
         else:
             gen_rows = []
@@ -413,13 +419,13 @@ def create_summary_table(metrics: Dict, insights: List[str]) -> str:
         
         # Only show volume-weighted note if we have generation data
         if has_gen_data and 'NEM' in metrics.get('generation', {}):
-            html += '<p style="font-size: 9px; color: #6272a4; margin: 5px 0 0 0;">* Volume-weighted average</p>'
-        
+            html += f'<p style="font-size: 9px; color: {FLEXOKI_BASE[600]}; margin: 5px 0 0 0;">* Volume-weighted average</p>'
+
         # Add insights
         if insights:
             html += '<div style="margin-top: 10px; font-size: 11px;">'
             for insight in insights:
-                html += f'<p style="margin: 2px 0; color: #f8f8f2;">{insight}</p>'
+                html += f'<p style="margin: 2px 0; color: {FLEXOKI_BLACK};">{insight}</p>'
             html += '</div>'
         
         html += '</div>'
@@ -478,7 +484,7 @@ def create_daily_summary_component():
     except Exception as e:
         logger.error(f"Error creating daily summary component: {e}")
         return pn.pane.HTML(
-            f'<div style="padding: 20px; color: #ff5555;">Daily Summary Error: {str(e)}</div>',
+            f'<div style="padding: 20px; color: {FLEXOKI_ACCENT["red"]};">Daily Summary Error: {str(e)}</div>',
             width=400,
             height=350
         )

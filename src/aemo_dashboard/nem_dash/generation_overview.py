@@ -17,6 +17,30 @@ from ..shared.resolution_utils import (
     periods_for_hours,
     get_decay_rate_per_period
 )
+from ..shared.flexoki_theme import (
+    FLEXOKI_PAPER,
+    FLEXOKI_BLACK,
+    FLEXOKI_BASE,
+    FLEXOKI_ACCENT,
+)
+
+
+def set_flexoki_background(plot, element):
+    """
+    Hook to set Flexoki cream background for hvplot/Bokeh charts.
+    Sets plot area background, outline, and legend background.
+    """
+    # Set plot area background to Flexoki cream
+    plot.state.background_fill_color = FLEXOKI_PAPER
+    plot.state.border_fill_color = FLEXOKI_PAPER
+    plot.state.outline_line_color = FLEXOKI_BASE[150]
+
+    # Set legend background if legend exists
+    if plot.state.legend:
+        for legend in plot.state.legend:
+            legend.background_fill_color = FLEXOKI_PAPER
+            legend.border_line_color = FLEXOKI_BASE[150]
+            legend.background_fill_alpha = 1.0
 from .nem_dash_query_manager import NEMDashQueryManager
 
 logger = get_logger(__name__)
@@ -27,21 +51,21 @@ query_manager = NEMDashQueryManager()
 # Configure HoloViews (ensure it's set up)
 hv.extension('bokeh')
 
-# Fuel colors consistent with main dashboard
+# Fuel colors - Flexoki-compatible, visible on light backgrounds
 FUEL_COLORS = {
-    'Solar': '#FFD700',           # Gold
-    'Rooftop Solar': '#FFF59D',   # Light yellow
-    'Wind': '#00FF7F',            # Spring green - matches Generation tab
-    'Water': '#00BFFF',           # Sky blue - matches Generation tab
-    'Battery Storage': '#9370DB',  # Medium purple
-    'Battery': '#9370DB',         # Medium purple (same as Battery Storage)
-    'Coal': '#8B4513',            # Saddle brown
-    'Gas other': '#FF7F50',       # Coral
-    'OCGT': '#FF6347',            # Tomato
-    'CCGT': '#FF4500',            # Orange red
-    'Biomass': '#228B22',         # Forest green
-    'Other': '#A9A9A9',           # Dark gray
-    'Transmission Flow': '#FFB6C1' # Light pink
+    'Solar': '#D4A000',           # Darkened gold for visibility on light bg
+    'Rooftop Solar': '#E8C547',   # Lighter yellow-gold, more yellow than Solar
+    'Wind': FLEXOKI_ACCENT['green'],  # Flexoki green #66800B
+    'Water': FLEXOKI_ACCENT['cyan'],  # Flexoki cyan #24837B
+    'Battery Storage': FLEXOKI_ACCENT['purple'],  # Flexoki purple #5E409D
+    'Battery': FLEXOKI_ACCENT['purple'],  # Same as Battery Storage
+    'Coal': '#6B3A10',            # Darker brown for visibility
+    'Gas other': FLEXOKI_ACCENT['orange'],  # Flexoki orange #BC5215
+    'OCGT': '#E05830',            # Lighter reddish orange
+    'CCGT': '#8A2E0D',            # Darker deep orange/brown
+    'Biomass': '#4A7C23',         # Medium forest green
+    'Other': FLEXOKI_BASE[600],   # Flexoki gray
+    'Transmission Flow': FLEXOKI_ACCENT['magenta']  # Flexoki magenta #A02F6F
 }
 
 # HoloViews options for consistent styling
@@ -411,12 +435,15 @@ def create_24hour_generation_chart(pivot_df):
         else:
             area_plot = main_plot
         
-        # Apply styling options
+        # Apply styling options with Flexoki Light theme
+        # Use hooks to set legend and plot area backgrounds explicitly
         area_plot = area_plot.opts(
             title="NEM Generation - Last 24 Hours",
             show_grid=False,
             toolbar='above',
-            fontsize={'title': 14, 'labels': 12, 'xticks': 10, 'yticks': 10}
+            fontsize={'title': 14, 'labels': 12, 'xticks': 10, 'yticks': 10},
+            bgcolor=FLEXOKI_PAPER,  # Flexoki Light background
+            hooks=[set_flexoki_background]  # Apply hook to set legend/border backgrounds
         )
         
         return pn.pane.HoloViews(area_plot, sizing_mode='fixed', width=1000, height=400, 
