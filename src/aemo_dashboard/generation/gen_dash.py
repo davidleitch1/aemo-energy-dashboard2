@@ -3020,197 +3020,226 @@ class EnergyDashboard(param.Parameterized):
             )
 
     def create_generation_tod_plot(self):
-        """Create time-of-day generation profile with average price overlay using Plotly"""
+        """Create time-of-day generation profile with average price overlay"""
         try:
             # Load fresh data - following same pattern as create_plot()
             self.load_generation_data()
             data = self.process_data_for_region()
 
             if data.empty:
-                return pn.pane.Markdown("**No generation data available**",
-                    styles={'background': FLEXOKI_PAPER, 'padding': '20px'})
-
-            # Normalize fuel types (combine Gas types, rename Battery Storage, etc.)
-            data = self.normalize_fuel_types(data)
+                return hv.Text(0.5, 0.5, 'No generation data available').opts(
+                    xlim=(0, 1), ylim=(0, 1), bgcolor=FLEXOKI_PAPER,
+                    width=1200, height=600, color=FLEXOKI_BLACK, fontsize=14
+                )
 
             # Prepare data for time-of-day analysis
+            # data already has datetime index and fuel types as columns
             df = data.copy()
 
             # Extract hour (0-23) from the datetime index
             df['hour'] = df.index.hour
 
             # Group by hour and calculate mean for each fuel type
+            # This gives us the average generation profile by hour of day
             hourly_avg = df.groupby('hour').mean()
 
             # Drop the 'hour' column if it was included in the groupby
             if 'hour' in hourly_avg.columns:
                 hourly_avg = hourly_avg.drop(columns=['hour'])
 
-            # Get fuel colors and time range
+            # Get fuel colors for consistent styling
             fuel_colors = self.get_fuel_colors()
-            time_range_display = self._get_time_range_display()
 
-            # Load and process price data for TOD
-            hourly_price = None
+            # Get all fuel types that have data
+            all_fuels = [col for col in hourly_avg.columns if hourly_avg[col].abs().max() > 0]
+
+            # Identify which fuels can have negative values
+            battery_col = 'Battery Storage'
+            transmission_exports_col = 'Transmission Exports'
+            has_battery = battery_col in hourly_avg.columns
+            has_transmission_exports = transmission_exports_col in hourly_avg.columns
+
+            # Check if we have negative values in the hourly averages
+            has_negative_values = (
+                (has_battery and (hourly_avg[battery_col] < 0).any()) or
+                (has_transmission_exports and (hourly_avg[transmission_exports_col] < 0).any())
+            )
+
+            plot_elements = []
+
+            # Prepare data for main positive stack (exclude transmission exports from main plot)
+            positive_fuels = [f for f in all_fuels if f != transmission_exports_col]
+            hourly_positive = hourly_avg[positive_fuels].copy()
+
+            # Handle battery storage negative values - only positive values in main plot
+            if has_battery and battery_col in positive_fuels:
+                battery_data = hourly_avg[battery_col].copy()
+                hourly_positive[battery_col] = battery_data.where(battery_data >= 0, 0)
+
+            # Create the main stacked area plot (positive values only)
+            if positive_fuels:
+                # Get time period for title
+                time_period = self._get_time_range_display()
+
+                area_plot = hourly_positive.hvplot.area(
+                    x='hour',
+                    y=positive_fuels,
+                    stacked=True,
+                    width=1200,
+                    height=400,
+                    ylabel='Average Generation (MW)',
+                    xlabel='Hour of Day',
+                    grid=True,
+                    legend='right',
+                    bgcolor=FLEXOKI_PAPER,
+                    color=[fuel_colors.get(fuel, '#6272a4') for fuel in positive_fuels],
+                    alpha=0.8,
+                    hover=True,
+                    title=f'Average Generation by Time of Day - {self.region} ({time_period}) | data:AEMO, design ITK'
+                ).opts(
+                    xlim=(0, 23),
+                    xticks=list(range(0, 24, 2)),
+                    hooks=[self._get_flexoki_background_hook()]
+                )
+
+                # Create negative values overlay if needed (battery charging, transmission exports)
+                if has_negative_values:
+                    negative_plots = []
+
+                    # Add transmission exports negative values first (bottom layer)
+                    if has_transmission_exports and (hourly_avg[transmission_exports_col] < 0).any():
+                        transmission_negative = hourly_avg[[transmission_exports_col]].copy()
+                        transmission_negative[transmission_exports_col] = transmission_negative[transmission_exports_col].where(
+                            transmission_negative[transmission_exports_col] < 0, 0
+                        )
+
+                        transmission_plot = transmission_negative.hvplot.area(
+                            x='hour',
+                            y=transmission_exports_col,
+                            stacked=False,
+                            width=1200,
+                            height=400,
+                            color='#ffb6c1',  # Light pink - same as Generation Stack
+                            alpha=0.8,
+                            hover=True,
+                            legend=False,
+                            bgcolor=FLEXOKI_PAPER
+                        ).opts(
+                            xlim=(0, 23),
+                            xticks=list(range(0, 24, 2)),
+                            hooks=[self._get_flexoki_background_hook()]
+                        )
+                        negative_plots.append(transmission_plot)
+
+                    # Add battery negative values second (top layer)
+                    if has_battery and (hourly_avg[battery_col] < 0).any():
+                        battery_negative = hourly_avg[[battery_col]].copy()
+                        battery_negative[battery_col] = battery_negative[battery_col].where(
+                            battery_negative[battery_col] < 0, 0
+                        )
+
+                        battery_plot = battery_negative.hvplot.area(
+                            x='hour',
+                            y=battery_col,
+                            stacked=False,
+                            width=1200,
+                            height=400,
+                            color='#9370db',  # Purple - same as Generation Stack
+                            alpha=0.8,
+                            hover=True,
+                            legend=False,
+                            bgcolor=FLEXOKI_PAPER
+                        ).opts(
+                            xlim=(0, 23),
+                            xticks=list(range(0, 24, 2)),
+                            hooks=[self._get_flexoki_background_hook()]
+                        )
+                        negative_plots.append(battery_plot)
+
+                    # Overlay negative plots on main plot
+                    if negative_plots:
+                        combined_area_plot = area_plot
+                        for neg_plot in negative_plots:
+                            combined_area_plot = combined_area_plot * neg_plot
+                        plot_elements.append(combined_area_plot)
+                    else:
+                        plot_elements.append(area_plot)
+                else:
+                    plot_elements.append(area_plot)
+
+            # Load and process price data
             try:
+                # Get the same date range as the generation data
                 start_datetime, end_datetime = self._get_effective_date_range()
+
                 price_file = config.spot_hist_file
                 if os.path.exists(price_file):
                     price_df = pd.read_parquet(price_file)
                     price_df['settlementdate'] = pd.to_datetime(price_df['settlementdate'])
                     price_df = price_df.set_index('settlementdate')
 
+                    # Filter by date range to match generation data
                     if start_datetime is not None and end_datetime is not None:
                         price_df = price_df[(price_df.index >= start_datetime) & (price_df.index <= end_datetime)]
+                        logger.info(f"TOD price data filtered to {start_datetime.date()} - {end_datetime.date()}: {len(price_df)} records")
 
-                    if self.region != 'NEM' and 'regionid' in price_df.columns:
-                        price_df = price_df[price_df['regionid'] == self.region]
+                    # Filter by region
+                    if self.region != 'NEM':
+                        if 'regionid' in price_df.columns:
+                            price_df = price_df[price_df['regionid'] == self.region]
 
                     if not price_df.empty and 'rrp' in price_df.columns:
+                        # Extract hour and calculate average price by hour
                         price_df['hour'] = price_df.index.hour
                         hourly_price = price_df.groupby('hour')['rrp'].mean()
+
+                        # Get time period for title
+                        time_period = self._get_time_range_display()
+
+                        # Create price line plot
+                        price_plot = hourly_price.hvplot.line(
+                            x='hour',
+                            y='rrp',
+                            width=1200,
+                            height=250,
+                            ylabel='Average Price ($/MWh)',
+                            xlabel='Hour of Day',
+                            grid=True,
+                            color=FLEXOKI_ACCENT['yellow'],
+                            line_width=3,
+                            bgcolor=FLEXOKI_PAPER,
+                            title=f'Average Spot Price by Time of Day - {self.region} ({time_period})'
+                        ).opts(
+                            xlim=(0, 23),
+                            xticks=list(range(0, 24, 2)),
+                            hooks=[self._get_flexoki_background_hook()]
+                        )
+                        plot_elements.append(price_plot)
+
             except Exception as e:
                 logger.warning(f"Could not load price data for TOD plot: {e}")
 
-            # Create Plotly subplots
-            fig = make_subplots(
-                rows=2, cols=1,
-                shared_xaxes=True,
-                vertical_spacing=0.08,
-                row_heights=[0.65, 0.35],
-                subplot_titles=(
-                    f'Average Generation by Time of Day - {self.region} ({time_range_display})',
-                    'Average Price'
-                )
-            )
-
-            # Check for battery column
-            battery_col = 'Battery' if 'Battery' in hourly_avg.columns else None
-
-            # Merit order for positive stack
-            merit_order = ['Coal', 'Wind', 'Solar', 'Rooftop Solar', 'Battery', 'Hydro', 'Gas', 'Biomass', 'Other']
-
-            # Core fuels always shown
-            CORE_FUELS = {'Coal', 'Gas', 'Solar', 'Wind', 'Hydro', 'Battery'}
-            total_positive = hourly_avg.clip(lower=0).sum().sum()
-
-            # Hours for x-axis
-            hours = list(range(24))
-
-            # === POSITIVE STACKGROUP ===
-            for fuel in merit_order:
-                if fuel not in hourly_avg.columns:
-                    continue
-
-                # Skip insignificant minor fuels
-                if fuel not in CORE_FUELS:
-                    fuel_total = hourly_avg[fuel].clip(lower=0).sum()
-                    if total_positive > 0 and fuel_total / total_positive < 0.01:
-                        continue
-
-                color = fuel_colors.get(fuel, '#888888')
-
-                if fuel == battery_col:
-                    values = hourly_avg[fuel].clip(lower=0)
-                    if (values == 0).all():
-                        continue
-                else:
-                    values = hourly_avg[fuel].clip(lower=0)
-
-                fig.add_trace(go.Scatter(
-                    x=hours, y=values.reindex(hours, fill_value=0),
-                    name=fuel, mode='lines', stackgroup='positive',
-                    fillcolor=color, line=dict(width=0.5, color=color)
-                ), row=1, col=1)
-
-            # === NEGATIVE STACKGROUP (Battery charging) ===
-            if battery_col and battery_col in hourly_avg.columns:
-                charging = hourly_avg[battery_col].clip(upper=0)
-                if (charging < 0).any():
-                    fig.add_trace(go.Scatter(
-                        x=hours, y=charging.reindex(hours, fill_value=0),
-                        name='Battery', legendgroup='Battery', showlegend=False,
-                        mode='lines', stackgroup='negative',
-                        fillcolor=fuel_colors.get('Battery', FLEXOKI_ACCENT['purple']),
-                        line=dict(width=0.5, color=fuel_colors.get('Battery'))
-                    ), row=1, col=1)
-
-            # === PRICE LINE (Row 2) with asinh scale ===
-            if hourly_price is not None and not hourly_price.empty:
-                PRICE_SCALE = 100
-                price_transformed = np.arcsinh(hourly_price / PRICE_SCALE)
-
-                fig.add_trace(go.Scatter(
-                    x=hours, y=price_transformed.reindex(hours, fill_value=0),
-                    name='Price', mode='lines', showlegend=False,
-                    line=dict(width=2, color=FLEXOKI_ACCENT['yellow'])
-                ), row=2, col=1)
-
-                # Custom tick values for asinh scale
-                price_min, price_max = hourly_price.min(), hourly_price.max()
-                tick_values_raw = [-100, 0, 50, 100, 200, 300, 500, 1000, 2000]
-                tick_values_raw = [t for t in tick_values_raw if price_min - 50 <= t <= price_max + 200]
-                if not tick_values_raw:
-                    tick_values_raw = [0, 100, 500]
-                tick_vals = [np.arcsinh(t / PRICE_SCALE) for t in tick_values_raw]
-                tick_text = [f'${t:,.0f}' if t >= 0 else f'-${abs(t):,.0f}' for t in tick_values_raw]
-
-                fig.update_yaxes(
-                    tickmode='array', tickvals=tick_vals, ticktext=tick_text,
-                    row=2, col=1
+            # Combine plots vertically
+            if len(plot_elements) > 1:
+                combined_plot = (plot_elements[0] + plot_elements[1]).cols(1)
+            elif len(plot_elements) == 1:
+                combined_plot = plot_elements[0]
+            else:
+                combined_plot = hv.Text(0.5, 0.5, 'No data available for TOD analysis').opts(
+                    xlim=(0, 1), ylim=(0, 1), bgcolor=FLEXOKI_PAPER,
+                    width=1200, height=600, color=FLEXOKI_BLACK, fontsize=14
                 )
 
-            # Layout
-            fig.update_layout(
-                paper_bgcolor=FLEXOKI_PAPER,
-                plot_bgcolor=FLEXOKI_PAPER,
-                height=700,
-                legend=dict(
-                    orientation='v', yanchor='top', y=1, xanchor='left', x=1.02,
-                    bgcolor=FLEXOKI_PAPER, font=dict(size=10)
-                ),
-                margin=dict(r=150, t=50)
-            )
-
-            fig.update_annotations(font=dict(size=12, color=FLEXOKI_BLACK))
-
-            # Y-axis for generation (row 1)
-            fig.update_yaxes(
-                title_text='Average MW', showgrid=False, zeroline=True,
-                zerolinecolor=FLEXOKI_BASE[600], zerolinewidth=1,
-                tickfont=dict(color=FLEXOKI_BASE[800]),
-                row=1, col=1
-            )
-
-            # Y-axis for price (row 2)
-            fig.update_yaxes(
-                title_text='$/MWh', showgrid=False, zeroline=True,
-                zerolinecolor=FLEXOKI_BASE[600], zerolinewidth=0.5,
-                tickfont=dict(color=FLEXOKI_ACCENT['yellow']),
-                title_font=dict(color=FLEXOKI_ACCENT['yellow']),
-                row=2, col=1
-            )
-
-            # X-axis with hour ticks
-            fig.update_xaxes(
-                showgrid=False, tickfont=dict(color=FLEXOKI_BASE[800]),
-                tickmode='array', tickvals=list(range(0, 24, 2)),
-                ticktext=[f'{h:02d}:00' for h in range(0, 24, 2)],
-                title_text='Hour of Day',
-                row=2, col=1
-            )
-            fig.update_xaxes(showgrid=False, row=1, col=1)
-
-            logger.info(f"TOD Plotly plot created for {self.region}, {self.time_range}")
-
-            return pn.pane.Plotly(fig, sizing_mode='stretch_width')
+            return combined_plot
 
         except Exception as e:
             logger.error(f"Error creating TOD plot: {e}")
             import traceback
             logger.error(traceback.format_exc())
-            return pn.pane.Markdown(f"**Error creating TOD plot:** {str(e)}",
-                styles={'background': FLEXOKI_PAPER, 'color': 'red', 'padding': '20px'})
+            return hv.Text(0.5, 0.5, 'Error loading TOD data').opts(
+                xlim=(0, 1), ylim=(0, 1), bgcolor=FLEXOKI_PAPER,
+                width=1200, height=600, color=FLEXOKI_BLACK, fontsize=12
+            )
 
     def create_utilization_plot(self):
         """Create capacity utilization line chart with proper document handling"""
