@@ -1863,8 +1863,8 @@ class EnergyDashboard(param.Parameterized):
         }
         # Rename columns that exist
         df = df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns})
-        # Combine duplicate columns (sum them)
-        df = df.groupby(level=0, axis=1).sum()
+        # Combine duplicate columns (sum them) - use transpose pattern for pandas 2.x compatibility
+        df = df.T.groupby(level=0).sum().T
         return df
 
     def calculate_generation_statistics(self, gen_data, price_data, trans_data):
