@@ -292,7 +292,15 @@ def create_price_chart_matplotlib(prices_df):
 
         ax.plot(x_vals, y_clipped, color=color, linewidth=1.5, label=label)
 
-    ax.set_ylim(bottom=min(0, raw.min().min() - 10), top=Y_CAP)
+    # Dynamic Y-axis - scale to what's actually displayed (smoothed values)
+    smoothed_max = smoothed.max().max()
+    if smoothed_max > 300:
+        # High price event - scale to smoothed data with 15% headroom
+        y_top = min(Y_CAP, max(smoothed_max * 1.15, 500))
+    else:
+        # Normal prices - tight scaling
+        y_top = max(smoothed_max * 1.2, 200)
+    ax.set_ylim(bottom=min(0, smoothed.min().min() - 10), top=y_top)
 
     # Add spike annotations
     for region, val, time in spike_annotations[:2]:

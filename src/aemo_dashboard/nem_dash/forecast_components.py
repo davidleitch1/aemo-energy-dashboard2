@@ -4,17 +4,14 @@ Forecast Components for Today Tab
 P30 pre-dispatch price/demand/renewable forecasts with comparison to previous run.
 
 Components:
-- fetch_predispatch_forecasts(): Fetch latest P30 data from NEMWeb
+- fetch_predispatch_forecasts(): Load latest P30 data from predispatch.parquet
+  (collected continuously by unified_collector.py)
 - create_forecast_table(): HTML table with 6-hour forecast + 24hr average
 - Forecast caching for run-to-run comparison
 """
 
 import pandas as pd
 import panel as pn
-import requests
-import zipfile
-import io
-import re
 import json
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -35,79 +32,68 @@ FORECAST_CACHE_PATH = DATA_PATH / 'forecast_cache.json'
 
 def fetch_predispatch_forecasts():
     """
-    Fetch and parse pre-dispatch price/demand/renewable forecasts from NEMWeb.
+    Load pre-dispatch price/demand/renewable forecasts from predispatch.parquet.
+
+    The parquet file is updated continuously by unified_collector.py every 4.5 minutes.
 
     Returns:
         tuple: (DataFrame with forecasts, run_time datetime) or (None, None) on error
     """
     try:
-        index_url = "http://www.nemweb.com.au/Reports/Current/Predispatch_Reports/"
-        response = requests.get(index_url, timeout=30)
+        parquet_path = DATA_PATH / 'predispatch.parquet'
 
-        pattern = r'PUBLIC_PREDISPATCH_(\d{12})_(\d{14})_LEGACY\.zip'
-        matches = re.findall(pattern, response.text)
-
-        if not matches:
-            logger.warning("No pre-dispatch files found")
+        if not parquet_path.exists():
+            logger.warning(f"Predispatch parquet not found: {parquet_path}")
             return None, None
 
-        latest = sorted(set(matches))[-1]
-        filename = f"PUBLIC_PREDISPATCH_{latest[0]}_{latest[1]}_LEGACY.zip"
-        run_time = datetime.strptime(latest[0], '%Y%m%d%H%M')
+        # Read the parquet file
+        df = pd.read_parquet(parquet_path)
 
-        file_url = index_url + filename
-        zip_response = requests.get(file_url, timeout=60)
+        if df.empty:
+            logger.warning("Predispatch parquet is empty")
+            return None, None
 
-        with zipfile.ZipFile(io.BytesIO(zip_response.content)) as zf:
-            csv_name = [n for n in zf.namelist() if n.endswith('.CSV')][0]
-            csv_content = zf.read(csv_name).decode('utf-8')
+        # Get the latest run_time
+        latest_run_time = df['run_time'].max()
 
-        lines = csv_content.split('\n')
-        header_line = None
-        data_rows = []
+        # Filter to latest run only
+        df = df[df['run_time'] == latest_run_time].copy()
 
-        for line in lines:
-            if line.startswith('I,PDREGION,'):
-                parts = line.split(',')
-                header_line = parts[4:]
-            elif line.startswith('D,PDREGION,'):
-                parts = line.split(',')
-                data_rows.append(parts[4:])
+        # Convert run_time to datetime if it's a timestamp
+        if hasattr(latest_run_time, 'to_pydatetime'):
+            run_time = latest_run_time.to_pydatetime()
+        else:
+            run_time = pd.to_datetime(latest_run_time).to_pydatetime()
 
-        if header_line is None or not data_rows:
-            logger.warning("No PDREGION data found in pre-dispatch file")
-            return None, run_time
-
-        df = pd.DataFrame(data_rows, columns=header_line)
-        df['REGIONID'] = df['REGIONID'].astype(str)
-        df['PERIODID'] = pd.to_datetime(df['PERIODID'], format='"%Y/%m/%d %H:%M:%S"')
-        df['RRP'] = pd.to_numeric(df['RRP'], errors='coerce')
-        df['TOTALDEMAND'] = pd.to_numeric(df['TOTALDEMAND'], errors='coerce')
-
-        # Include wind/solar if available
-        key_cols = ['REGIONID', 'PERIODID', 'RRP', 'TOTALDEMAND']
-        if 'SS_SOLAR_AVAILABILITY' in df.columns:
-            df['SS_SOLAR_AVAILABILITY'] = pd.to_numeric(df['SS_SOLAR_AVAILABILITY'], errors='coerce')
-            key_cols.append('SS_SOLAR_AVAILABILITY')
-        if 'SS_WIND_AVAILABILITY' in df.columns:
-            df['SS_WIND_AVAILABILITY'] = pd.to_numeric(df['SS_WIND_AVAILABILITY'], errors='coerce')
-            key_cols.append('SS_WIND_AVAILABILITY')
-
-        df = df[key_cols].copy()
+        # Rename columns to uppercase to match dashboard expectations
         rename_map = {
-            'PERIODID': 'SETTLEMENTDATE',
-            'RRP': 'PRICE_FORECAST',
-            'TOTALDEMAND': 'DEMAND_FORECAST',
-            'SS_SOLAR_AVAILABILITY': 'SOLAR_FORECAST',
-            'SS_WIND_AVAILABILITY': 'WIND_FORECAST'
+            'regionid': 'REGIONID',
+            'settlementdate': 'SETTLEMENTDATE',
+            'price_forecast': 'PRICE_FORECAST',
+            'demand_forecast': 'DEMAND_FORECAST',
+            'solar_forecast': 'SOLAR_FORECAST',
+            'wind_forecast': 'WIND_FORECAST'
         }
         df = df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns})
 
-        logger.info(f"Fetched P30 forecast run {run_time.strftime('%H:%M')} with {len(df)} rows")
+        # Ensure SETTLEMENTDATE is datetime
+        if 'SETTLEMENTDATE' in df.columns:
+            df['SETTLEMENTDATE'] = pd.to_datetime(df['SETTLEMENTDATE'])
+
+        # Select output columns (matching original function's output)
+        output_cols = ['REGIONID', 'SETTLEMENTDATE', 'PRICE_FORECAST', 'DEMAND_FORECAST']
+        if 'SOLAR_FORECAST' in df.columns:
+            output_cols.append('SOLAR_FORECAST')
+        if 'WIND_FORECAST' in df.columns:
+            output_cols.append('WIND_FORECAST')
+
+        df = df[output_cols].copy()
+
+        logger.info(f"Loaded P30 forecast run {run_time.strftime('%H:%M')} with {len(df)} rows from parquet")
         return df, run_time
 
     except Exception as e:
-        logger.error(f"Error fetching pre-dispatch: {e}")
+        logger.error(f"Error loading predispatch from parquet: {e}")
         return None, None
 
 
@@ -289,8 +275,9 @@ def create_forecast_table(predispatch_df, run_time=None):
     current_run_time_str = run_time.isoformat() if run_time else None
     previous_run_time_str = previous.get('run_time') if previous else None
 
-    # Only show previous if it's from a different P30 run
-    if previous and previous.get('avg_24h') and previous_run_time_str != current_run_time_str:
+    # Always show previous if it exists (helps verify cache is working)
+    if previous and previous.get('avg_24h'):
+        is_same_run = previous_run_time_str == current_run_time_str
         prev_avg = previous['avg_24h']
         prev_time_str = ""
         if previous_run_time_str:
@@ -299,7 +286,9 @@ def create_forecast_table(predispatch_df, run_time=None):
                 prev_time_str = f" ({prev_time.strftime('%H:%M')})"
             except:
                 pass
-        html += f'<tr class="summary" style="color: {FLEXOKI_BASE[600]};"><td>Prev 24hr avg{prev_time_str}</td>'
+        # Gray out if same run (indicates cache is current)
+        row_style = f"color: {FLEXOKI_BASE[400]};" if is_same_run else f"color: {FLEXOKI_BASE[600]};"
+        html += f'<tr class="summary" style="{row_style}"><td>Prev 24hr avg{prev_time_str}</td>'
         for col in cols:
             val = prev_avg.get(col, 0)
             html += f"<td>{val:,}</td>"
