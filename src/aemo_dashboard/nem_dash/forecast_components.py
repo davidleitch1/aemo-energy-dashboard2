@@ -284,14 +284,18 @@ def create_forecast_table(predispatch_df, run_time=None):
         html += f"<td>{val:,}</td>"
     html += "</tr>"
 
-    # Previous 24hr average row (if available)
+    # Previous 24hr average row (if available and from a different P30 run)
     previous = load_previous_forecast()
-    if previous and previous.get('avg_24h'):
+    current_run_time_str = run_time.isoformat() if run_time else None
+    previous_run_time_str = previous.get('run_time') if previous else None
+
+    # Only show previous if it's from a different P30 run
+    if previous and previous.get('avg_24h') and previous_run_time_str != current_run_time_str:
         prev_avg = previous['avg_24h']
         prev_time_str = ""
-        if previous.get('run_time'):
+        if previous_run_time_str:
             try:
-                prev_time = datetime.fromisoformat(previous['run_time'])
+                prev_time = datetime.fromisoformat(previous_run_time_str)
                 prev_time_str = f" ({prev_time.strftime('%H:%M')})"
             except:
                 pass
@@ -332,8 +336,8 @@ def create_forecast_table(predispatch_df, run_time=None):
         current_summary['peak_renewables'] = max_renewable
         current_summary['peak_renewables_time'] = max_renewable_time.strftime('%H:%M')
 
-    # Compare with previous forecast
-    if previous and current_summary:
+    # Compare with previous forecast (only if from a different P30 run)
+    if previous and current_summary and previous_run_time_str != current_run_time_str:
         changes = []
         if 'peak_demand' in previous and 'peak_demand' in current_summary:
             demand_diff = current_summary['peak_demand'] - previous['peak_demand']
@@ -349,20 +353,22 @@ def create_forecast_table(predispatch_df, run_time=None):
 
         if changes:
             prev_time_str = ""
-            if previous.get('run_time'):
+            if previous_run_time_str:
                 try:
-                    prev_time = datetime.fromisoformat(previous['run_time'])
+                    prev_time = datetime.fromisoformat(previous_run_time_str)
                     prev_time_str = f" (P30: {prev_time.strftime('%H:%M')})"
                 except:
                     pass
             summary_parts.append(f"<span style='color:{FLEXOKI_BASE[600]}'>vs previous{prev_time_str}: {', '.join(changes)}</span>")
 
-    # Save current forecast for next comparison
-    if current_summary:
-        current_summary['run_time'] = run_time.isoformat() if run_time else None
+    # Save current forecast for next comparison - but ONLY if run_time is different
+    # This preserves the previous forecast for comparison across multiple page loads
+    if current_summary and run_time and current_run_time_str != previous_run_time_str:
+        current_summary['run_time'] = current_run_time_str
         # Save 24hr avg prices for comparison
         current_summary['avg_24h'] = {col: int(avg_24h.get(col, 0)) for col in cols}
         save_current_forecast(current_summary)
+        logger.info(f"Saved new forecast cache for P30 run {run_time.strftime('%H:%M')}")
 
     # Build summary HTML
     if summary_parts:
