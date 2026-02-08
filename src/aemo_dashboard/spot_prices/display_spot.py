@@ -7,25 +7,14 @@ import matplotx
 import numpy as np
 import os
 import sys
-from pathlib import Path
-
-# Add parent directory to path so absolute imports work when served by Panel
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-
-from aemo_dashboard.shared.config import config
-from aemo_dashboard.shared.logging_config import setup_logging, get_logger
-from aemo_dashboard.nem_dash.nem_dash_query_manager import NEMDashQueryManager
-
-# Set up logging
-setup_logging()
-logger = get_logger(__name__)
-
+import logging
 pn.extension()
 
 # Add page background CSS for iframe embedding
 pn.config.raw_css.append("""
 body, html {
     background-color: #FFFCF0 !important;
+    overflow: hidden !important;
 }
 .bk-root, .bk, .pn-loading {
     background-color: #FFFCF0 !important;
@@ -41,34 +30,77 @@ div[class*="pn-"] {
 }
 """)
 
+# Production path for 5-minute price data
+file_path = "/Users/davidleitch/aemo_production/data/prices5.parquet"
 font_size = 10
-
-# Initialize query manager
-query_manager = NEMDashQueryManager()
-logger.info("Display spot dashboard starting with DuckDB query manager...")
-
-# Legacy function no longer needed - kept for reference
-def open_parquet_file(path):
-    """Legacy function - replaced by query manager"""
-    logger.warning("open_parquet_file called but using query manager instead")
-    return query_manager.get_price_history(hours=48)
+print ("line 11")
 
 # Flexoki Light theme colors
 FLEXOKI_PAPER = '#FFFCF0'
 FLEXOKI_BLACK = '#100F0F'
 FLEXOKI_BASE = {
-    50: '#F2F0E5', 100: '#E6E4D9', 150: '#DAD8CE',
-    200: '#CECDC3', 300: '#B7B5AC', 600: '#6F6E69',
+    50: '#F2F0E5',
+    100: '#E6E4D9',
+    150: '#DAD8CE',
+    200: '#CECDC3',
+    300: '#B7B5AC',
+    600: '#6F6E69',
 }
 FLEXOKI_ACCENT = {
-    'cyan': '#24837B', 'green': '#66800B', 'orange': '#BC5215',
-    'magenta': '#A02F6F', 'purple': '#5E409D',
+    'cyan': '#24837B',
+    'green': '#66800B',
+    'orange': '#BC5215',
+    'magenta': '#A02F6F',
+    'purple': '#5E409D',
 }
+# Region colors for price chart lines
 REGION_COLORS = {
-    'NSW1': FLEXOKI_ACCENT['green'], 'QLD1': FLEXOKI_ACCENT['orange'],
-    'SA1': FLEXOKI_ACCENT['magenta'], 'TAS1': FLEXOKI_ACCENT['cyan'],
+    'NSW1': FLEXOKI_ACCENT['green'],
+    'QLD1': FLEXOKI_ACCENT['orange'],
+    'SA1': FLEXOKI_ACCENT['magenta'],
+    'TAS1': FLEXOKI_ACCENT['cyan'],
     'VIC1': FLEXOKI_ACCENT['purple'],
 }
+
+# Function to open the parquet file with robust error handling
+def open_parquet_file(path):
+    print("path ", path)
+
+    # Try multiple approaches to load the parquet file
+    for attempt, method in enumerate([
+        # Method 1: Standard pandas read_parquet
+        lambda: pd.read_parquet(path),
+        # Method 2: Read with specific engine
+        lambda: pd.read_parquet(path, engine='pyarrow'),
+        # Method 3: Try with fastparquet engine if available
+        lambda: pd.read_parquet(path, engine='fastparquet'),
+        # Method 4: Last resort, try reading from backup pickle if it exists
+        lambda: pd.read_pickle(path.replace('.parquet', '_backup.pkl')) if os.path.exists(path.replace('.parquet', '_backup.pkl')) else None
+    ]):
+        try:
+            print(f"Attempt {attempt+1} to open parquet file")
+            result = method()
+            if result is not None:
+                print(f"Successfully loaded data using method {attempt+1}")
+                # Ensure the index is properly set as datetime if it isn't already
+                if not isinstance(result.index, pd.DatetimeIndex):
+                    if 'SETTLEMENTDATE' in result.columns:
+                        result = result.set_index('SETTLEMENTDATE')
+                    elif 'settlementdate' in result.columns:
+                        result = result.set_index('settlementdate')
+                    else:
+                        # Try to convert index to datetime if it's not already
+                        try:
+                            result.index = pd.to_datetime(result.index)
+                        except:
+                            pass
+                return result
+        except Exception as e:
+            print(f"Method {attempt+1} failed with error: {str(e)}")
+            continue
+
+    # If all methods fail, raise a more descriptive error
+    raise ValueError(f"Failed to load parquet file {path}. The file may not exist or be corrupted. Make sure you've run the conversion script first.")
 
 # Flexoki Light style for dataframe
 styles = [
@@ -131,6 +163,7 @@ def display_table(prices):
         .apply(lambda x: ['font-weight: bold' if x.name in display.tail(3).index else '' for _ in x], axis=1)
         .apply(lambda x: [f'color: {FLEXOKI_BASE[600]}' if x.name not in display.tail(3).index else '' for _ in x], axis=1))
 
+# Flexoki Light style for matplotlib
 flexoki_style = {
     "axes.facecolor": FLEXOKI_PAPER,
     "axes.edgecolor": FLEXOKI_BASE[150],
@@ -141,34 +174,36 @@ flexoki_style = {
     "xtick.color": FLEXOKI_BLACK,
     "ytick.color": FLEXOKI_BLACK,
     "axes.prop_cycle": plt.cycler("color", [
-        REGION_COLORS['NSW1'], REGION_COLORS['QLD1'], REGION_COLORS['SA1'],
-        REGION_COLORS['TAS1'], REGION_COLORS['VIC1'],
+        REGION_COLORS['NSW1'],
+        REGION_COLORS['QLD1'],
+        REGION_COLORS['SA1'],
+        REGION_COLORS['TAS1'],
+        REGION_COLORS['VIC1'],
     ])
 }
 
 def get_data():
-    """Get price data using the query manager"""
-    try:
-        # Get 48 hours of price history
-        prices = query_manager.get_price_history(hours=48)
-        
-        if prices.empty:
-            logger.error("No price data returned from query manager")
-            return pd.DataFrame()
-        
-        logger.info(f"Loaded price data shape: {prices.shape}")
-        logger.info(f"Price data columns: {list(prices.columns)}")
-        logger.info(f"Latest prices:\n{prices.tail(5)}")
-        
-        return prices
-        
-    except Exception as e:
-        logger.error(f"Error getting price data: {e}")
-        return pd.DataFrame()
+    data = open_parquet_file(file_path)
+    print("file opened")
+
+    # Handle both uppercase and lowercase column names
+    if 'regionid' in data.columns:
+        # New format with lowercase columns
+        prices = data.pivot(columns='regionid', values='rrp')
+    elif 'REGIONID' in data.columns:
+        # Old format with uppercase columns
+        prices = data.pivot(columns='REGIONID', values='RRP')
+    else:
+        raise ValueError("Could not find region column in data")
+
+    print("REGIONID", "               ", "NSW1")
+    print("SETTLEMENTDATE")
+    print(prices.tail(5))
+    return prices
 
 def pcht(prices):
-    logger.info("pchart called")
-    
+    print("pchart called")
+
     # Count consecutive valid points from the end for each column
     valid_counts = {}
     for col in prices.columns:
@@ -180,23 +215,25 @@ def pcht(prices):
                 break
             count += 1
         valid_counts[col] = count
-        logger.info(f"Column {col} has {count} consecutive valid points from the end")
-    
+        print(f"Column {col} has {count} consecutive valid points from the end")
+
     min_valid_points = min(valid_counts.values())
-    logger.info(f"Using minimum valid points across all columns: {min_valid_points}")
-    
+    print(f"Using minimum valid points across all columns: {min_valid_points}")
+
     # Take last min(120, min_valid_points) rows
     rows_to_take = min(120, min_valid_points)
-    
+
     # Calculate EWM only on the rows we'll use
     df1 = prices.tail(rows_to_take).ewm(alpha=0.22, adjust=False).mean()
     df = df1.copy()
-    
-    # Apply Flexoki style
+
+    # Apply Flexoki style BEFORE creating figure
     plt.rcParams.update(flexoki_style)
 
     fig, ax = plt.subplots()
     fig.set_size_inches(4.5, 2.5)
+
+    # Explicitly set figure and axes background colors
     fig.set_facecolor(FLEXOKI_PAPER)
     ax.set_facecolor(FLEXOKI_PAPER)
 
@@ -222,58 +259,39 @@ def pcht(prices):
     ax.spines['left'].set_visible(False)
     ax.spines['bottom'].set_visible(False)
     ax.axhline(0, color=FLEXOKI_BASE[300], linewidth=0.3)
-    plt.figtext(0.97, 0.0, "©ITK", fontsize=7, horizontalalignment="right", color=FLEXOKI_BASE[600])
-    ax.legend(fontsize=7, frameon=False)
+    plt.figtext(0.97, 0.0, "©ITK", fontsize=7, horizontalalignment="right")
+    ax.legend(fontsize=7)
+    legend = ax.legend(fontsize=7, frameon=False)
     plt.close()
     return fig
 
-# Global panes that will be updated
-mpl_pane = None
-table_pane = None
-
 # Function to update the plot
 def update_plot(event=None):
-    global mpl_pane, table_pane
-    if mpl_pane is None or table_pane is None:
-        return
     prices = get_data()
     fig = pcht(prices)
     mpl_pane.object = fig
     table_pane.object = display_table(prices)
 
-def create_app():
-    """Create the dashboard app"""
-    global mpl_pane, table_pane
+# Create an initial plot
+print ("script started line 132")
+prices = get_data()
+print ("step 2 ")
+fig = pcht(prices)
+table = display_table(prices)
+mpl_pane = pn.pane.Matplotlib(fig, sizing_mode='fixed', width=450, height=300, margin=(0, 0, 0, 0), styles={'background-color': FLEXOKI_PAPER})
+table_pane = pn.pane.DataFrame(table, sizing_mode='fixed', width=450, height=310, margin=(0, 0, 0, 0), styles={'background-color': FLEXOKI_PAPER})
 
-    logger.info("Creating spot price dashboard app...")
+# Set up periodic callback to update the plot every 5 minutes
+pn.state.add_periodic_callback(update_plot, 270000)  # 270000ms = 4.5 minutes
 
-    # Create an initial plot
-    prices = get_data()
-    fig = pcht(prices)
-    table = display_table(prices)
-    mpl_pane = pn.pane.Matplotlib(fig, sizing_mode='fixed', width=450, height=250,
-                                   styles={'background-color': FLEXOKI_PAPER})
-    table_pane = pn.pane.DataFrame(table, sizing_mode='fixed', width=450, height=350,
-                                    styles={'background-color': FLEXOKI_PAPER})
+# Layout for the Panel with Flexoki background
+layout = pn.Column(
+    table_pane,
+    mpl_pane,
+    sizing_mode='fixed',
+    width=450,
+    styles={'background-color': FLEXOKI_PAPER}
+)
 
-    # Layout for the Panel with Flexoki background
-    layout = pn.Column(table_pane, mpl_pane, sizing_mode='fixed', width=450,
-                       styles={'background-color': FLEXOKI_PAPER})
-
-    # Set up periodic callback inside the server context
-    pn.state.add_periodic_callback(update_plot, 270000)  # 270000ms = 4.5 minutes
-
-    return layout
-
-# Create the app at module level and mark it as servable
-create_app().servable()
-
-def main():
-    """Main function to run the dashboard"""
-    logger.info("Starting spot price dashboard...")
-
-    # Serve with specific port
-    pn.serve(create_app, port=5007, show=True, autoreload=False)
-
-if __name__ == "__main__":
-    main()
+# Serve the Panel
+layout.servable()

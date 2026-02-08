@@ -391,7 +391,8 @@ def update_records_with_alerts(stats, records, records_file):
     
     return records, alerts_sent
 
-def create_gauge_figure(current_value, all_time_record, hour_record, water_pct=0, wind_pct=0, solar_pct=0, rooftop_pct=0):
+def create_gauge_figure(current_value, all_time_record, hour_record, water_pct=0, wind_pct=0, solar_pct=0, rooftop_pct=0,
+                        water_mw=0, wind_mw=0, solar_mw=0, rooftop_mw=0):
     """Create the Plotly gauge figure with stacked renewable sources
 
     Args:
@@ -402,7 +403,16 @@ def create_gauge_figure(current_value, all_time_record, hour_record, water_pct=0
         wind_pct: Wind percentage
         solar_pct: Utility solar percentage
         rooftop_pct: Rooftop solar percentage
+        water_mw: Hydro/water MW (for GW legend display)
+        wind_mw: Wind MW (for GW legend display)
+        solar_mw: Solar MW (for GW legend display)
+        rooftop_mw: Rooftop MW (for GW legend display)
     """
+    # Convert MW to GW for display
+    water_gw = water_mw / 1000
+    wind_gw = wind_mw / 1000
+    solar_gw = solar_mw / 1000
+    rooftop_gw = rooftop_mw / 1000
     fig = go.Figure()
 
     # Calculate cumulative percentages for stacking (bottom to top: hydro, wind, solar, rooftop)
@@ -415,41 +425,44 @@ def create_gauge_figure(current_value, all_time_record, hour_record, water_pct=0
     steps = []
 
     # Flexoki Light theme colors
-    FLEXOKI_PAPER = '#FFFCF0'
-    FLEXOKI_BLACK = '#100F0F'
-    FLEXOKI_TEXT = '#403E3C'
-    FLEXOKI_UI = '#E6E4D9'
-    FLEXOKI_UI_BORDER = '#B7B5AC'
-    FUEL_COLORS = {
-        'hydro': '#24837B',    # Cyan
-        'wind': '#66800B',     # Green
-        'solar': '#AD8301',    # Yellow
-        'rooftop': '#BC5215',  # Orange
+    COLORS = {
+        'background': '#FFFCF0',      # Flexoki paper
+        'foreground': '#100F0F',      # Flexoki black
+        'text': '#403E3C',            # Flexoki text-800
+        'muted': '#6F6E69',           # Flexoki text-600
+        'ui': '#E6E4D9',              # Flexoki base-100
+        'ui_border': '#B7B5AC',       # Flexoki base-300
+        'hydro': '#24837B',           # Cyan 600
+        'wind': '#66800B',            # Green 600
+        'solar': '#AD8301',           # Yellow 600
+        'rooftop': '#BC5215',         # Orange 600
+        'all_time_record': '#AF3029', # Red 600
+        'hour_record': '#205EA6',     # Blue 600
     }
 
-    # Hydro/Water (bottom layer) - cyan
+    # Hydro/Water (bottom layer)
     if water_pct > 0:
-        steps.append({'range': [0, cumulative_water], 'color': FUEL_COLORS['hydro'], 'name': 'Hydro'})
+        steps.append({'range': [0, cumulative_water], 'color': COLORS['hydro'], 'name': 'Hydro'})
 
-    # Wind (second layer) - green
+    # Wind (second layer)
     if wind_pct > 0:
-        steps.append({'range': [cumulative_water, cumulative_wind], 'color': FUEL_COLORS['wind'], 'name': 'Wind'})
+        steps.append({'range': [cumulative_water, cumulative_wind], 'color': COLORS['wind'], 'name': 'Wind'})
 
-    # Solar (third layer) - yellow
+    # Solar (third layer)
     if solar_pct > 0:
-        steps.append({'range': [cumulative_wind, cumulative_solar], 'color': FUEL_COLORS['solar'], 'name': 'Solar'})
+        steps.append({'range': [cumulative_wind, cumulative_solar], 'color': COLORS['solar'], 'name': 'Solar'})
 
-    # Rooftop (top layer) - orange
+    # Rooftop (top layer)
     if rooftop_pct > 0:
-        steps.append({'range': [cumulative_solar, cumulative_total], 'color': FUEL_COLORS['rooftop'], 'name': 'Rooftop'})
+        steps.append({'range': [cumulative_solar, cumulative_total], 'color': COLORS['rooftop'], 'name': 'Rooftop'})
 
     # Main gauge with stacked colors
     fig.add_trace(go.Indicator(
         mode="gauge+number",
         value=current_value,
-        title={'text': "Renewable Energy %", 'font': {'size': 16, 'color': "white"}},
-        number={'suffix': "%", 'font': {'size': 18, 'color': "white"}, 'valueformat': '.0f'},
-        domain={'x': [0, 1], 'y': [0.15, 1]},
+        title={'text': "Renewable Energy %", 'font': {'size': 16, 'color': COLORS['foreground']}},
+        number={'suffix': "%", 'font': {'size': 18, 'color': COLORS['foreground']}, 'valueformat': '.0f'},
+        domain={'x': [0, 1], 'y': [0.08, 1]},
         gauge={
             'axis': {
                 'range': [0, 100],
@@ -457,16 +470,16 @@ def create_gauge_figure(current_value, all_time_record, hour_record, water_pct=0
                 'tick0': 0,
                 'dtick': 20,
                 'tickwidth': 1,
-                'tickcolor': "white",
-                'tickfont': {'color': "white"}
+                'tickcolor': COLORS['muted'],
+                'tickfont': {'color': COLORS['text']}
             },
             'bar': {'color': "rgba(0,0,0,0)", 'thickness': 0},  # Invisible bar, we use steps instead
-            'bgcolor': FLEXOKI_UI,
+            'bgcolor': COLORS['ui'],
             'borderwidth': 2,
-            'bordercolor': "#6272a4",
+            'bordercolor': COLORS['ui_border'],
             'steps': steps,
             'threshold': {
-                'line': {'color': "gold", 'width': 4},
+                'line': {'color': COLORS['all_time_record'], 'width': 4},
                 'thickness': 0.75,
                 'value': all_time_record
             }
@@ -477,131 +490,83 @@ def create_gauge_figure(current_value, all_time_record, hour_record, water_pct=0
     fig.add_trace(go.Indicator(
         mode="gauge",
         value=0,
-        domain={'x': [0, 1], 'y': [0.15, 1]},
+        domain={'x': [0, 1], 'y': [0.08, 1]},
         gauge={
             'axis': {'range': [0, 100], 'visible': False},
             'bar': {'color': "rgba(0,0,0,0)", 'thickness': 0},
             'bgcolor': "rgba(0,0,0,0)",
             'borderwidth': 0,
             'threshold': {
-                'line': {'color': FUEL_COLORS['hydro'], 'width': 4},
+                'line': {'color': COLORS['hour_record'], 'width': 4},
                 'thickness': 0.75,
                 'value': hour_record
             }
         }
     ))
     
-    # Fuel type legend - simple colored boxes with names only
-    y_pos = 0.10
-
-    # Hydro
-    fig.add_shape(
-        type="rect",
-        x0=0.10, y0=y_pos-0.01, x1=0.14, y1=y_pos+0.01,
-        fillcolor=FUEL_COLORS['hydro'], line=dict(color=FUEL_COLORS['hydro'], width=0),
-        xref="paper", yref="paper"
-    )
+    # Record markers legend at bottom center - simple text format
     fig.add_annotation(
-        x=0.145, y=y_pos,
-        text="Hydro",
-        showarrow=False, xref="paper", yref="paper",
-        align="left", font=dict(size=8, color=FLEXOKI_BLACK)
-    )
-
-    # Wind
-    fig.add_shape(
-        type="rect",
-        x0=0.29, y0=y_pos-0.01, x1=0.33, y1=y_pos+0.01,
-        fillcolor=FUEL_COLORS['wind'], line=dict(color=FUEL_COLORS['wind'], width=0),
-        xref="paper", yref="paper"
-    )
-    fig.add_annotation(
-        x=0.335, y=y_pos,
-        text="Wind",
-        showarrow=False, xref="paper", yref="paper",
-        align="left", font=dict(size=8, color=FLEXOKI_BLACK)
-    )
-
-    # Solar
-    fig.add_shape(
-        type="rect",
-        x0=0.47, y0=y_pos-0.01, x1=0.51, y1=y_pos+0.01,
-        fillcolor=FUEL_COLORS['solar'], line=dict(color=FUEL_COLORS['solar'], width=0),
-        xref="paper", yref="paper"
-    )
-    fig.add_annotation(
-        x=0.515, y=y_pos,
-        text="Solar",
-        showarrow=False, xref="paper", yref="paper",
-        align="left", font=dict(size=8, color=FLEXOKI_BLACK)
-    )
-
-    # Rooftop
-    fig.add_shape(
-        type="rect",
-        x0=0.64, y0=y_pos-0.01, x1=0.68, y1=y_pos+0.01,
-        fillcolor=FUEL_COLORS['rooftop'], line=dict(color=FUEL_COLORS['rooftop'], width=0),
-        xref="paper", yref="paper"
-    )
-    fig.add_annotation(
-        x=0.685, y=y_pos,
-        text="Rooftop",
-        showarrow=False, xref="paper", yref="paper",
-        align="left", font=dict(size=8, color=FLEXOKI_BLACK)
-    )
-
-    # Add record markers legend below
-    fig.add_annotation(
-        x=0.5, y=0.035,
-        text="<b>Records:</b>",
-        showarrow=False, xref="paper", yref="paper",
-        align="center", font=dict(size=9, color=FLEXOKI_BLACK)
-    )
-
-    # All-time record
-    fig.add_shape(
-        type="line",
-        x0=0.15, y0=0.01, x1=0.20, y1=0.01,
-        line=dict(color="#AD8301", width=4),  # Yellow/gold in Flexoki
-        xref="paper", yref="paper"
-    )
-    fig.add_annotation(
-        x=0.21, y=0.01,
+        x=0.35, y=0.02,
         text=f"All-time: {all_time_record:.0f}%",
         showarrow=False, xref="paper", yref="paper",
-        align="left", font=dict(size=8, color=FLEXOKI_BLACK)
+        align="center", font=dict(size=10, color=COLORS['text'])
     )
 
-    # Hour record
-    fig.add_shape(
-        type="line",
-        x0=0.55, y0=0.01, x1=0.60, y1=0.01,
-        line=dict(color=FUEL_COLORS['hydro'], width=4),  # Cyan
-        xref="paper", yref="paper"
-    )
     fig.add_annotation(
-        x=0.61, y=0.01,
+        x=0.65, y=0.02,
         text=f"Hour: {hour_record:.0f}%",
         showarrow=False, xref="paper", yref="paper",
-        align="left", font=dict(size=8, color=FLEXOKI_BLACK)
+        align="center", font=dict(size=10, color=COLORS['text'])
     )
 
     fig.update_layout(
-        paper_bgcolor=FLEXOKI_PAPER,
-        height=350,
+        paper_bgcolor=COLORS['background'],
+        height=310,
         width=400,
-        margin=dict(l=30, r=30, t=60, b=30),
+        margin=dict(l=30, r=30, t=40, b=10),
         showlegend=False
     )
-    
+
     return fig
 
-# Global variable to hold the current gauge
+# Global variables to hold the current gauge and legend
 current_gauge_pane = None
+current_legend_pane = None
+
+def create_fuel_legend_html(water_mw=0, wind_mw=0, solar_mw=0, rooftop_mw=0):
+    """Create HTML legend showing fuel types with GW values"""
+    # Flexoki colors
+    COLORS = {
+        'hydro': '#24837B',
+        'wind': '#66800B',
+        'solar': '#AD8301',
+        'rooftop': '#BC5215',
+        'text': '#403E3C',
+        'muted': '#6F6E69',
+        'background': '#FFFCF0',
+    }
+
+    # Convert to GW
+    water_gw = water_mw / 1000
+    wind_gw = wind_mw / 1000
+    solar_gw = solar_mw / 1000
+    rooftop_gw = rooftop_mw / 1000
+
+    html = f"""
+    <div style="display: flex; justify-content: center; gap: 15px; padding: 5px 0;
+                background: {COLORS['background']}; font-family: -apple-system, sans-serif; font-size: 12px;">
+        <span><b style="color: {COLORS['hydro']}">Hydro</b> <span style="color: {COLORS['text']}">{water_gw:.0f}</span></span>
+        <span><b style="color: {COLORS['wind']}">Wind</b> <span style="color: {COLORS['text']}">{wind_gw:.0f}</span></span>
+        <span><b style="color: {COLORS['solar']}">Solar</b> <span style="color: {COLORS['text']}">{solar_gw:.0f}</span></span>
+        <span><b style="color: {COLORS['rooftop']}">Rooftop</b> <span style="color: {COLORS['text']}">{rooftop_gw:.0f}</span></span>
+        <span style="color: {COLORS['muted']}">GW</span>
+    </div>
+    """
+    return html
 
 def update_gauge_loop():
     """Background thread to update gauge every 4.5 minutes"""
-    global current_gauge_pane
+    global current_gauge_pane, current_legend_pane
     data_dir = os.getenv('DATA_DIR', '/tmp')
     records_file = Path(data_dir) / 'renewable_records_calculated.json'
     
@@ -629,16 +594,21 @@ def update_gauge_loop():
                 solar_pct = (stats['solar_mw'] / total_mw * 100) if total_mw > 0 else 0
                 rooftop_pct = (stats['rooftop_mw'] / total_mw * 100) if total_mw > 0 else 0
 
-                # Create gauge figure with stacked fuel types
+                # Create gauge figure with stacked fuel types and GW values
                 fig = create_gauge_figure(
                     current_percentage, all_time_record, hour_record,
-                    water_pct, wind_pct, solar_pct, rooftop_pct
+                    water_pct, wind_pct, solar_pct, rooftop_pct,
+                    stats['water_mw'], stats['wind_mw'], stats['solar_mw'], stats['rooftop_mw']
                 )
                 
-                # Update the pane if it exists
+                # Update the panes if they exist
                 if current_gauge_pane is not None:
                     current_gauge_pane.object = fig
-                
+                if current_legend_pane is not None:
+                    current_legend_pane.object = create_fuel_legend_html(
+                        stats['water_mw'], stats['wind_mw'], stats['solar_mw'], stats['rooftop_mw']
+                    )
+
                 print(f"Gauge updated: {current_percentage:.1f}% renewable")
                 if alerts_sent:
                     print(f"Alerts sent for: {', '.join(alerts_sent)}")
@@ -653,7 +623,7 @@ def update_gauge_loop():
 
 def create_gauge_app():
     """Create the gauge app"""
-    global current_gauge_pane
+    global current_gauge_pane, current_legend_pane
     
     # Initial gauge creation
     try:
@@ -676,19 +646,31 @@ def create_gauge_app():
             wind_pct = (stats['wind_mw'] / total_mw * 100) if total_mw > 0 else 0
             solar_pct = (stats['solar_mw'] / total_mw * 100) if total_mw > 0 else 0
             rooftop_pct = (stats['rooftop_mw'] / total_mw * 100) if total_mw > 0 else 0
+            # Get MW values for legend
+            water_mw = stats['water_mw']
+            wind_mw = stats['wind_mw']
+            solar_mw = stats['solar_mw']
+            rooftop_mw = stats['rooftop_mw']
         else:
             current_percentage = 0
             all_time_record = 78.7
             hour_record = 45
             water_pct = wind_pct = solar_pct = rooftop_pct = 0
+            water_mw = wind_mw = solar_mw = rooftop_mw = 0
 
         # Create initial gauge with stacked fuel types
         fig = create_gauge_figure(
             current_percentage, all_time_record, hour_record,
-            water_pct, wind_pct, solar_pct, rooftop_pct
+            water_pct, wind_pct, solar_pct, rooftop_pct,
+            water_mw, wind_mw, solar_mw, rooftop_mw
         )
-        current_gauge_pane = pn.pane.Plotly(fig, sizing_mode='fixed', width=400, height=350)
-        
+        current_gauge_pane = pn.pane.Plotly(fig, sizing_mode='fixed', width=400, height=310)
+        # Create legend HTML pane
+        current_legend_pane = pn.pane.HTML(
+            create_fuel_legend_html(water_mw, wind_mw, solar_mw, rooftop_mw),
+            sizing_mode='fixed', width=400, height=30
+        )
+
     except Exception as e:
         print(f"Error creating initial gauge: {e}")
         # Create error gauge
@@ -698,18 +680,23 @@ def create_gauge_app():
             title={'text': "Error Loading Data", 'font': {'color': "red"}},
             gauge={'axis': {'range': [0, 100]}}
         ))
-        current_gauge_pane = pn.pane.Plotly(fig, sizing_mode='fixed', width=400, height=350)
-    
+        current_gauge_pane = pn.pane.Plotly(fig, sizing_mode='fixed', width=400, height=310)
+        current_legend_pane = pn.pane.HTML(
+            create_fuel_legend_html(0, 0, 0, 0),
+            sizing_mode='fixed', width=400, height=30
+        )
+
     # Start update thread (daemon so it stops when main program exits)
     update_thread = threading.Thread(target=update_gauge_loop, daemon=True)
     update_thread.start()
-    
-    # Create app
+
+    # Create app with gauge and legend below
     app = pn.Column(
         current_gauge_pane,
+        current_legend_pane,
         sizing_mode='fixed',
         width=400,
-        height=350,
+        height=340,
         margin=(0, 0),
         css_classes=['gauge-only']
     )
