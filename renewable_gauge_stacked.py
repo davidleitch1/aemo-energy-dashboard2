@@ -414,21 +414,34 @@ def create_gauge_figure(current_value, all_time_record, hour_record, water_pct=0
     # Create colored steps for each renewable source (stacked from bottom)
     steps = []
 
-    # Hydro/Water (bottom layer) - cyan/blue
+    # Flexoki Light theme colors
+    FLEXOKI_PAPER = '#FFFCF0'
+    FLEXOKI_BLACK = '#100F0F'
+    FLEXOKI_TEXT = '#403E3C'
+    FLEXOKI_UI = '#E6E4D9'
+    FLEXOKI_UI_BORDER = '#B7B5AC'
+    FUEL_COLORS = {
+        'hydro': '#24837B',    # Cyan
+        'wind': '#66800B',     # Green
+        'solar': '#AD8301',    # Yellow
+        'rooftop': '#BC5215',  # Orange
+    }
+
+    # Hydro/Water (bottom layer) - cyan
     if water_pct > 0:
-        steps.append({'range': [0, cumulative_water], 'color': "#8be9fd", 'name': 'Hydro'})
+        steps.append({'range': [0, cumulative_water], 'color': FUEL_COLORS['hydro'], 'name': 'Hydro'})
 
     # Wind (second layer) - green
     if wind_pct > 0:
-        steps.append({'range': [cumulative_water, cumulative_wind], 'color': "#50fa7b", 'name': 'Wind'})
+        steps.append({'range': [cumulative_water, cumulative_wind], 'color': FUEL_COLORS['wind'], 'name': 'Wind'})
 
     # Solar (third layer) - yellow
     if solar_pct > 0:
-        steps.append({'range': [cumulative_wind, cumulative_solar], 'color': "#f1fa8c", 'name': 'Solar'})
+        steps.append({'range': [cumulative_wind, cumulative_solar], 'color': FUEL_COLORS['solar'], 'name': 'Solar'})
 
     # Rooftop (top layer) - orange
     if rooftop_pct > 0:
-        steps.append({'range': [cumulative_solar, cumulative_total], 'color': "#ffb86c", 'name': 'Rooftop'})
+        steps.append({'range': [cumulative_solar, cumulative_total], 'color': FUEL_COLORS['rooftop'], 'name': 'Rooftop'})
 
     # Main gauge with stacked colors
     fig.add_trace(go.Indicator(
@@ -448,7 +461,7 @@ def create_gauge_figure(current_value, all_time_record, hour_record, water_pct=0
                 'tickfont': {'color': "white"}
             },
             'bar': {'color': "rgba(0,0,0,0)", 'thickness': 0},  # Invisible bar, we use steps instead
-            'bgcolor': "#44475a",
+            'bgcolor': FLEXOKI_UI,
             'borderwidth': 2,
             'bordercolor': "#6272a4",
             'steps': steps,
@@ -471,7 +484,7 @@ def create_gauge_figure(current_value, all_time_record, hour_record, water_pct=0
             'bgcolor': "rgba(0,0,0,0)",
             'borderwidth': 0,
             'threshold': {
-                'line': {'color': "#5DCED0", 'width': 4},
+                'line': {'color': FUEL_COLORS['hydro'], 'width': 4},
                 'thickness': 0.75,
                 'value': hour_record
             }
@@ -485,56 +498,56 @@ def create_gauge_figure(current_value, all_time_record, hour_record, water_pct=0
     fig.add_shape(
         type="rect",
         x0=0.10, y0=y_pos-0.01, x1=0.14, y1=y_pos+0.01,
-        fillcolor="#8be9fd", line=dict(color="#8be9fd", width=0),
+        fillcolor=FUEL_COLORS['hydro'], line=dict(color=FUEL_COLORS['hydro'], width=0),
         xref="paper", yref="paper"
     )
     fig.add_annotation(
         x=0.145, y=y_pos,
         text="Hydro",
         showarrow=False, xref="paper", yref="paper",
-        align="left", font=dict(size=8, color="white")
+        align="left", font=dict(size=8, color=FLEXOKI_BLACK)
     )
 
     # Wind
     fig.add_shape(
         type="rect",
         x0=0.29, y0=y_pos-0.01, x1=0.33, y1=y_pos+0.01,
-        fillcolor="#50fa7b", line=dict(color="#50fa7b", width=0),
+        fillcolor=FUEL_COLORS['wind'], line=dict(color=FUEL_COLORS['wind'], width=0),
         xref="paper", yref="paper"
     )
     fig.add_annotation(
         x=0.335, y=y_pos,
         text="Wind",
         showarrow=False, xref="paper", yref="paper",
-        align="left", font=dict(size=8, color="white")
+        align="left", font=dict(size=8, color=FLEXOKI_BLACK)
     )
 
     # Solar
     fig.add_shape(
         type="rect",
         x0=0.47, y0=y_pos-0.01, x1=0.51, y1=y_pos+0.01,
-        fillcolor="#f1fa8c", line=dict(color="#f1fa8c", width=0),
+        fillcolor=FUEL_COLORS['solar'], line=dict(color=FUEL_COLORS['solar'], width=0),
         xref="paper", yref="paper"
     )
     fig.add_annotation(
         x=0.515, y=y_pos,
         text="Solar",
         showarrow=False, xref="paper", yref="paper",
-        align="left", font=dict(size=8, color="white")
+        align="left", font=dict(size=8, color=FLEXOKI_BLACK)
     )
 
     # Rooftop
     fig.add_shape(
         type="rect",
         x0=0.64, y0=y_pos-0.01, x1=0.68, y1=y_pos+0.01,
-        fillcolor="#ffb86c", line=dict(color="#ffb86c", width=0),
+        fillcolor=FUEL_COLORS['rooftop'], line=dict(color=FUEL_COLORS['rooftop'], width=0),
         xref="paper", yref="paper"
     )
     fig.add_annotation(
         x=0.685, y=y_pos,
         text="Rooftop",
         showarrow=False, xref="paper", yref="paper",
-        align="left", font=dict(size=8, color="white")
+        align="left", font=dict(size=8, color=FLEXOKI_BLACK)
     )
 
     # Add record markers legend below
@@ -542,39 +555,39 @@ def create_gauge_figure(current_value, all_time_record, hour_record, water_pct=0
         x=0.5, y=0.035,
         text="<b>Records:</b>",
         showarrow=False, xref="paper", yref="paper",
-        align="center", font=dict(size=9, color="white")
+        align="center", font=dict(size=9, color=FLEXOKI_BLACK)
     )
 
     # All-time record
     fig.add_shape(
         type="line",
         x0=0.15, y0=0.01, x1=0.20, y1=0.01,
-        line=dict(color="gold", width=4),
+        line=dict(color="#AD8301", width=4),  # Yellow/gold in Flexoki
         xref="paper", yref="paper"
     )
     fig.add_annotation(
         x=0.21, y=0.01,
         text=f"All-time: {all_time_record:.0f}%",
         showarrow=False, xref="paper", yref="paper",
-        align="left", font=dict(size=8, color="white")
+        align="left", font=dict(size=8, color=FLEXOKI_BLACK)
     )
 
     # Hour record
     fig.add_shape(
         type="line",
         x0=0.55, y0=0.01, x1=0.60, y1=0.01,
-        line=dict(color="#5DCED0", width=4),
+        line=dict(color=FUEL_COLORS['hydro'], width=4),  # Cyan
         xref="paper", yref="paper"
     )
     fig.add_annotation(
         x=0.61, y=0.01,
         text=f"Hour: {hour_record:.0f}%",
         showarrow=False, xref="paper", yref="paper",
-        align="left", font=dict(size=8, color="white")
+        align="left", font=dict(size=8, color=FLEXOKI_BLACK)
     )
-    
+
     fig.update_layout(
-        paper_bgcolor="#282a36",
+        paper_bgcolor=FLEXOKI_PAPER,
         height=350,
         width=400,
         margin=dict(l=30, r=30, t=60, b=30),
@@ -759,13 +772,14 @@ def main():
     # Enable Panel extensions (only when serving)
     pn.extension('plotly')
     
-    # Add custom CSS
+    # Add custom CSS with Flexoki Light theme
     pn.config.raw_css.append("""
     /* Hide all Panel UI elements */
     .bk-root .bk-toolbar { display: none !important; }
     .pn-loading { display: none !important; }
-    body { margin: 0; padding: 0; background: #282a36; }
-    .gauge-only { background: #282a36; }
+    body { margin: 0; padding: 0; background: #FFFCF0; }
+    .gauge-only { background: #FFFCF0; }
+    .bk-root, .bk, div[class*="pn-"] { background-color: #FFFCF0 !important; }
     """)
     
     print(f"\n{'='*60}")
