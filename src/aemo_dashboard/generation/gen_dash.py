@@ -4019,11 +4019,12 @@ class EnergyDashboard(param.Parameterized):
             tabs = pn.Tabs(
                 ("Today", nem_dash_tab),  # Load immediately
                 ("Generation mix", pn.pane.HTML(loading_html)),  # Lazy
-                ("Prices", pn.pane.HTML(loading_html)),  # Lazy - NEW
+                ("Prices", pn.pane.HTML(loading_html)),  # Lazy
                 ("Pivot table", pn.pane.HTML(loading_html)),  # Lazy
                 ("Station Analysis", pn.pane.HTML(loading_html)),  # Lazy
                 ("Trends", pn.pane.HTML(loading_html)),  # Lazy
-                ("Curtailment", pn.pane.HTML(loading_html)),  # Lazy - NEW
+                ("Curtailment", pn.pane.HTML(loading_html)),  # Lazy
+                ("PASA", pn.pane.HTML(loading_html)),  # Lazy - outage monitor
                 ("Batteries", pn.pane.HTML(loading_html)),  # Lazy
                 dynamic=True,
                 closable=False,
@@ -4039,12 +4040,13 @@ class EnergyDashboard(param.Parameterized):
             # Store tab creation functions (no need for Today since it's loaded)
             self._tab_creators = {
                 1: self._create_generation_tab_lazy,
-                2: self._create_prices_tab,  # NEW
-                3: self._create_price_analysis_tab,  # Shifted from 2 to 3
-                4: self._create_station_analysis_tab,  # Shifted from 3 to 4
-                5: self._create_trends_tab,  # Shifted from 4 to 5
-                6: self._create_curtailment_tab,  # NEW
-                7: self._create_batteries_tab  # Renamed from insights, shifted to 7
+                2: self._create_prices_tab,
+                3: self._create_price_analysis_tab,
+                4: self._create_station_analysis_tab,
+                5: self._create_trends_tab,
+                6: self._create_curtailment_tab,
+                7: self._create_pasa_tab,  # PASA outage monitor
+                8: self._create_batteries_tab
             }
             
             # Watch for tab changes
@@ -6292,6 +6294,22 @@ class EnergyDashboard(param.Parameterized):
             logger.error(f"Error creating curtailment tab: {e}")
             return pn.Column(
                 pn.pane.Markdown("# Curtailment"),
+                pn.pane.Markdown(f"**Error loading tab:** {e}"),
+                sizing_mode='stretch_width'
+            )
+
+    def _create_pasa_tab(self):
+        """Create PASA outage monitoring tab"""
+        try:
+            logger.info("Creating PASA tab...")
+            from aemo_dashboard.pasa import create_pasa_tab
+            pasa_tab = create_pasa_tab()
+            logger.info("PASA tab created successfully")
+            return pasa_tab
+        except Exception as e:
+            logger.error(f"Error creating PASA tab: {e}")
+            return pn.Column(
+                pn.pane.Markdown("# PASA Outage Monitor"),
                 pn.pane.Markdown(f"**Error loading tab:** {e}"),
                 sizing_mode='stretch_width'
             )
