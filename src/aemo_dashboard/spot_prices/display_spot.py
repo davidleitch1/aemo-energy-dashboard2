@@ -3,12 +3,17 @@ import panel as pn
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import time
-import matplotx
 import numpy as np
 import os
 import sys
 import logging
+from datetime import datetime, timedelta
+
 pn.extension()
+
+# Simple cache for parquet data
+_data_cache = {'data': None, 'timestamp': None}
+_CACHE_TTL_SECONDS = 60  # Cache for 60 seconds
 
 # Add page background CSS for iframe embedding
 pn.config.raw_css.append("""
@@ -33,7 +38,6 @@ div[class*="pn-"] {
 # Production path for 5-minute price data
 file_path = "/Users/davidleitch/aemo_production/data/prices5.parquet"
 font_size = 10
-print ("line 11")
 
 # Flexoki Light theme colors
 FLEXOKI_PAPER = '#FFFCF0'
@@ -62,45 +66,66 @@ REGION_COLORS = {
     'VIC1': FLEXOKI_ACCENT['purple'],
 }
 
-# Function to open the parquet file with robust error handling
+# Function to open the parquet file with caching
 def open_parquet_file(path):
-    print("path ", path)
+    """Load only recent data from parquet file with caching"""
+    global _data_cache
 
-    # Try multiple approaches to load the parquet file
-    for attempt, method in enumerate([
-        # Method 1: Standard pandas read_parquet
-        lambda: pd.read_parquet(path),
-        # Method 2: Read with specific engine
-        lambda: pd.read_parquet(path, engine='pyarrow'),
-        # Method 3: Try with fastparquet engine if available
-        lambda: pd.read_parquet(path, engine='fastparquet'),
-        # Method 4: Last resort, try reading from backup pickle if it exists
-        lambda: pd.read_pickle(path.replace('.parquet', '_backup.pkl')) if os.path.exists(path.replace('.parquet', '_backup.pkl')) else None
-    ]):
-        try:
-            print(f"Attempt {attempt+1} to open parquet file")
-            result = method()
-            if result is not None:
-                print(f"Successfully loaded data using method {attempt+1}")
-                # Ensure the index is properly set as datetime if it isn't already
-                if not isinstance(result.index, pd.DatetimeIndex):
-                    if 'SETTLEMENTDATE' in result.columns:
-                        result = result.set_index('SETTLEMENTDATE')
-                    elif 'settlementdate' in result.columns:
-                        result = result.set_index('settlementdate')
-                    else:
-                        # Try to convert index to datetime if it's not already
-                        try:
-                            result.index = pd.to_datetime(result.index)
-                        except:
-                            pass
-                return result
-        except Exception as e:
-            print(f"Method {attempt+1} failed with error: {str(e)}")
-            continue
+    # Check cache
+    now = datetime.now()
+    if (_data_cache['data'] is not None and
+        _data_cache['timestamp'] is not None and
+        (now - _data_cache['timestamp']).total_seconds() < _CACHE_TTL_SECONDS):
+        return _data_cache['data']
 
-    # If all methods fail, raise a more descriptive error
-    raise ValueError(f"Failed to load parquet file {path}. The file may not exist or be corrupted. Make sure you've run the conversion script first.")
+    # Load only last 48 hours of data (much faster than full file)
+    try:
+        import pyarrow.parquet as pq
+
+        # Read parquet metadata to get column names
+        parquet_file = pq.ParquetFile(path)
+        schema = parquet_file.schema_arrow
+
+        # Determine the date column name
+        if 'settlementdate' in schema.names:
+            date_col = 'settlementdate'
+        elif 'SETTLEMENTDATE' in schema.names:
+            date_col = 'SETTLEMENTDATE'
+        else:
+            date_col = None
+
+        # Filter to last 48 hours if we can identify the date column
+        cutoff = now - timedelta(hours=48)
+        if date_col:
+            filters = [(date_col, '>=', pd.Timestamp(cutoff))]
+            result = pd.read_parquet(path, filters=filters)
+        else:
+            result = pd.read_parquet(path)
+
+        # Ensure the index is properly set as datetime
+        if not isinstance(result.index, pd.DatetimeIndex):
+            if 'SETTLEMENTDATE' in result.columns:
+                result = result.set_index('SETTLEMENTDATE')
+            elif 'settlementdate' in result.columns:
+                result = result.set_index('settlementdate')
+            else:
+                try:
+                    result.index = pd.to_datetime(result.index)
+                except Exception:
+                    pass
+
+        # Sort by index to ensure chronological order
+        result = result.sort_index()
+
+        # Update cache
+        _data_cache['data'] = result
+        _data_cache['timestamp'] = now
+
+        return result
+
+    except Exception as e:
+        logging.error(f"Failed to load parquet file {path}: {e}")
+        raise ValueError(f"Failed to load parquet file {path}: {e}")
 
 # Flexoki Light style for dataframe
 styles = [
@@ -184,41 +209,30 @@ flexoki_style = {
 
 def get_data():
     data = open_parquet_file(file_path)
-    print("file opened")
 
     # Handle both uppercase and lowercase column names
     if 'regionid' in data.columns:
-        # New format with lowercase columns
         prices = data.pivot(columns='regionid', values='rrp')
     elif 'REGIONID' in data.columns:
-        # Old format with uppercase columns
         prices = data.pivot(columns='REGIONID', values='RRP')
     else:
         raise ValueError("Could not find region column in data")
 
-    print("REGIONID", "               ", "NSW1")
-    print("SETTLEMENTDATE")
-    print(prices.tail(5))
     return prices
 
 def pcht(prices):
-    print("pchart called")
-
     # Count consecutive valid points from the end for each column
     valid_counts = {}
     for col in prices.columns:
         series = prices[col]
-        # Start from the end and count until we hit a NaN
         count = 0
-        for i in range(len(series)-1, -1, -1):  # Go backwards through the series
+        for i in range(len(series)-1, -1, -1):
             if pd.isna(series.iloc[i]):
                 break
             count += 1
         valid_counts[col] = count
-        print(f"Column {col} has {count} consecutive valid points from the end")
 
     min_valid_points = min(valid_counts.values())
-    print(f"Using minimum valid points across all columns: {min_valid_points}")
 
     # Take last min(120, min_valid_points) rows
     rows_to_take = min(120, min_valid_points)
@@ -265,29 +279,81 @@ def pcht(prices):
     plt.close()
     return fig
 
-# Function to update the plot
+# Loading indicator HTML
+_loading_html = f"""
+<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;
+            height:300px;width:450px;color:{FLEXOKI_BASE[600]};background:{FLEXOKI_PAPER};">
+    <div style="width:40px;height:40px;border:3px solid {FLEXOKI_BASE[200]};
+                border-top-color:{FLEXOKI_ACCENT['cyan']};border-radius:50%;
+                animation:spin 1s linear infinite;"></div>
+    <p style="margin-top:15px;font-size:12px;">Loading prices...</p>
+</div>
+<style>@keyframes spin {{from{{transform:rotate(0deg)}}to{{transform:rotate(360deg)}}}}</style>
+"""
+
+# Create containers that hold loading indicator initially
+# These will have their contents replaced after data loads
+_chart_container = pn.Column(
+    pn.pane.HTML(_loading_html, sizing_mode='fixed', width=450, height=300),
+    sizing_mode='fixed', width=450, height=300, margin=(0, 0, 0, 0),
+    styles={'background-color': FLEXOKI_PAPER}
+)
+_table_container = pn.Column(
+    pn.pane.HTML(_loading_html, sizing_mode='fixed', width=450, height=310),
+    sizing_mode='fixed', width=450, height=310, margin=(0, 0, 0, 0),
+    styles={'background-color': FLEXOKI_PAPER}
+)
+
+# These will hold the actual panes after loading (for periodic updates)
+_mpl_pane = None
+_table_pane = None
+
 def update_plot(event=None):
+    """Update the plot - called periodically after initial load."""
+    global _mpl_pane, _table_pane
+    if _mpl_pane is None or _table_pane is None:
+        return  # Not yet initialized
     prices = get_data()
     fig = pcht(prices)
-    mpl_pane.object = fig
-    table_pane.object = display_table(prices)
+    _mpl_pane.object = fig
+    _table_pane.object = display_table(prices)
 
-# Create an initial plot
-print ("script started line 132")
-prices = get_data()
-print ("step 2 ")
-fig = pcht(prices)
-table = display_table(prices)
-mpl_pane = pn.pane.Matplotlib(fig, sizing_mode='fixed', width=450, height=300, margin=(0, 0, 0, 0), styles={'background-color': FLEXOKI_PAPER})
-table_pane = pn.pane.DataFrame(table, sizing_mode='fixed', width=450, height=310, margin=(0, 0, 0, 0), styles={'background-color': FLEXOKI_PAPER})
+def load_initial_data():
+    """Load initial data - called after page loads via onload callback."""
+    global _mpl_pane, _table_pane
+    logging.info("onload callback triggered - loading price data")
+    try:
+        prices = get_data()
+        fig = pcht(prices)
+        table = display_table(prices)
 
-# Set up periodic callback to update the plot every 5 minutes
-pn.state.add_periodic_callback(update_plot, 270000)  # 270000ms = 4.5 minutes
+        # Create the actual panes
+        _mpl_pane = pn.pane.Matplotlib(fig, sizing_mode='fixed', width=450, height=300,
+                                        margin=(0, 0, 0, 0), styles={'background-color': FLEXOKI_PAPER})
+        _table_pane = pn.pane.DataFrame(table, sizing_mode='fixed', width=450, height=310,
+                                         margin=(0, 0, 0, 0), styles={'background-color': FLEXOKI_PAPER})
+
+        # Replace loading indicators with actual content
+        _chart_container[:] = [_mpl_pane]
+        _table_container[:] = [_table_pane]
+
+        logging.info("Price data loaded successfully")
+
+        # Set up periodic callback to update the plot every 4.5 minutes
+        pn.state.add_periodic_callback(update_plot, 270000)
+    except Exception as e:
+        logging.error(f"Error loading price data: {e}")
+        _chart_container[:] = [pn.pane.HTML(
+            f"<div style='padding:20px;color:red;background:{FLEXOKI_PAPER};'>Error: {e}</div>"
+        )]
+
+# Schedule data loading after page is served
+pn.state.onload(load_initial_data)
 
 # Layout for the Panel with Flexoki background
 layout = pn.Column(
-    table_pane,
-    mpl_pane,
+    _table_container,
+    _chart_container,
     sizing_mode='fixed',
     width=450,
     styles={'background-color': FLEXOKI_PAPER}

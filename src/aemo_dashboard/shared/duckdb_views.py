@@ -21,33 +21,95 @@ perf_logger = PerformanceLogger(__name__)
 
 class DuckDBViewManager:
     """Manages DuckDB views for optimized querying"""
-    
+
+    _instance = None
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+            cls._instance._initialized = False
+            cls._instance._views_created = False
+        return cls._instance
+
     def __init__(self):
-        """Initialize view manager with DuckDB connection"""
-        self.conn = duckdb_data_service.conn
-        self._views_created = False
-        
-        # Create views on initialization
-        self.create_all_views()
+        """Initialize view manager - actual work deferred to first access"""
+        pass
+
+    @property
+    def conn(self):
+        """Lazy access to DuckDB connection"""
+        return duckdb_data_service.conn
+
+    def _ensure_initialized(self):
+        """Ensure views are created on first use"""
+        if not self._initialized:
+            self._initialized = True
+            self.create_all_views()
     
     @performance_monitor(threshold=1.0)
     def create_all_views(self) -> None:
-        """Create all optimization views"""
+        """Create all optimization views (skips if already exist in persistent DB)"""
         if self._views_created:
-            logger.debug("Views already created, skipping")
+            logger.debug("Views already created this session, skipping")
             return
-        
+
+        # Check if views already exist in persistent DB
+        if self._check_views_exist():
+            logger.info("Views already exist in persistent DB, skipping creation")
+            self._views_created = True
+            return
+
         logger.info("Creating DuckDB optimization views...")
-        
+
         with perf_logger.timer("create_views", threshold=0.5):
             self._create_integration_views()
             self._create_aggregation_views()
             self._create_helper_views()
             self._create_materialized_views()
-        
+
         self._views_created = True
         logger.info("All DuckDB views created successfully")
-    
+
+    def _check_views_exist(self) -> bool:
+        """Check if optimization views already exist in persistent DB"""
+        try:
+            result = self.conn.execute("""
+                SELECT COUNT(*) FROM information_schema.tables
+                WHERE table_name = 'integrated_data_30min' AND table_type = 'VIEW'
+            """).fetchone()
+            return result[0] > 0
+        except Exception:
+            return False
+
+    def force_recreate_views(self) -> None:
+        """Force recreation of all views (useful after schema changes)"""
+        logger.info("Force recreating all views...")
+        self._views_created = False
+        # Drop existing views first
+        for view in ['integrated_data_30min', 'integrated_data_5min',
+                     'hourly_by_fuel_region', 'daily_by_fuel', 'daily_by_station',
+                     'active_stations', 'price_stats_by_region', 'high_price_events',
+                     'station_time_series_5min', 'station_time_series_30min',
+                     'station_time_of_day', 'station_performance_metrics',
+                     'generation_by_fuel_30min', 'generation_by_fuel_5min',
+                     'generation_with_prices_30min', 'capacity_utilization_30min',
+                     'daily_generation_by_fuel']:
+            try:
+                self.conn.execute(f"DROP VIEW IF EXISTS {view}")
+            except Exception:
+                pass
+        try:
+            self.conn.execute("DROP TABLE IF EXISTS monthly_summary")
+        except Exception:
+            pass
+        # Recreate all
+        self._create_integration_views()
+        self._create_aggregation_views()
+        self._create_helper_views()
+        self._create_materialized_views()
+        self._views_created = True
+        logger.info("All views recreated")
+
     def _create_integration_views(self) -> None:
         """Create views that integrate generation, price, and DUID data"""
         
@@ -449,28 +511,31 @@ class DuckDBViewManager:
     
     def refresh_materialized_views(self) -> None:
         """Refresh materialized views (recreate tables)"""
+        self._ensure_initialized()
         logger.info("Refreshing materialized views...")
-        
+
         with perf_logger.timer("refresh_materialized_views", threshold=1.0):
             # Drop and recreate monthly summary
             self.conn.execute("DROP TABLE IF EXISTS monthly_summary")
             self._create_materialized_views()
-        
+
         logger.info("Materialized views refreshed")
     
     def get_view_list(self) -> List[str]:
         """Get list of available views"""
+        self._ensure_initialized()
         result = self.conn.execute("""
-            SELECT table_name 
-            FROM information_schema.tables 
+            SELECT table_name
+            FROM information_schema.tables
             WHERE table_type = 'VIEW'
             ORDER BY table_name
         """).fetchall()
-        
+
         return [row[0] for row in result]
-    
+
     def get_view_info(self, view_name: str) -> Dict[str, Any]:
         """Get information about a specific view"""
+        self._ensure_initialized()
         # Get column information
         columns = self.conn.execute(f"""
             SELECT column_name, data_type
@@ -497,6 +562,7 @@ class DuckDBViewManager:
         replace: bool = True
     ) -> bool:
         """Create a custom view from a query"""
+        self._ensure_initialized()
         try:
             if replace:
                 create_stmt = f"CREATE OR REPLACE VIEW {view_name} AS {query}"
@@ -513,6 +579,7 @@ class DuckDBViewManager:
     
     def drop_view(self, view_name: str) -> bool:
         """Drop a view"""
+        self._ensure_initialized()
         try:
             self.conn.execute(f"DROP VIEW IF EXISTS {view_name}")
             logger.info(f"Dropped view: {view_name}")
@@ -523,7 +590,7 @@ class DuckDBViewManager:
             return False
 
 
-# Singleton instance
+# Lazy singleton - views created on first use, not at import
 view_manager = DuckDBViewManager()
 
 

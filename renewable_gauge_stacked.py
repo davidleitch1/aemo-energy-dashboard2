@@ -15,6 +15,7 @@ sys.path.insert(0, 'src')
 # Load environment variables
 from dotenv import load_dotenv
 
+import duckdb
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
@@ -176,82 +177,84 @@ def interpolate_rooftop_to_5min(df_30min):
     
     return df_5min
 
+def _query_duckdb(query, db_path=None, max_retries=3, retry_delay=0.2):
+    """Execute a DuckDB query with retry on lock conflict. Returns a DataFrame."""
+    if db_path is None:
+        db_path = os.getenv('AEMO_DUCKDB_PATH')
+    last_error = None
+    for attempt in range(max_retries):
+        try:
+            conn = duckdb.connect(db_path, read_only=True)
+            result = conn.execute(query).df()
+            conn.close()
+            return result
+        except duckdb.IOException as e:
+            last_error = e
+            if attempt < max_retries - 1:
+                time.sleep(retry_delay * (attempt + 1))
+        except Exception as e:
+            raise e
+    raise last_error
+
+
 def get_current_generation_stats():
-    """Get current generation statistics including individual fuel types"""
+    """Get current generation statistics including individual fuel types.
+
+    Queries the DuckDB database for only the latest data instead of reading
+    entire parquet files into memory.
+    """
     try:
-        # Get file paths from environment
-        gen_5min_path = os.getenv('GEN_OUTPUT_FILE_5MIN')
-        gen_30min_path = os.getenv('GEN_OUTPUT_FILE')
-        rooftop_path = os.getenv('ROOFTOP_SOLAR_FILE')
-        gen_info_path = os.getenv('GEN_INFO_FILE')
-        
-        # If 5-minute path not set, try to derive it
-        if not gen_5min_path and gen_30min_path:
-            gen_5min_path = gen_30min_path.replace('scada30.parquet', 'scada5.parquet')
-        
-        # Load DUID mapping
-        import pickle
-        with open(gen_info_path, 'rb') as f:
-            gen_info = pickle.load(f)
-        
-        # Create DUID to fuel mapping
-        duid_to_fuel = gen_info.set_index('DUID')['Fuel'].to_dict()
-        
-        # Get time range - use latest data timestamp to avoid timezone issues
-        # AEMO data is in AEST (Queensland time), but system may be in AEDT during daylight saving
-        # Load data first to get its latest timestamp
-        gen_df = pd.read_parquet(gen_5min_path)
-        gen_df['settlementdate'] = pd.to_datetime(gen_df['settlementdate'])
-        
-        # Use the latest timestamp in the data as our end time
-        end_time = gen_df['settlementdate'].max()
-        start_time = end_time - timedelta(minutes=15)
-        
-        # Filter to recent data
-        gen_df = gen_df[(gen_df['settlementdate'] >= start_time) & 
-                        (gen_df['settlementdate'] <= end_time)]
-        
+        db_path = os.getenv('AEMO_DUCKDB_PATH')
+        if not db_path:
+            print("AEMO_DUCKDB_PATH not set")
+            return None
+
+        # Get latest timestamp and generation by fuel type in a single query
+        gen_df = _query_duckdb(f"""
+            SELECT s.settlementdate, s.duid, s.scadavalue, d.Fuel as fuel_type
+            FROM scada5 s
+            JOIN duid_info d ON s.duid = d.DUID
+            WHERE s.settlementdate >= (SELECT MAX(settlementdate) - INTERVAL '15 minutes' FROM scada5)
+              AND d.Fuel NOT IN ('Battery Storage', 'Transmission Flow')
+        """, db_path)
+
         if gen_df.empty:
             print("No recent generation data found")
             return None
-        
-        # Map fuel types
-        gen_df['fuel_type'] = gen_df['duid'].map(duid_to_fuel)
-        gen_df = gen_df.dropna(subset=['fuel_type'])
-        
-        # Exclude battery storage and transmission
-        gen_df = gen_df[~gen_df['fuel_type'].isin(EXCLUDED_FUELS)]
-        
+
+        gen_df['settlementdate'] = pd.to_datetime(gen_df['settlementdate'])
+
         # Get latest timestamp
         latest_time = gen_df['settlementdate'].max()
         latest_gen = gen_df[gen_df['settlementdate'] == latest_time]
-        
+
         # Aggregate by fuel type
         fuel_totals = latest_gen.groupby('fuel_type')['scadavalue'].sum()
-        
-        # Load and process rooftop data
-        rooftop_df = pd.read_parquet(rooftop_path)
-        rooftop_df['settlementdate'] = pd.to_datetime(rooftop_df['settlementdate'])
-        rooftop_df = rooftop_df[(rooftop_df['settlementdate'] >= start_time - timedelta(hours=1)) & 
-                                (rooftop_df['settlementdate'] <= end_time)]
-        
+
+        # Get rooftop data — query only recent rows
+        rooftop_df = _query_duckdb(f"""
+            SELECT settlementdate, regionid, power
+            FROM rooftop30
+            WHERE settlementdate >= (SELECT MAX(settlementdate) - INTERVAL '1 hour' FROM rooftop30)
+        """, db_path)
+
         rooftop_mw = 0
         if not rooftop_df.empty and 'regionid' in rooftop_df.columns:
-            # Pivot and interpolate rooftop data
+            rooftop_df['settlementdate'] = pd.to_datetime(rooftop_df['settlementdate'])
             rooftop_wide = rooftop_df.pivot(
                 index='settlementdate',
                 columns='regionid',
                 values='power'
             ).fillna(0)
-            
+
             rooftop_5min = interpolate_rooftop_to_5min(rooftop_wide)
-            
+
             if latest_time in rooftop_5min.index:
                 rooftop_mw = rooftop_5min.loc[latest_time, 'NEM']
             else:
                 closest_idx = rooftop_5min.index.get_indexer([latest_time], method='nearest')[0]
                 rooftop_mw = rooftop_5min.iloc[closest_idx]['NEM']
-        
+
         # Calculate statistics
         stats = {
             'timestamp': latest_time,
@@ -261,17 +264,17 @@ def get_current_generation_stats():
             'water_mw': fuel_totals.get('Water', 0) + fuel_totals.get('Hydro', 0),
             'biomass_mw': fuel_totals.get('Biomass', 0)
         }
-        
+
         # Calculate renewable percentage
         renewable_mw = fuel_totals[fuel_totals.index.isin(RENEWABLE_FUELS)].sum() + rooftop_mw
         total_mw = fuel_totals.sum() + rooftop_mw
-        
+
         stats['renewable_mw'] = renewable_mw
         stats['total_mw'] = total_mw
         stats['renewable_pct'] = (renewable_mw / total_mw * 100) if total_mw > 0 else 0
-        
+
         return stats
-            
+
     except Exception as e:
         print(f"Error calculating generation stats: {e}")
         import traceback

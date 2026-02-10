@@ -643,146 +643,206 @@ def create_key_events(prices_df, gen_df):
 # MAIN TAB CREATION
 # =============================================================================
 
+def _build_tab_content():
+    """Build the actual tab content - called after loading indicator is shown."""
+    import time
+    timings = {}
+    total_start = time.time()
+
+    logger.info("Building Today tab content...")
+
+    # Load data
+    t0 = time.time()
+    prices_df, prices_end = load_price_data(hours=24)
+    timings['load_prices'] = time.time() - t0
+    logger.info(f"Loaded prices to {prices_end} ({timings['load_prices']:.2f}s)")
+
+    t0 = time.time()
+    gen_df, gen_end = load_generation_data(hours=24)
+    timings['load_generation'] = time.time() - t0
+    logger.info(f"Loaded generation to {gen_end} ({timings['load_generation']:.2f}s)")
+
+    # Fetch forecast and notices
+    t0 = time.time()
+    predispatch_df, pd_run_time = fetch_predispatch_forecasts()
+    timings['fetch_forecast'] = time.time() - t0
+    logger.info(f"Fetched forecast ({timings['fetch_forecast']:.2f}s)")
+
+    t0 = time.time()
+    notices = fetch_market_notices(limit=10)
+    timings['fetch_notices'] = time.time() - t0
+    logger.info(f"Fetched notices ({timings['fetch_notices']:.2f}s)")
+
+    # Create key events
+    t0 = time.time()
+    events = create_key_events(prices_df, gen_df)
+    timings['create_events'] = time.time() - t0
+
+    # === LEFT COLUMN: Past 24 Hours ===
+    t0 = time.time()
+    gen_chart = pn.pane.Plotly(
+        create_generation_stack(gen_df),
+        height=280,
+        sizing_mode='stretch_width'
+    )
+    timings['gen_chart'] = time.time() - t0
+
+    # Events panel
+    events_html = f'<div style="font-size: 12px;"><h4 style="margin: 5px 0 8px 0; color: {FLEXOKI["foreground"]};">Key Events (24h)</h4>'
+    for event in events:
+        events_html += f'<div style="margin: 4px 0; padding: 5px 8px; border-left: 3px solid {event["color"]}; background: {FLEXOKI["ui"]}; font-size: 11px;">{event["text"]}</div>'
+    if not events:
+        events_html += f'<div style="color: {FLEXOKI["muted"]};">No significant events</div>'
+    events_html += "</div>"
+    events_panel = pn.pane.HTML(events_html, sizing_mode='stretch_width')
+
+    # Gauge with legend
+    t0 = time.time()
+    gauge_fig, gauge_legend_html = create_renewable_gauge_stacked(gen_df)
+    gauge = pn.Column(
+        pn.pane.Plotly(gauge_fig, sizing_mode='fixed', width=400, height=200),
+        pn.pane.HTML(gauge_legend_html, width=400),
+        sizing_mode='fixed', width=400
+    )
+    timings['gauge'] = time.time() - t0
+
+    # === CENTER COLUMN: Prices Now ===
+    t0 = time.time()
+    price_fig = create_price_chart_matplotlib(prices_df)
+    price_chart = pn.pane.Matplotlib(price_fig, sizing_mode='fixed', width=420, height=300)
+    plt.close(price_fig)
+    timings['price_chart'] = time.time() - t0
+
+    t0 = time.time()
+    price_table = pn.pane.HTML(
+        create_price_table_html(prices_df),
+        sizing_mode='stretch_width'
+    )
+    timings['price_table'] = time.time() - t0
+
+    # === RIGHT COLUMN: Looking Ahead ===
+    t0 = time.time()
+    forecast_table = pn.pane.HTML(
+        create_forecast_table(predispatch_df, pd_run_time),
+        sizing_mode='stretch_width'
+    )
+    timings['forecast_table'] = time.time() - t0
+
+    notices_html = f'<h4 style="margin: 5px 0 8px 0; color: {FLEXOKI["foreground"]};">Key Market Notices</h4>'
+    notices_panel = pn.Column(
+        pn.pane.HTML(notices_html),
+        create_notices_panel(notices),
+        sizing_mode='stretch_width'
+    )
+
+    # Section headers
+    def section_header(text):
+        return pn.pane.HTML(
+            f'<h3 style="margin: 0; padding: 8px 0 5px 0; color: {FLEXOKI["foreground"]}; '
+            f'border-bottom: 1px solid {FLEXOKI["ui_border"]};">{text}</h3>',
+            sizing_mode='stretch_width'
+        )
+
+    # === BUILD LAYOUT ===
+    left_col = pn.Column(
+        section_header("Past 24 Hours"),
+        gen_chart,
+        events_panel,
+        pn.Spacer(height=10),
+        gauge,
+        width=500, sizing_mode='fixed',
+    )
+
+    center_col = pn.Column(
+        section_header("Prices Now"),
+        price_chart,
+        price_table,
+        width=440, sizing_mode='fixed',
+    )
+
+    right_col = pn.Column(
+        section_header("Looking Ahead"),
+        forecast_table,
+        pn.Spacer(height=15),
+        notices_panel,
+        width=350, sizing_mode='fixed',
+    )
+
+    main = pn.Row(
+        left_col,
+        pn.Spacer(width=15),
+        center_col,
+        pn.Spacer(width=15),
+        right_col,
+        sizing_mode='fixed'
+    )
+
+    # Wrap in container with background
+    layout = pn.Column(
+        main,
+        sizing_mode='stretch_width',
+        styles={'background': FLEXOKI['background'], 'padding': '10px 15px 15px 15px'},
+    )
+
+    # Log timing summary
+    total_time = time.time() - total_start
+    timings['total'] = total_time
+    timing_str = ', '.join(f"{k}={v:.2f}s" for k, v in timings.items())
+    logger.info(f"Today tab timings: {timing_str}")
+
+    return layout
+
+
 def create_nem_dash_tab(dashboard_instance=None):
-    """Create the Today tab with 3-column layout matching mockup V4."""
-    try:
-        logger.info("Creating Today tab (NEM at a Glance)")
+    """
+    Create the Today tab with immediate loading indicator.
 
-        # Load data
-        prices_df, prices_end = load_price_data(hours=24)
-        logger.info(f"Loaded prices to {prices_end}")
+    Shows a loading spinner immediately, then builds content after page loads.
+    Uses pn.state.onload to defer heavy content loading until after the page is served.
+    """
+    logger.info("Creating Today tab (NEM at a Glance)")
 
-        gen_df, gen_end = load_generation_data(hours=24)
-        logger.info(f"Loaded generation to {gen_end}")
+    # Create loading indicator HTML
+    loading_html = f"""
+    <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;
+                height:500px;color:{FLEXOKI['muted']};background:{FLEXOKI['background']};">
+        <div style="width:50px;height:50px;border:4px solid {FLEXOKI['ui_border']};
+                    border-top-color:{FLEXOKI_ACCENT['cyan']};border-radius:50%;
+                    animation:spin 1s linear infinite;"></div>
+        <p style="margin-top:20px;font-size:14px;">Loading NEM Dashboard...</p>
+    </div>
+    <style>@keyframes spin {{from{{transform:rotate(0deg)}}to{{transform:rotate(360deg)}}}}</style>
+    """
 
-        # Fetch forecast and notices
-        logger.info("Fetching pre-dispatch forecast...")
-        predispatch_df, pd_run_time = fetch_predispatch_forecasts()
+    # Create container that starts with loading indicator
+    loading_pane = pn.pane.HTML(loading_html, sizing_mode='stretch_width')
 
-        logger.info("Fetching market notices...")
-        notices = fetch_market_notices(limit=10)
+    container = pn.Column(
+        loading_pane,
+        sizing_mode='stretch_width',
+        styles={'background': FLEXOKI['background'], 'min-height': '600px'},
+        name="Today"
+    )
 
-        # Create key events
-        events = create_key_events(prices_df, gen_df)
+    # Schedule content loading to run AFTER page is served to browser
+    def load_content():
+        """Called after page loads in browser via websocket callback."""
+        logger.info("onload callback triggered - building Today tab content")
+        try:
+            content = _build_tab_content()
+            container[:] = [content]  # Replace loading indicator with actual content
+            logger.info("Today tab content loaded successfully")
+        except Exception as e:
+            logger.error(f"Error building Today tab: {e}")
+            container[:] = [pn.pane.HTML(
+                f"<div style='padding:20px;text-align:center;color:{FLEXOKI['foreground']};'>"
+                f"<h2>Error Loading</h2><p>{e}</p></div>"
+            )]
 
-        logger.info("Creating components...")
+    # pn.state.onload runs callback after page is served and websocket connects
+    pn.state.onload(load_content)
 
-        # === LEFT COLUMN: Past 24 Hours ===
-        gen_chart = pn.pane.Plotly(
-            create_generation_stack(gen_df),
-            height=280,
-            sizing_mode='stretch_width'
-        )
-
-        # Events panel
-        events_html = f'<div style="font-size: 12px;"><h4 style="margin: 5px 0 8px 0; color: {FLEXOKI["foreground"]};">Key Events (24h)</h4>'
-        for event in events:
-            events_html += f'<div style="margin: 4px 0; padding: 5px 8px; border-left: 3px solid {event["color"]}; background: {FLEXOKI["ui"]}; font-size: 11px;">{event["text"]}</div>'
-        if not events:
-            events_html += f'<div style="color: {FLEXOKI["muted"]};">No significant events</div>'
-        events_html += "</div>"
-        events_panel = pn.pane.HTML(events_html, sizing_mode='stretch_width')
-
-        # Gauge with legend
-        gauge_fig, gauge_legend_html = create_renewable_gauge_stacked(gen_df)
-        gauge = pn.Column(
-            pn.pane.Plotly(gauge_fig, sizing_mode='fixed', width=400, height=200),
-            pn.pane.HTML(gauge_legend_html, width=400),
-            sizing_mode='fixed', width=400
-        )
-
-        # === CENTER COLUMN: Prices Now ===
-        price_fig = create_price_chart_matplotlib(prices_df)
-        price_chart = pn.pane.Matplotlib(price_fig, sizing_mode='fixed', width=420, height=300)
-        plt.close(price_fig)
-
-        price_table = pn.pane.HTML(
-            create_price_table_html(prices_df),
-            sizing_mode='stretch_width'
-        )
-
-        # === RIGHT COLUMN: Looking Ahead ===
-        forecast_table = pn.pane.HTML(
-            create_forecast_table(predispatch_df, pd_run_time),
-            sizing_mode='stretch_width'
-        )
-
-        notices_html = f'<h4 style="margin: 5px 0 8px 0; color: {FLEXOKI["foreground"]};">Key Market Notices</h4>'
-        notices_panel = pn.Column(
-            pn.pane.HTML(notices_html),
-            create_notices_panel(notices),
-            sizing_mode='stretch_width'
-        )
-
-        # Section headers
-        def section_header(text):
-            return pn.pane.HTML(
-                f'<h3 style="margin: 0; padding: 8px 0 5px 0; color: {FLEXOKI["foreground"]}; '
-                f'border-bottom: 1px solid {FLEXOKI["ui_border"]};">{text}</h3>',
-                sizing_mode='stretch_width'
-            )
-
-        # === BUILD LAYOUT ===
-        left_col = pn.Column(
-            section_header("Past 24 Hours"),
-            gen_chart,
-            events_panel,
-            pn.Spacer(height=10),
-            gauge,
-            width=500, sizing_mode='fixed',
-        )
-
-        center_col = pn.Column(
-            section_header("Prices Now"),
-            price_chart,
-            price_table,
-            width=440, sizing_mode='fixed',
-        )
-
-        right_col = pn.Column(
-            section_header("Looking Ahead"),
-            forecast_table,
-            pn.Spacer(height=15),
-            notices_panel,
-            width=350, sizing_mode='fixed',
-        )
-
-        main = pn.Row(
-            left_col,
-            pn.Spacer(width=15),
-            center_col,
-            pn.Spacer(width=15),
-            right_col,
-            sizing_mode='fixed'
-        )
-
-        # Wrap in container with background
-        layout = pn.Column(
-            main,
-            sizing_mode='stretch_width',
-            styles={'background': FLEXOKI['background'], 'padding': '10px 15px 15px 15px'},
-            name="Today"
-        )
-
-        logger.info("Today tab created successfully")
-        return layout
-
-    except Exception as e:
-        logger.error(f"Error creating Today tab: {e}")
-        import traceback
-        traceback.print_exc()
-        return pn.Column(
-            pn.pane.HTML(
-                f"<div style='padding:20px;text-align:center;'>"
-                f"<h2>Error Loading Today Tab</h2>"
-                f"<p>Error: {e}</p>"
-                f"<p>Please check the logs and try refreshing.</p>"
-                f"</div>"
-            ),
-            name="Today",
-            sizing_mode='stretch_width',
-            height=600
-        )
+    return container
 
 
 # Alias for backward compatibility
