@@ -220,41 +220,61 @@ class NEMDashQueryManager:
             # Rooftop solar comes from a separate source with regionids
             rooftop_mw = 0
             try:
-                # Query rooftop solar directly from rooftop_30min table
-                # Note: rooftop data has 'power' column, not 'value', and is split by regionid
                 import os
-                data_dir = os.environ.get('DATA_DIR', os.environ.get('AEMO_DATA_PATH', '/Users/davidleitch/aemo_production/data'))
-                rooftop_path = os.path.join(data_dir, "rooftop30.parquet")
+                duckdb_path = os.getenv('AEMO_DUCKDB_PATH')
 
-                rooftop_query = """
-                    SELECT SUM(CAST(power AS DOUBLE)) as total_rooftop
-                    FROM read_parquet(?)
-                    WHERE settlementdate >= ?
-                    AND settlementdate <= ?
-                    AND settlementdate = (
-                        SELECT MAX(settlementdate)
+                if duckdb_path:
+                    import duckdb as _ddb
+                    _conn = _ddb.connect(duckdb_path, read_only=True)
+                    rooftop_query = """
+                        SELECT SUM(CAST(power AS DOUBLE)) as total_rooftop
+                        FROM rooftop30
+                        WHERE settlementdate >= ?
+                        AND settlementdate <= ?
+                        AND settlementdate = (
+                            SELECT MAX(settlementdate)
+                            FROM rooftop30
+                            WHERE settlementdate <= ?
+                        )
+                    """
+                    rooftop_result = _conn.execute(
+                        rooftop_query, [start_date, end_date, end_date]
+                    ).fetchone()
+
+                    if not (rooftop_result and rooftop_result[0]):
+                        rooftop_result = _conn.execute(
+                            rooftop_query,
+                            [end_date - timedelta(hours=1), end_date, end_date]
+                        ).fetchone()
+                    _conn.close()
+                else:
+                    data_dir = os.environ.get('DATA_DIR', os.environ.get('AEMO_DATA_PATH', '/Users/davidleitch/aemo_production/data'))
+                    rooftop_path = os.path.join(data_dir, "rooftop30.parquet")
+                    rooftop_query = """
+                        SELECT SUM(CAST(power AS DOUBLE)) as total_rooftop
                         FROM read_parquet(?)
-                        WHERE settlementdate <= ?
-                    )
-                """
+                        WHERE settlementdate >= ?
+                        AND settlementdate <= ?
+                        AND settlementdate = (
+                            SELECT MAX(settlementdate)
+                            FROM read_parquet(?)
+                            WHERE settlementdate <= ?
+                        )
+                    """
+                    rooftop_result = self.query_manager.conn.execute(
+                        rooftop_query,
+                        [rooftop_path, start_date, end_date, rooftop_path, end_date]
+                    ).fetchone()
 
-                rooftop_result = self.query_manager.conn.execute(
-                    rooftop_query,
-                    [rooftop_path, start_date, end_date, rooftop_path, end_date]
-                ).fetchone()
+                    if not (rooftop_result and rooftop_result[0]):
+                        rooftop_result = self.query_manager.conn.execute(
+                            rooftop_query,
+                            [rooftop_path, end_date - timedelta(hours=1), end_date, rooftop_path, end_date]
+                        ).fetchone()
 
                 if rooftop_result and rooftop_result[0]:
                     rooftop_mw = float(rooftop_result[0])
                     logger.info(f"Rooftop solar: {rooftop_mw:.0f}MW")
-                else:
-                    # Fallback: try last hour of rooftop data
-                    rooftop_result = self.query_manager.conn.execute(
-                        rooftop_query,
-                        [rooftop_path, end_date - timedelta(hours=1), end_date, rooftop_path, end_date]
-                    ).fetchone()
-                    if rooftop_result and rooftop_result[0]:
-                        rooftop_mw = float(rooftop_result[0])
-                        logger.info(f"Rooftop solar (fallback): {rooftop_mw:.0f}MW")
             except Exception as e:
                 logger.warning(f"Could not get rooftop solar data: {e}")
 

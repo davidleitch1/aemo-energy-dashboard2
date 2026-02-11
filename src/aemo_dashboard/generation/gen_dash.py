@@ -832,7 +832,7 @@ class EnergyDashboard(param.Parameterized):
         """Load and process price data using enhanced adapter with auto resolution"""
         try:
             # Use the enhanced price adapter with time filtering and auto resolution
-            from ..shared.price_adapter import load_price_data
+            from ..shared.adapter_selector import load_price_data
             
             # Calculate time window based on selected time range
             start_time, end_time = self._get_effective_date_range()
@@ -933,7 +933,7 @@ class EnergyDashboard(param.Parameterized):
     def load_transmission_data(self):
         """Load and process transmission flow data using enhanced adapter"""
         try:
-            from ..shared.transmission_adapter import load_transmission_data
+            from ..shared.adapter_selector import load_transmission_data
             
             # Calculate time window based on selected time range
             start_datetime, end_datetime = self._get_effective_date_range()
@@ -980,11 +980,11 @@ class EnergyDashboard(param.Parameterized):
     def load_rooftop_solar_data(self):
         """Load and process rooftop solar data using the enhanced rooftop adapter"""
         try:
-            from ..shared.rooftop_adapter import load_rooftop_data
-            
+            from ..shared.adapter_selector import load_rooftop_data
+
             # Calculate time window based on selected time range
             start_datetime, end_datetime = self._get_effective_date_range()
-            
+
             # Load data using the enhanced adapter with time filtering
             df = load_rooftop_data(
                 start_date=start_datetime,
@@ -1483,7 +1483,7 @@ class EnergyDashboard(param.Parameterized):
 
             # Add rooftop solar if available (same logic as process_data_for_region)
             try:
-                from ..shared.rooftop_adapter import load_rooftop_data
+                from ..shared.adapter_selector import load_rooftop_data
                 rooftop_df = load_rooftop_data(
                     start_date=pcp_start,
                     end_date=pcp_end
@@ -3172,12 +3172,28 @@ class EnergyDashboard(param.Parameterized):
                 # Get the same date range as the generation data
                 start_datetime, end_datetime = self._get_effective_date_range()
 
-                price_file = config.spot_hist_file
-                if os.path.exists(price_file):
-                    price_df = pd.read_parquet(price_file)
+                duckdb_path = os.getenv('AEMO_DUCKDB_PATH')
+                if duckdb_path:
+                    import duckdb as _ddb
+                    _conn = _ddb.connect(duckdb_path, read_only=True)
+                    price_df = _conn.execute(
+                        "SELECT settlementdate, regionid, rrp FROM prices5 "
+                        "WHERE settlementdate >= ? AND settlementdate <= ?",
+                        [start_datetime, end_datetime]
+                    ).df()
+                    _conn.close()
                     price_df['settlementdate'] = pd.to_datetime(price_df['settlementdate'])
                     price_df = price_df.set_index('settlementdate')
+                else:
+                    price_file = config.spot_hist_file
+                    if os.path.exists(price_file):
+                        price_df = pd.read_parquet(price_file)
+                        price_df['settlementdate'] = pd.to_datetime(price_df['settlementdate'])
+                        price_df = price_df.set_index('settlementdate')
+                    else:
+                        price_df = pd.DataFrame()
 
+                if not price_df.empty:
                     # Filter by date range to match generation data
                     if start_datetime is not None and end_datetime is not None:
                         price_df = price_df[(price_df.index >= start_datetime) & (price_df.index <= end_datetime)]
@@ -4862,7 +4878,7 @@ class EnergyDashboard(param.Parameterized):
                         return
                     
                     # Import price adapter
-                    from ..shared.price_adapter import load_price_data
+                    from ..shared.adapter_selector import load_price_data
                     
                     # Load price data
                     logger.info(f"Loading price data for regions: {selected_regions}")
@@ -5281,7 +5297,7 @@ class EnergyDashboard(param.Parameterized):
                             )
                         else:
                             # Fall back to loading directly if query manager not available
-                            from ..shared.generation_adapter import load_generation_data
+                            from ..shared.adapter_selector import load_generation_data
                             gen_data = load_generation_data(
                                 start_date=start_datetime,
                                 end_date=end_datetime,

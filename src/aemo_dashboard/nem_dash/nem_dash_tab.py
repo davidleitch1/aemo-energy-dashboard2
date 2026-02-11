@@ -9,6 +9,7 @@ Layout: 3 columns
 - Right: Looking Ahead (Forecast table, Market Notices)
 """
 
+import os
 import pandas as pd
 import numpy as np
 import panel as pn
@@ -20,6 +21,8 @@ import matplotlib.dates as mdates
 from datetime import datetime, timedelta
 from pathlib import Path
 import pickle
+
+DUCKDB_PATH = os.getenv('AEMO_DUCKDB_PATH')
 
 # Import LOESS for price smoothing
 try:
@@ -91,18 +94,27 @@ GAUGE_FUEL_COLORS = {
 # =============================================================================
 
 def load_price_data(hours=24):
-    """Load recent price data from parquet."""
+    """Load recent price data from DuckDB (preferred) or parquet fallback."""
     try:
-        prices_path = DATA_PATH / 'prices5.parquet'
-        prices_df = pd.read_parquet(prices_path)
-
-        # Handle column name variations
-        if 'settlementdate' in prices_df.columns:
-            prices_df = prices_df.rename(columns={
-                'settlementdate': 'SETTLEMENTDATE',
-                'regionid': 'REGIONID',
-                'rrp': 'RRP'
-            })
+        if DUCKDB_PATH:
+            import duckdb
+            conn = duckdb.connect(DUCKDB_PATH, read_only=True)
+            prices_df = conn.execute(
+                "SELECT settlementdate AS SETTLEMENTDATE, regionid AS REGIONID, rrp AS RRP "
+                "FROM prices5 ORDER BY settlementdate DESC LIMIT ?",
+                [hours * 12 * 5 + 100]  # ~hours worth of 5-min data across 5 regions, with buffer
+            ).df()
+            conn.close()
+            logger.info(f"Loaded {len(prices_df)} price records from DuckDB")
+        else:
+            prices_path = DATA_PATH / 'prices5.parquet'
+            prices_df = pd.read_parquet(prices_path)
+            if 'settlementdate' in prices_df.columns:
+                prices_df = prices_df.rename(columns={
+                    'settlementdate': 'SETTLEMENTDATE',
+                    'regionid': 'REGIONID',
+                    'rrp': 'RRP'
+                })
 
         prices_df['SETTLEMENTDATE'] = pd.to_datetime(prices_df['SETTLEMENTDATE'])
         end_time = prices_df['SETTLEMENTDATE'].max()
@@ -119,15 +131,27 @@ def load_price_data(hours=24):
 def load_generation_data(hours=24):
     """Load recent generation data aggregated by fuel type, including rooftop solar."""
     try:
-        scada_path = DATA_PATH / 'scada5.parquet'
-        scada_df = pd.read_parquet(scada_path)
-
-        if 'settlementdate' in scada_df.columns:
-            scada_df = scada_df.rename(columns={
-                'settlementdate': 'SETTLEMENTDATE',
-                'duid': 'DUID',
-                'scadavalue': 'MW'
-            })
+        if DUCKDB_PATH:
+            import duckdb
+            conn = duckdb.connect(DUCKDB_PATH, read_only=True)
+            cutoff = datetime.now() - timedelta(hours=hours)
+            scada_df = conn.execute(
+                "SELECT settlementdate AS SETTLEMENTDATE, duid AS DUID, scadavalue AS MW "
+                "FROM scada5 WHERE settlementdate >= ? "
+                "ORDER BY settlementdate",
+                [cutoff]
+            ).df()
+            conn.close()
+            logger.info(f"Loaded {len(scada_df)} scada records from DuckDB")
+        else:
+            scada_path = DATA_PATH / 'scada5.parquet'
+            scada_df = pd.read_parquet(scada_path)
+            if 'settlementdate' in scada_df.columns:
+                scada_df = scada_df.rename(columns={
+                    'settlementdate': 'SETTLEMENTDATE',
+                    'duid': 'DUID',
+                    'scadavalue': 'MW'
+                })
 
         scada_df['SETTLEMENTDATE'] = pd.to_datetime(scada_df['SETTLEMENTDATE'])
         end_time = scada_df['SETTLEMENTDATE'].max()

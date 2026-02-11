@@ -66,9 +66,12 @@ REGION_COLORS = {
     'VIC1': FLEXOKI_ACCENT['purple'],
 }
 
-# Function to open the parquet file with caching
+# DuckDB path (preferred over parquet when set)
+DUCKDB_PATH = os.getenv('AEMO_DUCKDB_PATH')
+
+# Function to load price data with caching
 def open_parquet_file(path):
-    """Load only recent data from parquet file with caching"""
+    """Load recent price data from DuckDB (preferred) or parquet with caching"""
     global _data_cache
 
     # Check cache
@@ -78,44 +81,56 @@ def open_parquet_file(path):
         (now - _data_cache['timestamp']).total_seconds() < _CACHE_TTL_SECONDS):
         return _data_cache['data']
 
-    # Load only last 48 hours of data (much faster than full file)
     try:
-        import pyarrow.parquet as pq
+        if DUCKDB_PATH:
+            import duckdb
+            conn = duckdb.connect(DUCKDB_PATH, read_only=True)
+            cutoff = now - timedelta(hours=48)
+            result = conn.execute(
+                "SELECT settlementdate, regionid, rrp FROM prices5 "
+                "WHERE settlementdate >= ? ORDER BY settlementdate",
+                [cutoff]
+            ).df()
+            conn.close()
 
-        # Read parquet metadata to get column names
-        parquet_file = pq.ParquetFile(path)
-        schema = parquet_file.schema_arrow
-
-        # Determine the date column name
-        if 'settlementdate' in schema.names:
-            date_col = 'settlementdate'
-        elif 'SETTLEMENTDATE' in schema.names:
-            date_col = 'SETTLEMENTDATE'
-        else:
-            date_col = None
-
-        # Filter to last 48 hours if we can identify the date column
-        cutoff = now - timedelta(hours=48)
-        if date_col:
-            filters = [(date_col, '>=', pd.Timestamp(cutoff))]
-            result = pd.read_parquet(path, filters=filters)
-        else:
-            result = pd.read_parquet(path)
-
-        # Ensure the index is properly set as datetime
-        if not isinstance(result.index, pd.DatetimeIndex):
-            if 'SETTLEMENTDATE' in result.columns:
-                result = result.set_index('SETTLEMENTDATE')
-            elif 'settlementdate' in result.columns:
+            # Set index to match expected format
+            if 'settlementdate' in result.columns:
                 result = result.set_index('settlementdate')
-            else:
-                try:
-                    result.index = pd.to_datetime(result.index)
-                except Exception:
-                    pass
+            result = result.sort_index()
 
-        # Sort by index to ensure chronological order
-        result = result.sort_index()
+            logging.info(f"Loaded {len(result)} price records from DuckDB")
+        else:
+            import pyarrow.parquet as pq
+
+            parquet_file = pq.ParquetFile(path)
+            schema = parquet_file.schema_arrow
+
+            if 'settlementdate' in schema.names:
+                date_col = 'settlementdate'
+            elif 'SETTLEMENTDATE' in schema.names:
+                date_col = 'SETTLEMENTDATE'
+            else:
+                date_col = None
+
+            cutoff = now - timedelta(hours=48)
+            if date_col:
+                filters = [(date_col, '>=', pd.Timestamp(cutoff))]
+                result = pd.read_parquet(path, filters=filters)
+            else:
+                result = pd.read_parquet(path)
+
+            if not isinstance(result.index, pd.DatetimeIndex):
+                if 'SETTLEMENTDATE' in result.columns:
+                    result = result.set_index('SETTLEMENTDATE')
+                elif 'settlementdate' in result.columns:
+                    result = result.set_index('settlementdate')
+                else:
+                    try:
+                        result.index = pd.to_datetime(result.index)
+                    except Exception:
+                        pass
+
+            result = result.sort_index()
 
         # Update cache
         _data_cache['data'] = result
@@ -124,8 +139,8 @@ def open_parquet_file(path):
         return result
 
     except Exception as e:
-        logging.error(f"Failed to load parquet file {path}: {e}")
-        raise ValueError(f"Failed to load parquet file {path}: {e}")
+        logging.error(f"Failed to load price data: {e}")
+        raise ValueError(f"Failed to load price data: {e}")
 
 # Flexoki Light style for dataframe
 styles = [

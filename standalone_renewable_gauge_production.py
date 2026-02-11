@@ -46,8 +46,15 @@ from aemo_dashboard.shared.config import config
 
 logger = get_logger(__name__)
 
-# Initialize query manager
-query_manager = NEMDashQueryManager()
+# Lazy initialization of query manager
+_query_manager = None
+
+def get_query_manager():
+    """Lazy initialization - only create query manager on first use"""
+    global _query_manager
+    if _query_manager is None:
+        _query_manager = NEMDashQueryManager()
+    return _query_manager
 
 # Renewable fuel types
 RENEWABLE_FUELS = ['Wind', 'Solar', 'Water', 'Rooftop Solar']
@@ -55,9 +62,6 @@ RENEWABLE_FUELS = ['Wind', 'Solar', 'Water', 'Rooftop Solar']
 # Records file location - use production data directory from env
 DATA_DIR = os.getenv('DATA_DIR', config.data_dir)
 RECORDS_FILE = Path(DATA_DIR) / 'renewable_records.json'
-
-print(f"Using data directory: {DATA_DIR}")
-print(f"Records file location: {RECORDS_FILE}")
 
 
 def load_renewable_records():
@@ -241,14 +245,35 @@ def create_gauge_figure(current_value, all_time_record, hour_record):
 
 
 def create_gauge_component():
-    """Create the gauge component that matches the main dashboard implementation"""
-    
-    def update_gauge():
-        """Update the gauge with current data"""
+    """Create the gauge component with deferred loading.
+
+    Shows a loading spinner immediately, then loads data after page renders.
+    Uses pn.state.onload to defer heavy data loading until after the page is served.
+    """
+
+    # Loading indicator HTML with spinner
+    loading_html = """
+    <div style="width:400px;height:350px;display:flex;flex-direction:column;
+                align-items:center;justify-content:center;background:#282a36;">
+        <div style="width:40px;height:40px;border:3px solid #44475a;
+                    border-top-color:#50fa7b;border-radius:50%;
+                    animation:spin 1s linear infinite;"></div>
+        <p style="margin-top:15px;font-size:12px;color:#6272a4;">Loading gauge...</p>
+    </div>
+    <style>@keyframes spin {from{transform:rotate(0deg)}to{transform:rotate(360deg)}}</style>
+    """
+
+    # Create container that starts with loading indicator
+    loading_pane = pn.pane.HTML(loading_html, width=400, height=350)
+    container = pn.Column(loading_pane, sizing_mode='fixed', width=400, height=350)
+
+    def load_gauge():
+        """Load gauge data - called after page loads via onload callback."""
+        logger.info("onload callback triggered - loading gauge data")
         try:
             # Get current renewable data - returns a dict
-            renewable_data = query_manager.get_renewable_data()
-            
+            renewable_data = get_query_manager().get_renewable_data()
+
             # The query manager returns a dict with renewable_mw, total_mw, renewable_pct
             if renewable_data and renewable_data.get('total_mw', 0) > 0:
                 current_percentage = renewable_data['renewable_pct']
@@ -256,33 +281,37 @@ def create_gauge_component():
             else:
                 logger.warning("No renewable data available")
                 current_percentage = 0
-            
+
             # Get current time info
             current_time = datetime.now()
             current_hour = current_time.hour
-            
+
             # Load and update records
             records = load_renewable_records()
             all_time_record, hour_record, _ = update_records(
                 current_percentage, current_time, current_hour, records
             )
-            
-            # Create and return gauge
+
+            # Create gauge figure
             fig = create_gauge_figure(current_percentage, all_time_record, hour_record)
-            
-            return pn.pane.Plotly(fig, sizing_mode='fixed', width=400, height=350)
-            
+            gauge_pane = pn.pane.Plotly(fig, sizing_mode='fixed', width=400, height=350)
+
+            # Replace loading indicator with gauge
+            container[:] = [gauge_pane]
+            logger.info("Gauge loaded successfully")
+
         except Exception as e:
-            logger.error(f"Error updating gauge: {e}")
-            # Return error display
-            return pn.pane.HTML(
-                f"<div style='width:400px;height:350px;display:flex;align-items:center;justify-content:center;'>"
-                f"<p style='color:white;'>Renewable Gauge Error: {e}</p></div>",
+            logger.error(f"Error loading gauge: {e}")
+            container[:] = [pn.pane.HTML(
+                f"<div style='width:400px;height:350px;display:flex;align-items:center;justify-content:center;background:#282a36;'>"
+                f"<p style='color:#ff5555;'>Gauge Error: {e}</p></div>",
                 width=400, height=350
-            )
-    
-    # Return a dynamic pane that updates
-    return pn.pane.panel(update_gauge, loading_indicator=True)
+            )]
+
+    # Schedule loading after page is served to browser
+    pn.state.onload(load_gauge)
+
+    return container
 
 
 def create_app():

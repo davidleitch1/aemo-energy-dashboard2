@@ -285,7 +285,7 @@ class StationAnalysisUI(param.Parameterized):
         """Filter search engine to only show DUIDs with recent generation data"""
         try:
             from datetime import datetime, timedelta
-            from ..shared.generation_adapter import load_generation_data
+            from ..shared.adapter_selector import load_generation_data
             
             # Get DUIDs with data in last 7 days
             cutoff_date = datetime.now() - timedelta(days=7)

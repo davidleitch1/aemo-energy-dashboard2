@@ -67,7 +67,20 @@ class CurtailmentQueryManager:
 
     def _create_views(self):
         """Create DuckDB views for curtailment data"""
+        import os
+        duckdb_path = os.getenv('AEMO_DUCKDB_PATH')
+
         try:
+            if duckdb_path:
+                self.conn.execute(f"ATTACH '{duckdb_path}' AS prod (READ_ONLY)")
+                regional_source = "prod.curtailment_regional5"
+                duid_source = "prod.curtailment_duid5"
+                prices_source = "prod.prices5"
+            else:
+                regional_source = f"read_parquet('{self.curtailment_regional_path}')"
+                duid_source = f"read_parquet('{self.curtailment_duid_path}')"
+                prices_source = f"read_parquet('{self.prices_path}')"
+
             # Create base view for regional curtailment data
             self.conn.execute(f"""
                 CREATE OR REPLACE VIEW curtailment_regional AS
@@ -84,7 +97,7 @@ class CurtailmentQueryManager:
                     -- Calculate totals for compatibility
                     solar_uigf + wind_uigf as total_uigf,
                     solar_cleared + wind_cleared as total_cleared
-                FROM read_parquet('{self.curtailment_regional_path}')
+                FROM {regional_source}
             """)
 
             # Create 30-minute aggregation view
@@ -155,7 +168,7 @@ class CurtailmentQueryManager:
                     uigf,
                     totalcleared,
                     curtailment
-                FROM read_parquet('{self.curtailment_duid_path}')
+                FROM {duid_source}
             """)
 
             # Create prices view for economic/grid curtailment classification
@@ -165,7 +178,7 @@ class CurtailmentQueryManager:
                     settlementdate as timestamp,
                     regionid as region,
                     rrp as price
-                FROM read_parquet('{self.prices_path}')
+                FROM {prices_source}
             """)
 
             logger.info("Curtailment views created successfully (regional + DUID + prices)")

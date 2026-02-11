@@ -10,6 +10,7 @@ Components:
 - Forecast caching for run-to-run comparison
 """
 
+import os
 import pandas as pd
 import panel as pn
 import json
@@ -28,26 +29,34 @@ logger = get_logger(__name__)
 config = Config()
 DATA_PATH = config.data_dir
 FORECAST_CACHE_PATH = DATA_PATH / 'forecast_cache.json'
+DUCKDB_PATH = os.getenv('AEMO_DUCKDB_PATH')
 
 
 def fetch_predispatch_forecasts():
     """
-    Load pre-dispatch price/demand/renewable forecasts from predispatch.parquet.
-
-    The parquet file is updated continuously by unified_collector.py every 4.5 minutes.
+    Load pre-dispatch price/demand/renewable forecasts from DuckDB or parquet.
 
     Returns:
         tuple: (DataFrame with forecasts, run_time datetime) or (None, None) on error
     """
     try:
-        parquet_path = DATA_PATH / 'predispatch.parquet'
+        if DUCKDB_PATH:
+            import duckdb
+            conn = duckdb.connect(DUCKDB_PATH, read_only=True)
+            df = conn.execute(
+                "SELECT * FROM predispatch WHERE run_time = (SELECT MAX(run_time) FROM predispatch)"
+            ).df()
+            conn.close()
+            logger.info(f"Loaded {len(df)} predispatch rows from DuckDB")
+        else:
+            parquet_path = DATA_PATH / 'predispatch.parquet'
 
-        if not parquet_path.exists():
-            logger.warning(f"Predispatch parquet not found: {parquet_path}")
-            return None, None
+            if not parquet_path.exists():
+                logger.warning(f"Predispatch parquet not found: {parquet_path}")
+                return None, None
 
-        # Read the parquet file
-        df = pd.read_parquet(parquet_path)
+            # Read the parquet file
+            df = pd.read_parquet(parquet_path)
 
         if df.empty:
             logger.warning("Predispatch parquet is empty")
@@ -89,7 +98,8 @@ def fetch_predispatch_forecasts():
 
         df = df[output_cols].copy()
 
-        logger.info(f"Loaded P30 forecast run {run_time.strftime('%H:%M')} with {len(df)} rows from parquet")
+        source = "DuckDB" if DUCKDB_PATH else "parquet"
+        logger.info(f"Loaded P30 forecast run {run_time.strftime('%H:%M')} with {len(df)} rows from {source}")
         return df, run_time
 
     except Exception as e:

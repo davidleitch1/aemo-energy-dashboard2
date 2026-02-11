@@ -6,6 +6,7 @@ Provides comparison between latest 12 months and previous 12 months for:
 - Capacity utilization by station
 """
 
+import os
 import pandas as pd
 import numpy as np
 import duckdb
@@ -21,6 +22,8 @@ from scipy.ndimage import uniform_filter1d
 
 from ..shared.logging_config import get_logger
 from ..shared.config import config
+
+DUCKDB_PATH = os.getenv('AEMO_DUCKDB_PATH')
 
 # Target stations for evolution analysis
 EVOLUTION_STATIONS = ['Bayswater', 'Tarong', 'Loy Yang B']
@@ -74,26 +77,38 @@ class CoalAnalysis:
     def _create_views(self):
         """Create DuckDB views for SCADA and price data"""
         try:
-            # Use 30-minute SCADA data for longer historical coverage (back to 2020)
-            scada_path = config.scada30_file
-            prices_path = config.spot_hist_file
-
-            self.conn.execute(f"""
-                CREATE OR REPLACE VIEW scada AS
-                SELECT settlementdate, duid, scadavalue
-                FROM read_parquet('{scada_path}')
-            """)
-
-            self.conn.execute(f"""
-                CREATE OR REPLACE VIEW prices AS
-                SELECT settlementdate, regionid as region, rrp as price
-                FROM read_parquet('{prices_path}')
-            """)
+            if DUCKDB_PATH:
+                # Attach external DuckDB and create views from its tables
+                self.conn.execute(f"ATTACH '{DUCKDB_PATH}' AS prod (READ_ONLY)")
+                self.conn.execute("""
+                    CREATE OR REPLACE VIEW scada AS
+                    SELECT settlementdate, duid, scadavalue
+                    FROM prod.scada30
+                """)
+                self.conn.execute("""
+                    CREATE OR REPLACE VIEW prices AS
+                    SELECT settlementdate, regionid as region, rrp as price
+                    FROM prod.prices30
+                """)
+                logger.info("Created SCADA and prices views from external DuckDB")
+            else:
+                # Fallback: read from parquet files
+                scada_path = config.scada30_file
+                prices_path = config.spot_hist_file
+                self.conn.execute(f"""
+                    CREATE OR REPLACE VIEW scada AS
+                    SELECT settlementdate, duid, scadavalue
+                    FROM read_parquet('{scada_path}')
+                """)
+                self.conn.execute(f"""
+                    CREATE OR REPLACE VIEW prices AS
+                    SELECT settlementdate, regionid as region, rrp as price
+                    FROM read_parquet('{prices_path}')
+                """)
+                logger.info("Created SCADA and prices views from parquet files")
 
             # Store the interval duration for energy calculations (30 min = 0.5 hours)
             self.interval_hours = 0.5
-
-            logger.info("Created SCADA (30min) and prices views")
 
         except Exception as e:
             logger.error(f"Error creating views: {e}")

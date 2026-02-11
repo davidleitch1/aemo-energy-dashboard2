@@ -181,21 +181,33 @@ class PenetrationTab:
     
     def _load_rooftop_30min(self, start_date: datetime, end_date: datetime) -> pd.DataFrame:
         """Load rooftop data at 30-minute resolution."""
+        import os
+        duckdb_path = os.getenv('AEMO_DUCKDB_PATH')
         rooftop_file = self.config.rooftop_solar_file
-        
-        if not rooftop_file or not Path(rooftop_file).exists():
+
+        if not duckdb_path and (not rooftop_file or not Path(rooftop_file).exists()):
             logger.warning(f"Rooftop file not found: {rooftop_file}")
             return pd.DataFrame()
-        
+
         # Cache key for rooftop data
         cache_key = self._get_cache_key(
             'rooftop',
             start=start_date.isoformat(),
             end=end_date.isoformat()
         )
-        
+
         def load_rooftop():
-            df = pd.read_parquet(rooftop_file)
+            if duckdb_path:
+                import duckdb as _ddb
+                _conn = _ddb.connect(duckdb_path, read_only=True)
+                df = _conn.execute(
+                    "SELECT settlementdate, regionid, power FROM rooftop30 "
+                    "WHERE settlementdate >= ? AND settlementdate <= ?",
+                    [start_date, end_date]
+                ).df()
+                _conn.close()
+            else:
+                df = pd.read_parquet(rooftop_file)
             df['settlementdate'] = pd.to_datetime(df['settlementdate'])
             df = df[(df['settlementdate'] >= start_date) & (df['settlementdate'] <= end_date)]
             

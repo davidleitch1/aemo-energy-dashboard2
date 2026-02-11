@@ -11,8 +11,8 @@ from datetime import datetime, time, timedelta
 from typing import Optional, List
 
 from aemo_dashboard.shared.logging_config import get_logger
-from aemo_dashboard.shared.price_adapter import load_price_data
-from aemo_dashboard.shared.generation_adapter import load_generation_data
+from aemo_dashboard.shared.adapter_selector import load_price_data
+from aemo_dashboard.shared.adapter_selector import load_generation_data
 from aemo_dashboard.shared.config import Config
 from aemo_dashboard.generation.generation_query_manager import GenerationQueryManager
 
@@ -361,7 +361,7 @@ class InsightsTab:
                     end_dt = pd.Timestamp(end_date) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
                     
                     # Load generation data - use 5min if requested, otherwise 30min
-                    from aemo_dashboard.shared.generation_adapter import load_generation_data
+                    from aemo_dashboard.shared.adapter_selector import load_generation_data
                     base_resolution = '5min' if frequency == '5 min' else '30min'
                     gen_data = load_generation_data(
                         start_date=start_dt,
@@ -378,7 +378,7 @@ class InsightsTab:
                         
                         if not battery_gen.empty:
                             # Load price data - same resolution as generation
-                            from aemo_dashboard.shared.price_adapter import load_price_data
+                            from aemo_dashboard.shared.adapter_selector import load_price_data
                             price_data = load_price_data(
                                 start_date=start_dt,
                                 end_date=end_dt,
@@ -1692,7 +1692,7 @@ class InsightsTab:
                 )
                 
                 # Also load rooftop solar data
-                from aemo_dashboard.shared.rooftop_adapter import load_rooftop_data
+                from aemo_dashboard.shared.adapter_selector import load_rooftop_data
                 
                 rooftop_2020 = load_rooftop_data(
                     start_date=first_year_start,
