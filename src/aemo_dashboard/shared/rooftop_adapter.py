@@ -63,7 +63,7 @@ def interpolate_and_smooth(series_30min, target_index):
     series_5min = series_30min.reindex(target_index).interpolate(method='linear')
     
     # Fill any remaining NaN values at the edges
-    series_5min = series_5min.fillna(method='ffill').fillna(method='bfill').fillna(0)
+    series_5min = series_5min.ffill().bfill().fillna(0)
     
     # Apply Henderson smoothing
     values = series_5min.values
