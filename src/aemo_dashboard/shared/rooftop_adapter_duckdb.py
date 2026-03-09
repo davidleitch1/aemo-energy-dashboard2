@@ -57,8 +57,8 @@ def load_rooftop_data(
         apply_smoothing: Whether to apply Henderson smoothing (only for 5min interpolation)
         
     Returns:
-        DataFrame with columns: settlementdate, regionid, rooftop_solar_mw
-        If target_resolution='5min', data is interpolated and smoothed
+        DataFrame in wide format with columns: settlementdate, NSW1, QLD1, SA1, TAS1, VIC1
+        (pivoted from long format for compatibility with gen_dash)
     """
     try:
         # Handle date defaults
@@ -165,6 +165,19 @@ def load_rooftop_data(
             df_5min = df_5min_indexed.reset_index()
         
         logger.info(f"Interpolated to {len(df_5min):,} 5-minute rooftop records")
+        
+        # Pivot from long to wide format for compatibility with gen_dash
+        # gen_dash expects columns like NSW1, QLD1, etc. not regionid
+        if not df_5min.empty and 'regionid' in df_5min.columns:
+            df_wide = df_5min.pivot_table(
+                index='settlementdate',
+                columns='regionid',
+                values='rooftop_solar_mw',
+                aggfunc='first'
+            ).reset_index()
+            df_wide.columns.name = None
+            logger.info(f"Pivoted to wide format: {list(df_wide.columns)}")
+            return df_wide
         
         return df_5min
         
