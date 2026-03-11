@@ -5305,23 +5305,34 @@ class EnergyDashboard(param.Parameterized):
                         if 'Fuel' in duid_mapping.columns:
                             duid_mapping = duid_mapping.rename(columns={'Fuel': 'FUEL_TYPE', 'Region': 'REGIONID'})
                         
-                        # Get generation data that's already loaded
-                        # Use the same date range as the price data
+                        # Get generation data per region (NEM query loses region column)
                         if hasattr(self, 'generation_query_manager'):
-                            gen_data = self.generation_query_manager.query_generation_by_fuel(
-                                start_datetime,
-                                end_datetime,
-                                'NEM'
-                            )
+                            gen_data_parts = []
+                            for _region in selected_regions:
+                                _rgen = self.generation_query_manager.query_generation_by_fuel(
+                                    start_datetime,
+                                    end_datetime,
+                                    _region
+                                )
+                                if not _rgen.empty:
+                                    _rgen['region'] = _region
+                                    gen_data_parts.append(_rgen)
+                            gen_data = pd.concat(gen_data_parts, ignore_index=True) if gen_data_parts else pd.DataFrame()
                         else:
                             # Fall back to loading directly if query manager not available
                             from ..shared.adapter_selector import load_generation_data
-                            gen_data = load_generation_data(
-                                start_date=start_datetime,
-                                end_date=end_datetime,
-                                region='NEM' if 'NEM' in selected_regions else selected_regions[0],
-                                resolution='auto'
-                            )
+                            gen_data_parts = []
+                            for _region in selected_regions:
+                                _rgen = load_generation_data(
+                                    start_date=start_datetime,
+                                    end_date=end_datetime,
+                                    region=_region,
+                                    resolution='auto'
+                                )
+                                if not _rgen.empty:
+                                    _rgen['region'] = _region
+                                    gen_data_parts.append(_rgen)
+                            gen_data = pd.concat(gen_data_parts, ignore_index=True) if gen_data_parts else pd.DataFrame()
                         
                         if not gen_data.empty and not original_price_data.empty:
                             # Ensure consistent column names
