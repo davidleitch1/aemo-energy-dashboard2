@@ -45,7 +45,8 @@ logger = get_logger(__name__)
 
 # Configure Panel and HoloViews BEFORE extension loading
 pn.config.theme = 'default'  # Use default (light) theme for Flexoki
-pn.extension('tabulator', 'plotly', template='material')
+pn.extension('tabulator', 'plotly', template='material',
+             favicon='/assets/ITK_logo.jpg')
 
 # =============================================================================
 # Cache Configuration
@@ -4158,7 +4159,24 @@ class EnergyDashboard(param.Parameterized):
                     saveDashboardState();
                     window.location.reload(true);
                 }, 540000);  // 540000ms = 9 minutes
-                
+
+                // Refresh when tab becomes visible after being backgrounded
+                let hiddenSince = null;
+                document.addEventListener('visibilitychange', function() {
+                    if (document.visibilityState === 'hidden') {
+                        hiddenSince = Date.now();
+                    } else if (document.visibilityState === 'visible' && hiddenSince) {
+                        const hiddenMs = Date.now() - hiddenSince;
+                        hiddenSince = null;
+                        // If hidden for more than 2 minutes, reload with fresh data
+                        if (hiddenMs > 120000) {
+                            console.log('Tab visible after ' + Math.round(hiddenMs/1000) + 's hidden - refreshing data...');
+                            saveDashboardState();
+                            window.location.reload(true);
+                        }
+                    }
+                });
+
                 // Try to restore state on page load
                 window.addEventListener('load', function() {
                     restoreDashboardState();
@@ -5293,7 +5311,7 @@ class EnergyDashboard(param.Parameterized):
                             gen_data = self.generation_query_manager.query_generation_by_fuel(
                                 start_datetime,
                                 end_datetime,
-                                selected_regions
+                                'NEM'
                             )
                         else:
                             # Fall back to loading directly if query manager not available
@@ -5314,6 +5332,10 @@ class EnergyDashboard(param.Parameterized):
                             if 'scadavalue' in gen_data.columns:
                                 gen_data = gen_data.rename(columns={'scadavalue': 'SCADAVALUE'})
                             
+                            # Rename region column from view to match expected REGIONID
+                            if 'region' in gen_data.columns and 'REGIONID' not in gen_data.columns:
+                                gen_data = gen_data.rename(columns={'region': 'REGIONID'})
+                            
                             # Add region info from DUID mapping
                             if 'REGIONID' not in gen_data.columns and 'DUID' in gen_data.columns:
                                 gen_data = gen_data.merge(
@@ -5321,6 +5343,12 @@ class EnergyDashboard(param.Parameterized):
                                     on='DUID', 
                                     how='left'
                                 )
+                            
+                            # Rename fuel_type from view to match expected FUEL_TYPE
+                            if 'fuel_type' in gen_data.columns and 'FUEL_TYPE' not in gen_data.columns:
+                                gen_data = gen_data.rename(columns={'fuel_type': 'FUEL_TYPE'})
+                            if 'total_generation_mw' in gen_data.columns and 'SCADAVALUE' not in gen_data.columns:
+                                gen_data = gen_data.rename(columns={'total_generation_mw': 'SCADAVALUE'})
                             
                             # Filter for selected regions
                             gen_data = gen_data[gen_data['REGIONID'].isin(selected_regions)]
@@ -6481,10 +6509,13 @@ def main():
     pn.serve(
         app_factory,
         port=port,
+        title="NEM Analysis",
+        static_dirs={'assets': str(Path(__file__).parent.parent.parent.parent / 'static')},
         allow_websocket_origin=[f"localhost:{port}", "nemgen.itkservices2.com", "192.168.68.71:5008", "*"],
         show=True,
         autoreload=False,  # Disable autoreload in production
-        threaded=True     # Enable threading for better concurrent handling
+        threaded=True,     # Enable threading for better concurrent handling
+        warm=True          # Pre-render app on startup for faster first load
     )
 
 if __name__ == "__main__":
