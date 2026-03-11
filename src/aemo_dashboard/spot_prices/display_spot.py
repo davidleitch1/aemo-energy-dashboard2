@@ -8,6 +8,13 @@ import os
 import sys
 import logging
 from datetime import datetime, timedelta
+from pathlib import Path
+from dotenv import load_dotenv
+
+# Load .env from project root (same as renewable_gauge and dashboard)
+_env_path = Path(__file__).resolve().parent.parent.parent.parent / '.env'
+if _env_path.exists():
+    load_dotenv(_env_path)
 
 pn.extension()
 
