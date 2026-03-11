@@ -5306,10 +5306,10 @@ class EnergyDashboard(param.Parameterized):
                             duid_mapping = duid_mapping.rename(columns={'Fuel': 'FUEL_TYPE', 'Region': 'REGIONID'})
                         
                         # Get generation data per region (NEM query loses region column)
-                        if hasattr(self, 'generation_query_manager'):
+                        if hasattr(self, 'query_manager'):
                             gen_data_parts = []
                             for _region in selected_regions:
-                                _rgen = self.generation_query_manager.query_generation_by_fuel(
+                                _rgen = self.query_manager.query_generation_by_fuel(
                                     start_datetime,
                                     end_datetime,
                                     _region
@@ -5347,11 +5347,14 @@ class EnergyDashboard(param.Parameterized):
                             if 'region' in gen_data.columns and 'REGIONID' not in gen_data.columns:
                                 gen_data = gen_data.rename(columns={'region': 'REGIONID'})
                             
-                            # Add region info from DUID mapping
-                            if 'REGIONID' not in gen_data.columns and 'DUID' in gen_data.columns:
+                            # Add fuel type (and region if missing) from DUID mapping
+                            if 'FUEL_TYPE' not in gen_data.columns and 'fuel_type' not in gen_data.columns and 'DUID' in gen_data.columns:
+                                merge_cols = ['DUID', 'FUEL_TYPE']
+                                if 'REGIONID' not in gen_data.columns:
+                                    merge_cols.append('REGIONID')
                                 gen_data = gen_data.merge(
-                                    duid_mapping[['DUID', 'REGIONID', 'FUEL_TYPE']], 
-                                    on='DUID', 
+                                    duid_mapping[merge_cols],
+                                    on='DUID',
                                     how='left'
                                 )
                             
