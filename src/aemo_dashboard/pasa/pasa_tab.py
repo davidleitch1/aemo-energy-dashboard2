@@ -63,6 +63,22 @@ NOTICE_COLORS = {
 }
 
 
+def format_ago(ts) -> str:
+    """Format a timestamp as a human-readable 'X ago' string."""
+    if ts is None:
+        return 'N/A'
+    delta = datetime.now() - ts
+    minutes = delta.total_seconds() / 60
+    if minutes < 0:
+        return 'just now'
+    if minutes < 60:
+        return f"{int(minutes)} min ago"
+    hours = minutes / 60
+    if hours < 24:
+        return f"{hours:.1f}h ago"
+    return ts.strftime('%b %d')
+
+
 def load_gen_info() -> pd.DataFrame:
     """Load generator info for DUID -> fuel type mapping."""
     if GEN_INFO_PATH.exists():
@@ -238,22 +254,26 @@ def get_tabulator_css() -> str:
 
 
 def create_generator_fuel_summary(detector: ChangeDetector, gen_info: pd.DataFrame) -> pn.Column:
-    """Create summary of generator outages by fuel type, with individual unit segments colored by region."""
-    # Get PASA changes only (mtpasa and stpasa are generator data, high_impact is transmission)
-    mtpasa_changes = detector.get_recent_changes(hours=48, source='mtpasa')
-    stpasa_changes = detector.get_recent_changes(hours=48, source='stpasa')
-    changes = pd.concat([mtpasa_changes, stpasa_changes], ignore_index=True) if not mtpasa_changes.empty or not stpasa_changes.empty else pd.DataFrame()
+    """Create summary of generator outages by fuel type, with individual unit segments colored by region.
 
-    if changes.empty or gen_info.empty:
-        return pn.Column(
-            create_section_header("Generator Outages by Fuel"),
-            pn.pane.HTML(f"""
-            <div style="padding: 15px; text-align: center; color: {FLEXOKI_BASE[600]}; font-style: italic;">
-                No generator outage data available
-            </div>
-            """),
-            sizing_mode='stretch_width'
-        )
+    Uses actual PASA availability data (not the change log) so that generators
+    which have returned to service are automatically excluded.
+    """
+    # Get current outages directly from PASA availability data
+    outages = detector.get_current_generator_outages(min_reduction_mw=50)
+
+    no_data = pn.Column(
+        create_section_header("Generator Outages by Fuel"),
+        pn.pane.HTML(f"""
+        <div style="padding: 15px; text-align: center; color: {FLEXOKI_BASE[600]}; font-style: italic;">
+            No generator outage data available
+        </div>
+        """),
+        sizing_mode='stretch_width'
+    )
+
+    if outages.empty or gen_info.empty:
+        return no_data
 
     # Create DUID -> fuel/capacity/region lookup
     info_cols = ['Fuel', 'Capacity(MW)']
@@ -261,36 +281,25 @@ def create_generator_fuel_summary(detector: ChangeDetector, gen_info: pd.DataFra
         info_cols.append('Region')
     duid_info = gen_info.set_index('DUID')[info_cols].to_dict('index')
 
-    # Extract MW values from descriptions, track individual units by fuel
-    # Use dict to deduplicate by DUID, keeping max MW value
+    # Build per-DUID outage data with fuel and region
     duid_data = {}  # duid -> (fuel, mw, region)
 
-    for _, row in changes.iterrows():
-        duid = row['identifier']
-        desc = row['description']
-
-        # Get fuel type and region
+    for _, row in outages.iterrows():
+        duid = row['DUID']
         info = duid_info.get(duid, {})
         fuel = info.get('Fuel', 'Unknown')
-        capacity = info.get('Capacity(MW)', 0)
         region = info.get('Region', 'Unknown')
         # Clean region (remove trailing '1' from NSW1, QLD1, etc.)
         if region and len(region) > 2 and region[-1].isdigit():
             region = region[:-1]
 
-        # Parse MW from description
-        mw = 0
-        if 'dropping to 0' in desc:
-            mw = capacity
-        elif 'reduced by' in desc:
-            match = re.search(r'reduced by (\d+)', desc)
-            if match:
-                mw = float(match.group(1))
+        # Use the larger of PASA reduction or gen_info capacity (for 0/0 PASA case)
+        reduction = row['reduction_mw']
+        if reduction <= 0 and row['current_mw'] == 0:
+            reduction = info.get('Capacity(MW)', 0)
 
-        if mw > 0:
-            # Keep max MW for each DUID (handles duplicates)
-            if duid not in duid_data or mw > duid_data[duid][1]:
-                duid_data[duid] = (fuel, mw, region)
+        if reduction > 0:
+            duid_data[duid] = (fuel, reduction, region)
 
     # Aggregate by fuel type
     fuel_mw = {}  # fuel -> total MW
@@ -303,15 +312,7 @@ def create_generator_fuel_summary(detector: ChangeDetector, gen_info: pd.DataFra
         fuel_units[fuel].append((duid, mw, region))
 
     if not fuel_mw:
-        return pn.Column(
-            create_section_header("Generator Outages by Fuel"),
-            pn.pane.HTML(f"""
-            <div style="padding: 15px; text-align: center; color: {FLEXOKI_BASE[600]}; font-style: italic;">
-                No capacity reductions detected
-            </div>
-            """),
-            sizing_mode='stretch_width'
-        )
+        return no_data
 
     # Sort by MW descending
     sorted_fuels = sorted(fuel_mw.items(), key=lambda x: -x[1])
@@ -395,49 +396,59 @@ def create_generator_fuel_summary(detector: ChangeDetector, gen_info: pd.DataFra
 
 
 def create_generator_changes_table(detector: ChangeDetector, gen_info: pd.DataFrame) -> pn.Column:
-    """Create table showing recent generator availability changes with notice classification."""
-    # Get PASA changes only (mtpasa and stpasa are generator data)
-    mtpasa_changes = detector.get_recent_changes(hours=48, source='mtpasa')
-    stpasa_changes = detector.get_recent_changes(hours=48, source='stpasa')
-    df = pd.concat([mtpasa_changes, stpasa_changes], ignore_index=True) if not mtpasa_changes.empty or not stpasa_changes.empty else pd.DataFrame()
+    """Create table showing current generator outages with notice classification.
 
-    if df.empty:
+    Uses actual PASA availability data so returned generators disappear automatically.
+    """
+    outages = detector.get_current_generator_outages(min_reduction_mw=50)
+
+    if outages.empty:
         return pn.Column(
-            create_section_header("Generator Changes (Last 48h)"),
+            create_section_header("Generator Changes"),
             pn.pane.HTML(f"""
             <div style="padding: 15px; text-align: center; color: {FLEXOKI_BASE[600]}; font-style: italic;">
-                No recent generator changes detected
+                No current generator outages detected
             </div>
             """),
             sizing_mode='stretch_width'
         )
 
-    # Add fuel type from gen_info
-    if not gen_info.empty:
-        fuel_map = gen_info.set_index('DUID')['Fuel'].to_dict()
-        df = df.copy()
-        df['fuel'] = df['identifier'].map(fuel_map).fillna('Unknown')
-    else:
-        df = df.copy()
-        df['fuel'] = 'Unknown'
+    df = outages.copy()
 
-    # Format notice category for display
-    df['notice'] = df.get('notice_category', pd.Series(['unknown'] * len(df)))
-    df['notice'] = df['notice'].fillna('unknown').map(
+    # Add fuel type and capacity from gen_info
+    if not gen_info.empty:
+        info_map = gen_info.set_index('DUID')[['Fuel', 'Capacity(MW)']].to_dict('index')
+        df['fuel'] = df['DUID'].map(lambda d: info_map.get(d, {}).get('Fuel', 'Unknown'))
+        df['capacity'] = df['DUID'].map(lambda d: info_map.get(d, {}).get('Capacity(MW)', 0))
+    else:
+        df['fuel'] = 'Unknown'
+        df['capacity'] = 0
+
+    # Build description from PASA data
+    def make_description(row):
+        if row['current_mw'] == 0:
+            cap = row['capacity'] if row['capacity'] > 0 else row['max_mw']
+            return f"{row['DUID']} dropping to 0 MW ({cap:.0f} MW capacity)"
+        return f"{row['DUID']} reduced to {row['current_mw']:.0f} MW (from {row['max_mw']:.0f} MW)"
+
+    df['description'] = df.apply(make_description, axis=1)
+
+    # Look up notice category from change log
+    duids = df['DUID'].tolist()
+    notice_map = detector.get_notice_for_duids(duids)
+    df['notice'] = df['DUID'].map(notice_map).fillna('unknown').map(
         lambda x: NOTICE_LABELS.get(x, 'Unknown')
     )
 
     # Get return dates from MT-PASA forecast
-    duids = df['identifier'].unique().tolist()
     return_dates = detector.get_return_dates(duids)
-    df['return_date'] = df['identifier'].map(return_dates)
+    df['return_date'] = df['DUID'].map(return_dates)
     df['return'] = df['return_date'].apply(
         lambda x: x.strftime('%b %d') if pd.notna(x) else '—'
     )
 
-    # Build display columns - include Notice and Return
-    display_cols = ['identifier', 'fuel', 'description', 'notice', 'return']
-    display_df = df[display_cols].copy()
+    # Build display table
+    display_df = df[['DUID', 'fuel', 'description', 'notice', 'return']].copy()
     display_df.columns = ['DUID', 'Fuel', 'Description', 'Notice', 'Return']
 
     table = pn.widgets.Tabulator(
@@ -454,7 +465,6 @@ def create_generator_changes_table(detector: ChangeDetector, gen_info: pd.DataFr
     unplanned_count = notice_counts.get('Unplanned', 0)
     short_notice_count = notice_counts.get('Short Notice', 0)
 
-    # Build header with counts
     header_parts = []
     if unplanned_count > 0:
         header_parts.append(f"{unplanned_count} unplanned")
@@ -462,8 +472,13 @@ def create_generator_changes_table(detector: ChangeDetector, gen_info: pd.DataFr
         header_parts.append(f"{short_notice_count} short notice")
     header_suffix = f" ({', '.join(header_parts)})" if header_parts else ""
 
+    # Add last-updated timestamp
+    data_ts = detector.get_data_timestamps()
+    gen_ts = data_ts.get('stpasa') or data_ts.get('mtpasa')
+    updated_str = f" — updated {gen_ts.strftime('%b %d %H:%M')}" if gen_ts else ""
+
     return pn.Column(
-        create_section_header(f"Generator Changes{header_suffix}"),
+        create_section_header(f"Generator Changes ({len(df)} outages{header_suffix}){updated_str}"),
         table,
         sizing_mode='stretch_width'
     )
@@ -596,8 +611,16 @@ def create_pasa_tab() -> pn.Column:
     gen_info = load_gen_info()
     summary = analyzer.get_summary()
 
-    # Header
-    report_date_str = summary.report_date.strftime('%Y-%m-%d %H:%M') if summary.report_date else 'N/A'
+    # Header with per-source freshness
+    data_ts = detector.get_data_timestamps()
+    gen_ts = data_ts.get('stpasa') or data_ts.get('mtpasa')
+    tx_ts = data_ts.get('high_impact')
+    freshness_parts = []
+    if gen_ts:
+        freshness_parts.append(f"Generators: {format_ago(gen_ts)}")
+    if tx_ts:
+        freshness_parts.append(f"Transmission: {format_ago(tx_ts)}")
+    freshness_str = ' &middot; '.join(freshness_parts) if freshness_parts else 'No data'
 
     header = pn.pane.HTML(f"""
     <div style="
@@ -615,7 +638,7 @@ def create_pasa_tab() -> pn.Column:
             margin: 5px 0 0 0;
             color: {FLEXOKI_BASE[600]};
             font-size: 13px;
-        ">Last updated: {report_date_str}</p>
+        ">Last updated: {freshness_str}</p>
     </div>
     """, sizing_mode='stretch_width')
 
@@ -625,22 +648,20 @@ def create_pasa_tab() -> pn.Column:
     inter_df = analyzer.get_inter_regional_outages()
     unplanned_df = analyzer.get_unplanned_outages()
 
-    # Calculate total generator MW affected (PASA sources only)
-    mtpasa_changes = detector.get_recent_changes(hours=48, source='mtpasa')
-    stpasa_changes = detector.get_recent_changes(hours=48, source='stpasa')
-    pasa_changes = pd.concat([mtpasa_changes, stpasa_changes], ignore_index=True) if not mtpasa_changes.empty or not stpasa_changes.empty else pd.DataFrame()
+    # Calculate total generator MW affected from actual PASA availability
+    current_outages = detector.get_current_generator_outages(min_reduction_mw=50)
     total_gen_mw = 0
-    if not pasa_changes.empty and not gen_info.empty:
-        duid_capacity = gen_info.set_index('DUID')['Capacity(MW)'].to_dict()
-        for _, row in pasa_changes.iterrows():
-            desc = row['description']
-            duid = row['identifier']
-            if 'dropping to 0' in desc:
-                total_gen_mw += duid_capacity.get(duid, 0)
-            elif 'reduced by' in desc:
-                match = re.search(r'reduced by (\d+)', desc)
-                if match:
-                    total_gen_mw += float(match.group(1))
+    if not current_outages.empty:
+        if not gen_info.empty:
+            cap_map = gen_info.set_index('DUID')['Capacity(MW)'].to_dict()
+            for _, row in current_outages.iterrows():
+                reduction = row['reduction_mw']
+                # For 0/0 PASA case, use registered capacity
+                if reduction <= 0 and row['current_mw'] == 0:
+                    reduction = cap_map.get(row['DUID'], 0)
+                total_gen_mw += reduction
+        else:
+            total_gen_mw = current_outages['reduction_mw'].sum()
 
     # Metrics row
     metrics = pn.Row(

@@ -213,3 +213,160 @@ class ChangeDetector:
                 results[duid] = None
 
         return results
+
+    def get_current_generator_outages(self, min_reduction_mw: float = 50) -> pd.DataFrame:
+        """
+        Get generators currently at reduced capacity from latest PASA data.
+
+        Reads ST-PASA (preferred, hourly) or MT-PASA (fallback, 3-hourly)
+        to find generators whose near-term availability is below maximum.
+        Unlike the change log, this reflects current state — returned generators
+        are automatically excluded.
+
+        Args:
+            min_reduction_mw: Minimum MW reduction to include.
+
+        Returns:
+            DataFrame with DUID, max_mw, current_mw, reduction_mw columns.
+        """
+        empty = pd.DataFrame(columns=['DUID', 'max_mw', 'current_mw', 'reduction_mw'])
+
+        stpasa_file = self.data_path / 'outages_stpasa.parquet'
+        mtpasa_file = self.data_path / 'outages_mtpasa.parquet'
+
+        # Try ST-PASA first (hourly updates, half-hourly resolution)
+        if stpasa_file.exists():
+            try:
+                df = pd.read_parquet(stpasa_file)
+                if not df.empty and 'GENERATION_PASA_AVAILABILITY' in df.columns:
+                    result = self._outages_from_stpasa(df, min_reduction_mw)
+                    if not result.empty:
+                        return result
+            except Exception as e:
+                logger.warning(f"Could not read ST-PASA: {e}")
+
+        # Fallback to MT-PASA (every 3 hours, daily resolution)
+        if mtpasa_file.exists():
+            try:
+                df = pd.read_parquet(mtpasa_file)
+                if not df.empty and 'PASAAVAILABILITY' in df.columns:
+                    return self._outages_from_mtpasa(df, min_reduction_mw)
+            except Exception as e:
+                logger.warning(f"Could not read MT-PASA: {e}")
+
+        return empty
+
+    def _outages_from_stpasa(self, df: pd.DataFrame, min_reduction_mw: float) -> pd.DataFrame:
+        """Extract current outages from ST-PASA availability data."""
+        now = pd.Timestamp.now()
+        horizon = now + pd.Timedelta(hours=48)
+
+        # Filter to near-term forecast
+        near = df[
+            (df['INTERVAL_DATETIME'] >= now) &
+            (df['INTERVAL_DATETIME'] <= horizon)
+        ]
+        if near.empty:
+            # Use most recent data if no future intervals
+            latest_time = df['INTERVAL_DATETIME'].max()
+            near = df[df['INTERVAL_DATETIME'] >= latest_time - pd.Timedelta(hours=6)]
+
+        if near.empty:
+            return pd.DataFrame(columns=['DUID', 'max_mw', 'current_mw', 'reduction_mw'])
+
+        # For each DUID: min availability (worst case) and max capacity
+        summary = near.groupby('DUID').agg(
+            current_mw=('GENERATION_PASA_AVAILABILITY', 'min'),
+            max_mw=('GENERATION_MAX_AVAILABILITY', 'max'),
+        ).reset_index()
+
+        summary['reduction_mw'] = summary['max_mw'] - summary['current_mw']
+        outages = summary[summary['reduction_mw'] >= min_reduction_mw].copy()
+        return outages.sort_values('reduction_mw', ascending=False).reset_index(drop=True)
+
+    def _outages_from_mtpasa(self, df: pd.DataFrame, min_reduction_mw: float) -> pd.DataFrame:
+        """Extract current outages from MT-PASA availability data."""
+        now = pd.Timestamp.now()
+        horizon = now + pd.Timedelta(days=7)
+
+        # Get latest publish and filter to near-term
+        latest_pub = df['PUBLISH_DATETIME'].max()
+        near = df[
+            (df['PUBLISH_DATETIME'] == latest_pub) &
+            (df['DAY'] >= now) &
+            (df['DAY'] <= horizon)
+        ]
+
+        if near.empty:
+            return pd.DataFrame(columns=['DUID', 'max_mw', 'current_mw', 'reduction_mw'])
+
+        summary = near.groupby('DUID').agg(
+            current_mw=('PASAAVAILABILITY', 'min'),
+            max_mw=('MAXAVAIL', 'max'),
+        ).reset_index()
+
+        summary['reduction_mw'] = summary['max_mw'] - summary['current_mw']
+        outages = summary[summary['reduction_mw'] >= min_reduction_mw].copy()
+        return outages.sort_values('reduction_mw', ascending=False).reset_index(drop=True)
+
+    def get_data_timestamps(self) -> Dict[str, datetime]:
+        """Get last-updated timestamps for each data source file.
+
+        Returns:
+            Dict mapping source name -> datetime of last modification.
+        """
+        timestamps = {}
+        files = {
+            'stpasa': self.data_path / 'outages_stpasa.parquet',
+            'mtpasa': self.data_path / 'outages_mtpasa.parquet',
+            'high_impact': self.data_path / 'outages_high_impact.parquet',
+        }
+        for source, path in files.items():
+            if path.exists():
+                timestamps[source] = datetime.fromtimestamp(path.stat().st_mtime)
+        return timestamps
+
+    def get_notice_for_duids(self, duids: list) -> Dict[str, str]:
+        """Look up notice category for DUIDs from the change log.
+
+        Searches the last 7 days of change events for each DUID.
+
+        Args:
+            duids: List of DUID identifiers.
+
+        Returns:
+            Dict mapping DUID -> notice category string.
+        """
+        default = {d: 'unknown' for d in duids}
+
+        if not self.changes_file.exists():
+            return default
+
+        try:
+            changes = pd.read_parquet(self.changes_file)
+        except Exception:
+            return default
+
+        if changes.empty or 'notice_category' not in changes.columns:
+            return default
+
+        # Filter to outage events in the last 7 days
+        cutoff = pd.Timestamp.now() - pd.Timedelta(days=7)
+        outage_types = {'new_outage', 'capacity_reduced'}
+        mask = (
+            (changes['detected_at'] >= cutoff) &
+            (changes['change_type'].isin(outage_types))
+        )
+        recent = changes[mask]
+
+        results = {}
+        for duid in duids:
+            duid_changes = recent[recent['identifier'] == duid]
+            if not duid_changes.empty:
+                latest = duid_changes.sort_values('detected_at', ascending=False).iloc[0]
+                cat = latest.get('notice_category')
+                results[duid] = cat if pd.notna(cat) else 'unknown'
+            else:
+                results[duid] = 'unknown'
+
+        return results

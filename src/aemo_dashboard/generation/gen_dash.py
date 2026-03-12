@@ -31,6 +31,7 @@ from ..analysis.price_analysis_ui import create_price_analysis_tab
 from ..station.station_analysis_ui import create_station_analysis_tab
 from ..nem_dash.nem_dash_tab import create_nem_dash_tab_with_updates
 from ..curtailment import create_curtailment_tab
+from ..gas import create_sttm_gas_tab
 from .generation_query_manager import GenerationQueryManager
 from ..shared.flexoki_theme import (
     FLEXOKI_PAPER,
@@ -4004,6 +4005,8 @@ class EnergyDashboard(param.Parameterized):
                 ("Curtailment", pn.pane.HTML(loading_html)),  # Lazy
                 ("PASA", pn.pane.HTML(loading_html)),  # Lazy - outage monitor
                 ("Batteries", pn.pane.HTML(loading_html)),  # Lazy
+                ("Gas", pn.pane.HTML(loading_html)),  # Lazy - STTM gas prices
+                ("Futures", pn.pane.HTML(loading_html)),  # Lazy - electricity futures
                 dynamic=True,
                 closable=False,
                 sizing_mode='stretch_width'
@@ -4024,7 +4027,9 @@ class EnergyDashboard(param.Parameterized):
                 5: self._create_trends_tab,
                 6: self._create_curtailment_tab,
                 7: self._create_pasa_tab,  # PASA outage monitor
-                8: self._create_batteries_tab
+                8: self._create_batteries_tab,
+                9: self._create_gas_tab,
+                10: self._create_futures_tab
             }
             
             # Watch for tab changes
@@ -6350,6 +6355,39 @@ class EnergyDashboard(param.Parameterized):
                 sizing_mode='stretch_width'
             )
 
+
+    def _create_gas_tab(self):
+        """Create STTM gas prices tab"""
+        try:
+            logger.info("Creating gas tab...")
+            from aemo_dashboard.gas import create_sttm_gas_tab
+            gas_tab = create_sttm_gas_tab()
+            logger.info("Gas tab created successfully")
+            return gas_tab
+        except Exception as e:
+            logger.error(f"Error creating gas tab: {e}")
+            return pn.Column(
+                pn.pane.Markdown("# STTM Gas Prices"),
+                pn.pane.Markdown(f"**Error loading tab:** {e}"),
+                sizing_mode="stretch_width"
+            )
+
+    def _create_futures_tab(self):
+        """Create electricity futures tab"""
+        try:
+            logger.info("Creating futures tab...")
+            from aemo_dashboard.futures import create_futures_tab
+            futures_tab = create_futures_tab()
+            logger.info("Futures tab created successfully")
+            return futures_tab
+        except Exception as e:
+            logger.error(f"Error creating futures tab: {e}")
+            return pn.Column(
+                pn.pane.Markdown("# Electricity Futures"),
+                pn.pane.Markdown(f"**Error loading tab:** {e}"),
+                sizing_mode="stretch_width"
+            )
+
 def create_app():
     """Create the Panel application with proper session handling"""
     def _create_dashboard():
@@ -6458,16 +6496,18 @@ def main():
     # Set Panel to light theme globally (using Flexoki Light)
     pn.config.theme = 'default'
 
-    # Check if required files exist (your existing code)
-    if not os.path.exists(GEN_INFO_FILE):
-        print(f"Error: {GEN_INFO_FILE} not found")
-        print("Please ensure gen_info.pkl exists in the specified location")
-        return
-    
-    if not os.path.exists(GEN_OUTPUT_FILE):
-        print(f"Error: {GEN_OUTPUT_FILE} not found")
-        print("Please ensure gen_output.parquet exists in the specified location")
-        return
+    # Check if required files exist (skip in DuckDB mode — data comes from DB)
+    use_duckdb = os.getenv('AEMO_DUCKDB_PATH') or os.getenv('USE_DUCKDB')
+    if not use_duckdb:
+        if not os.path.exists(GEN_INFO_FILE):
+            print(f"Error: {GEN_INFO_FILE} not found")
+            print("Please ensure gen_info.pkl exists in the specified location")
+            return
+        
+        if not os.path.exists(GEN_OUTPUT_FILE):
+            print(f"Error: {GEN_OUTPUT_FILE} not found")
+            print("Please ensure gen_output.parquet exists in the specified location")
+            return
     
     # Create the app factory (your existing code)
     app_factory = create_app()

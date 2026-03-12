@@ -41,6 +41,13 @@ from ..shared.flexoki_theme import (
 from .forecast_components import fetch_predispatch_forecasts, create_forecast_table
 from .market_notices import fetch_market_notices, create_notices_panel
 
+# Import PASA outage components for generator outage summary on Today tab
+from ..pasa.change_detector import ChangeDetector
+from ..pasa.pasa_tab import (
+    create_generator_fuel_summary, load_gen_info,
+    DEFAULT_DATA_PATH as PASA_DATA_PATH,
+)
+
 logger = get_logger(__name__)
 
 # Get config
@@ -247,18 +254,437 @@ def load_generation_data(hours=24):
         return pd.DataFrame(), datetime.now()
 
 
+def load_demand_data():
+    """Load current NEM demand (operational + rooftop) and historical records from DuckDB."""
+    stats = {
+        'current_mw': 0, 'hour_record_mw': 0, 'alltime_record_mw': 0,
+        'alltime_min_mw': 15000, 'current_hour': 0, 'latest_time': None,
+    }
+    try:
+        if not DUCKDB_PATH:
+            return stats
+        import duckdb
+        conn = duckdb.connect(DUCKDB_PATH, read_only=True)
+        regions = "('NSW1','QLD1','VIC1','SA1','TAS1')"
+
+        # Latest settlement period: operational demand + rooftop
+        row = conn.execute(f"""
+            WITH latest AS (
+                SELECT MAX(settlementdate) AS ts FROM demand30
+                WHERE regionid IN {regions}
+            ),
+            dem AS (
+                SELECT SUM(demand) AS op_demand
+                FROM demand30, latest
+                WHERE settlementdate = latest.ts AND regionid IN {regions}
+            ),
+            roof AS (
+                SELECT COALESCE(SUM(power), 0) AS rooftop
+                FROM rooftop30, latest
+                WHERE settlementdate = latest.ts AND regionid IN {regions}
+            )
+            SELECT dem.op_demand + roof.rooftop AS total_mw,
+                   EXTRACT(HOUR FROM latest.ts) AS hr,
+                   latest.ts
+            FROM dem, roof, latest
+        """).fetchone()
+
+        if row and row[0]:
+            stats['current_mw'] = row[0]
+            stats['current_hour'] = int(row[1])
+            stats['latest_time'] = row[2]
+
+        # Hour-of-day record (demand + rooftop, same hour across all history)
+        hour_rec = conn.execute(f"""
+            SELECT MAX(period_total) FROM (
+                SELECT d.settlementdate,
+                       SUM(d.demand) + COALESCE(SUM(r.power), 0) AS period_total
+                FROM demand30 d
+                LEFT JOIN rooftop30 r
+                    ON d.settlementdate = r.settlementdate AND d.regionid = r.regionid
+                WHERE d.regionid IN {regions}
+                  AND EXTRACT(HOUR FROM d.settlementdate) = ?
+                GROUP BY d.settlementdate
+            )
+        """, [stats['current_hour']]).fetchone()
+
+        if hour_rec and hour_rec[0]:
+            stats['hour_record_mw'] = hour_rec[0]
+
+        # All-time record (demand + rooftop)
+        alltime = conn.execute(f"""
+            SELECT MAX(period_total) FROM (
+                SELECT d.settlementdate,
+                       SUM(d.demand) + COALESCE(SUM(r.power), 0) AS period_total
+                FROM demand30 d
+                LEFT JOIN rooftop30 r
+                    ON d.settlementdate = r.settlementdate AND d.regionid = r.regionid
+                WHERE d.regionid IN {regions}
+                GROUP BY d.settlementdate
+            )
+        """).fetchone()
+
+        if alltime and alltime[0]:
+            stats['alltime_record_mw'] = alltime[0]
+
+        # All-time minimum (for gauge range)
+        alltime_min = conn.execute(f"""
+            SELECT MIN(period_total) FROM (
+                SELECT d.settlementdate,
+                       SUM(d.demand) + COALESCE(SUM(r.power), 0) AS period_total
+                FROM demand30 d
+                LEFT JOIN rooftop30 r
+                    ON d.settlementdate = r.settlementdate AND d.regionid = r.regionid
+                WHERE d.regionid IN {regions}
+                GROUP BY d.settlementdate
+                HAVING SUM(d.demand) > 0
+            )
+        """).fetchone()
+
+        if alltime_min and alltime_min[0]:
+            stats['alltime_min_mw'] = alltime_min[0]
+
+        conn.close()
+        logger.info(f"Demand data: current={stats['current_mw']:.0f} MW, "
+                     f"hour({stats['current_hour']}:00) record={stats['hour_record_mw']:.0f} MW, "
+                     f"all-time={stats['alltime_record_mw']:.0f} MW")
+    except Exception as e:
+        logger.error(f"Error loading demand data: {e}")
+
+    return stats
+
+
+# =============================================================================
+# DEMAND GAUGE (green-to-red gradient)
+# =============================================================================
+
+def _demand_gradient_color(frac):
+    """Get color from the green-to-red 12-step Flexoki gradient at fraction 0-1."""
+    gradient = [
+        '#66800B', '#7A9000', '#8D9E00', '#A09400',
+        '#AD8301', '#B87508', '#C26510', '#BC5215',
+        '#B5441A', '#AE3620', '#A62D25', '#AF3029',
+    ]
+    idx = min(int(frac * len(gradient)), len(gradient) - 1)
+    return gradient[idx]
+
+
+def create_demand_gauge(demand_stats, forecast_peak_mw=None):
+    """Create demand gauge as matplotlib Dial — thin gradient arc with big number."""
+    from matplotlib.patches import Wedge
+
+    current_gw = demand_stats['current_mw'] / 1000
+    alltime_max_gw = demand_stats['alltime_record_mw'] / 1000
+    alltime_min_gw = demand_stats['alltime_min_mw'] / 1000
+
+    # Range: 80% of historical min to 105% of historical max
+    gauge_min = round(alltime_min_gw * 0.8)
+    gauge_max = round(alltime_max_gw * 1.05)
+    span = max(gauge_max - gauge_min, 1)
+
+    fig, ax = plt.subplots(figsize=(4.8, 2.6))
+    fig.patch.set_facecolor(FLEXOKI['background'])
+    ax.set_facecolor(FLEXOKI['background'])
+
+    cx, cy = 0.5, 0.22      # Arc center (axes coords)
+    r_outer = 0.42           # Arc radius
+    arc_width = 0.045        # Arc thickness
+
+    # Unfilled background arc (full semicircle)
+    bg_wedge = Wedge((cx, cy), r_outer, 0, 180, width=arc_width,
+                      facecolor=FLEXOKI['ui'], edgecolor='none',
+                      transform=ax.transAxes, zorder=2)
+    ax.add_patch(bg_wedge)
+
+    # Filled gradient portion up to current value
+    value_frac = max(0, min(1, (current_gw - gauge_min) / span))
+    n_segments = max(1, int(value_frac * 60))
+    for i in range(n_segments):
+        frac = i / max(1, n_segments)
+        overall_frac = frac * value_frac
+        start_angle = 180 - overall_frac * 180
+        extent = -(180 * value_frac / n_segments) - 0.3
+        color = _demand_gradient_color(overall_frac)
+        w = Wedge((cx, cy), r_outer, start_angle + extent, start_angle,
+                   width=arc_width, facecolor=color, edgecolor='none',
+                   transform=ax.transAxes, zorder=3)
+        ax.add_patch(w)
+
+    # Dot marker at current position on arc
+    angle = np.radians(180 - value_frac * 180)
+    r_mid = r_outer - arc_width / 2
+    dx = cx + r_mid * np.cos(angle)
+    dy = cy + r_mid * np.sin(angle)
+    ax.plot(dx, dy, 'o', color=FLEXOKI['foreground'], markersize=7,
+            transform=ax.transAxes, zorder=10)
+
+    # Big number centered in the arc
+    ax.text(cx, 0.28, f'{current_gw:.1f}', ha='center', va='center',
+            fontsize=30, fontweight='bold', color=FLEXOKI['foreground'],
+            transform=ax.transAxes)
+    ax.text(cx, 0.14, 'GW', ha='center', va='center',
+            fontsize=13, color=FLEXOKI['muted'], transform=ax.transAxes)
+
+    # Scale labels at min, mid, max
+    ax.text(cx - r_outer - 0.02, cy - 0.05, f'{gauge_min:.0f}', ha='center',
+            fontsize=8, color=FLEXOKI['muted'], transform=ax.transAxes)
+    ax.text(cx + r_outer + 0.02, cy - 0.05, f'{gauge_max:.0f}', ha='center',
+            fontsize=8, color=FLEXOKI['muted'], transform=ax.transAxes)
+    mid_val = (gauge_min + gauge_max) / 2
+    ax.text(cx, cy + r_outer + 0.04, f'{mid_val:.0f}', ha='center',
+            fontsize=8, color=FLEXOKI['muted'], transform=ax.transAxes)
+
+    # Title
+    ax.text(cx, 0.92, 'NEM Demand', ha='center', va='center',
+            fontsize=13, fontweight='bold', color=FLEXOKI['foreground'],
+            transform=ax.transAxes)
+
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    ax.set_aspect('equal')
+    ax.axis('off')
+    fig.subplots_adjust(left=0.02, right=0.98, top=0.98, bottom=0.02)
+
+    # Build legend HTML (unchanged from before)
+    hour_record_gw = demand_stats['hour_record_mw'] / 1000
+    hour_label = f"{demand_stats['current_hour']:02d}:00"
+
+    legend_items = [
+        f"<span>Now: <b>{current_gw:.1f} GW</b></span>",
+        f"<span>{hour_label} record: <b>{hour_record_gw:.1f} GW</b></span>",
+        f"<span>All-time: <b>{alltime_max_gw:.1f} GW</b></span>",
+    ]
+    if forecast_peak_mw and forecast_peak_mw > 0:
+        forecast_gw = forecast_peak_mw / 1000
+        legend_items.append(f"<span>Forecast peak: <b>{forecast_gw:.1f} GW</b></span>")
+
+    legend_html = f"""
+    <div style="display: flex; justify-content: center; gap: 12px; flex-wrap: wrap;
+                font-size: 10px; color: {FLEXOKI['text']}; padding: 5px 0;">
+        {''.join(legend_items)}
+    </div>
+    """
+
+    return fig, legend_html
+
+
+# =============================================================================
+# BATTERY STORED ENERGY GAUGE (linear bar with 1h-ago reference)
+# =============================================================================
+
+def load_battery_stored():
+    """Load NEM battery stored energy from BDU5 table (current and 1h ago)."""
+    stats = {
+        'stored_gwh': 0, 'stored_1h_gwh': 0,
+        'recent_max_gwh': 11.0, 'latest_time': None,
+    }
+    if not DUCKDB_PATH:
+        return stats
+    try:
+        import duckdb
+        con = duckdb.connect(DUCKDB_PATH, read_only=True)
+        try:
+            # Latest stored energy (sum across mainland regions, TAS is NaN)
+            latest = con.execute("""
+                SELECT settlementdate,
+                       SUM(bdu_energy_storage) as stored_mwh
+                FROM bdu5
+                WHERE settlementdate = (SELECT MAX(settlementdate) FROM bdu5)
+                  AND regionid IN ('NSW1','QLD1','VIC1','SA1')
+                GROUP BY settlementdate
+            """).fetchdf()
+            if len(latest) > 0:
+                stats['stored_gwh'] = latest['stored_mwh'].iloc[0] / 1000
+                stats['latest_time'] = latest['settlementdate'].iloc[0]
+
+            # 1 hour ago (closest period)
+            one_hr = con.execute("""
+                SELECT settlementdate,
+                       SUM(bdu_energy_storage) as stored_mwh
+                FROM bdu5
+                WHERE regionid IN ('NSW1','QLD1','VIC1','SA1')
+                  AND settlementdate <= (
+                      SELECT MAX(settlementdate) - INTERVAL '55 minutes' FROM bdu5
+                  )
+                GROUP BY settlementdate
+                ORDER BY settlementdate DESC
+                LIMIT 1
+            """).fetchdf()
+            if len(one_hr) > 0:
+                stats['stored_1h_gwh'] = one_hr['stored_mwh'].iloc[0] / 1000
+
+            # 30-day rolling max as capacity proxy
+            row = con.execute("""
+                SELECT MAX(total) as max_mwh
+                FROM (
+                    SELECT SUM(bdu_energy_storage) as total
+                    FROM bdu5
+                    WHERE regionid IN ('NSW1','QLD1','VIC1','SA1')
+                      AND settlementdate >= CAST(NOW() - INTERVAL '30 days' AS TIMESTAMP)
+                    GROUP BY settlementdate
+                )
+            """).fetchone()
+            if row and row[0]:
+                stats['recent_max_gwh'] = row[0] / 1000
+
+        finally:
+            con.close()
+    except Exception as e:
+        logger.error(f"Error loading battery stored energy: {e}")
+    return stats
+
+
+def create_battery_gauge(batt_stats):
+    """Create a horizontal linear bar gauge for NEM battery stored energy.
+
+    Returns a matplotlib figure showing current stored GWh as a filled bar
+    with a dashed marker for the 1-hour-ago level.
+    """
+    import matplotlib.patches as mpatches
+
+    stored = batt_stats['stored_gwh']
+    stored_1h = batt_stats['stored_1h_gwh']
+    max_gwh = batt_stats['recent_max_gwh']
+
+    fig, ax = plt.subplots(figsize=(4.8, 1.6))
+    fig.patch.set_facecolor(FLEXOKI['background'])
+    ax.set_facecolor(FLEXOKI['background'])
+
+    bar_height = 0.5
+    y_center = 0.5
+
+    # Gradient bar (full range, filled up to current value)
+    n_seg = 250
+    for i in range(n_seg):
+        frac = i / n_seg
+        x_start = frac * max_gwh
+        x_width = max_gwh / n_seg * 1.01
+
+        # Interpolate: red -> orange -> yellow -> green
+        if frac < 0.33:
+            t = frac / 0.33
+            r = int(175 * (1 - t) + 188 * t)
+            g = int(48 * (1 - t) + 101 * t)
+            b = int(41 * (1 - t) + 21 * t)
+        elif frac < 0.66:
+            t = (frac - 0.33) / 0.33
+            r = int(188 * (1 - t) + 173 * t)
+            g = int(101 * (1 - t) + 131 * t)
+            b = int(21 * (1 - t) + 1 * t)
+        else:
+            t = (frac - 0.66) / 0.34
+            r = int(173 * (1 - t) + 102 * t)
+            g = int(131 * (1 - t) + 128 * t)
+            b = int(1 * (1 - t) + 11 * t)
+
+        color = f'#{r:02x}{g:02x}{b:02x}'
+        ax.barh(y_center, x_width, left=x_start, height=bar_height,
+                color=color, edgecolor='none')
+
+    # Grey out unfilled portion
+    if stored < max_gwh:
+        ax.barh(y_center, max_gwh - stored, left=stored, height=bar_height,
+                color=FLEXOKI['ui'], edgecolor='none', alpha=0.78)
+
+    # Rounded border
+    rect = mpatches.FancyBboxPatch(
+        (0, y_center - bar_height / 2), max_gwh, bar_height,
+        boxstyle="round,pad=0.06", linewidth=1.5,
+        edgecolor=FLEXOKI['ui_border'], facecolor='none', zorder=5,
+    )
+    ax.add_patch(rect)
+
+    marker_top = y_center + bar_height / 2 + 0.06
+    marker_bot = y_center - bar_height / 2 - 0.06
+
+    # 1-hour-ago marker (dashed, lighter)
+    if stored_1h > 0 and abs(stored - stored_1h) > 0.05:
+        ax.plot([stored_1h, stored_1h], [marker_bot, marker_top],
+                color=FLEXOKI['muted'], linewidth=2, linestyle=(0, (4, 3)),
+                solid_capstyle='round', zorder=6)
+        # Label on the side with more room
+        if stored_1h < stored:
+            ha, x_off = 'right', -0.12
+        else:
+            ha, x_off = 'left', 0.12
+        ax.text(stored_1h + x_off, marker_top + 0.04, '1h ago',
+                ha=ha, va='bottom', fontsize=7, color=FLEXOKI['muted'],
+                fontstyle='italic')
+
+    # Current value marker (solid, bold)
+    ax.plot([stored, stored], [marker_bot, marker_top],
+            color=FLEXOKI['foreground'], linewidth=3,
+            solid_capstyle='round', zorder=7)
+
+    # Value label above current marker
+    ax.text(stored, marker_top + 0.12,
+            f'{stored:.1f} GWh', ha='center', va='bottom',
+            fontsize=13, fontweight='bold', color=FLEXOKI['foreground'])
+
+    # Title
+    ax.text(0, marker_top + 0.38,
+            'NEM Battery Stored Energy', ha='left', va='bottom',
+            fontsize=11, fontweight='bold', color=FLEXOKI['foreground'])
+
+    # Tick marks below
+    tick_interval = 2
+    ticks = np.arange(0, max_gwh + 0.1, tick_interval)
+    for t in ticks:
+        ax.plot([t, t], [y_center - bar_height / 2 - 0.04, y_center - bar_height / 2],
+                color=FLEXOKI['muted'], linewidth=1, zorder=6)
+        ax.text(t, y_center - bar_height / 2 - 0.07, f'{t:.0f}',
+                ha='center', va='top', fontsize=8, color=FLEXOKI['text'])
+    ax.text(max_gwh + 0.12, y_center - bar_height / 2 - 0.07, 'GWh',
+            ha='left', va='top', fontsize=8, color=FLEXOKI['muted'])
+
+    ax.set_xlim(-0.3, max_gwh + 0.8)
+    ax.set_ylim(-0.15, 1.45)
+    ax.set_aspect('auto')
+    ax.axis('off')
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+    fig.tight_layout(pad=0.2)
+    return fig
+
+
 # =============================================================================
 # PRICE CHART (LOESS smoothing, $1500 cap)
 # =============================================================================
 
+def _build_price_legend_html(latest_prices):
+    """Build an HTML legend row showing region colors and latest prices."""
+    items = []
+    for region in ['NSW1', 'QLD1', 'SA1', 'TAS1', 'VIC1']:
+        color = REGION_COLORS.get(region, '#888')
+        val = latest_prices.get(region)
+        if val is not None:
+            label = f'{region}: ${val:.0f}'
+        else:
+            label = region
+        items.append(
+            f'<span style="display:inline-flex;align-items:center;margin-right:10px;">'
+            f'<span style="display:inline-block;width:12px;height:3px;background:{color};'
+            f'margin-right:4px;border-radius:1px;"></span>'
+            f'<span style="font-size:11px;color:{FLEXOKI["text"]};font-family:-apple-system,sans-serif;">'
+            f'{label}</span></span>'
+        )
+    return f'<div style="padding:2px 0 0 4px;">{"".join(items)}</div>'
+
+
 def create_price_chart_matplotlib(prices_df):
-    """Create matplotlib price chart with LOESS smoothing and $1500 cap."""
+    """Create matplotlib price chart with LOESS smoothing and $1500 cap.
+
+    Returns (fig, legend_html) — legend is a separate HTML string for
+    placement above the chart so it doesn't obscure the plot area.
+    """
+    empty_legend = _build_price_legend_html({})
     if prices_df is None or len(prices_df) == 0:
-        fig, ax = plt.subplots(figsize=(4.2, 3))
+        fig, ax = plt.subplots(figsize=(4.5, 3.2))
         ax.text(0.5, 0.5, 'Price data loading...', ha='center', va='center')
         ax.set_facecolor(FLEXOKI['background'])
         fig.patch.set_facecolor(FLEXOKI['background'])
-        return fig
+        return fig, empty_legend
 
     pivot = prices_df.pivot_table(
         index='SETTLEMENTDATE', columns='REGIONID', values='RRP', aggfunc='mean'
@@ -285,13 +711,14 @@ def create_price_chart_matplotlib(prices_df):
         else:
             smoothed[col] = raw[col].ewm(alpha=0.22).mean()
 
-    # Create plot
-    fig, ax = plt.subplots(figsize=(4.2, 3))
+    # Create plot — taller now that legend is external
+    fig, ax = plt.subplots(figsize=(4.5, 3.2))
     fig.patch.set_facecolor(FLEXOKI['background'])
     ax.set_facecolor(FLEXOKI['background'])
 
     Y_CAP = 1500
     spike_annotations = []
+    latest_prices = {}
 
     for region in ['NSW1', 'QLD1', 'SA1', 'TAS1', 'VIC1']:
         if region not in smoothed.columns:
@@ -310,11 +737,11 @@ def create_price_chart_matplotlib(prices_df):
         # Clip for display
         y_clipped = np.clip(y_vals, None, Y_CAP)
 
-        # Get latest value for legend
+        # Get latest value for external legend
         latest_val = raw[region].iloc[-1]
-        label = f"{region}: ${latest_val:.0f}"
+        latest_prices[region] = latest_val
 
-        ax.plot(x_vals, y_clipped, color=color, linewidth=1.5, label=label)
+        ax.plot(x_vals, y_clipped, color=color, linewidth=1.5)
 
     # Dynamic Y-axis - scale to what's actually displayed (smoothed values)
     smoothed_max = smoothed.max().max()
@@ -349,23 +776,24 @@ def create_price_chart_matplotlib(prices_df):
     ax.xaxis.set_major_locator(mdates.HourLocator(interval=2))
     ax.tick_params(colors=FLEXOKI['text'], labelsize=8)
 
-    ax.set_ylabel('$/MWh', fontsize=9, color=FLEXOKI['text'])
-
-    # Title
+    # Title — includes $/MWh so we skip Y-axis label
     end_time = raw.index[-1]
-    title = f"Smoothed 5 minute prices as at {end_time.strftime('%d %b %H:%M')} ({len(raw)} points)"
+    title = f"Smoothed 5 min $/MWh as at {end_time.strftime('%d %b %H:%M')}"
     ax.set_title(title, fontsize=10, color=FLEXOKI['foreground'], loc='left')
 
-    # Legend
-    ax.legend(loc='upper right', fontsize=7, framealpha=0.9,
-              facecolor=FLEXOKI['background'], edgecolor=FLEXOKI['ui_border'])
+    # No Y-axis label — unit is in title
+    # No internal legend — moved to HTML row above chart
 
     # Attribution
     ax.text(0.99, 0.02, '©ITK', transform=ax.transAxes,
             fontsize=7, color=FLEXOKI['muted'], ha='right', va='bottom')
 
     plt.tight_layout()
-    return fig
+
+    # Build external HTML legend
+    legend_html = _build_price_legend_html(latest_prices)
+
+    return fig, legend_html
 
 
 # =============================================================================
@@ -429,11 +857,10 @@ def create_price_table_html(prices_df):
             background: {FLEXOKI_BASE[50]};
         }}
         .price-table-caption {{
-            font-size: 12px;
+            font-size: 13px;
             font-weight: bold;
-            color: white;
-            background: {FLEXOKI_ACCENT['cyan']};
-            padding: 6px 8px;
+            color: {FLEXOKI['foreground']};
+            padding: 0 0 8px 0;
             margin-bottom: 0;
         }}
     </style>
@@ -578,7 +1005,7 @@ def create_renewable_gauge_stacked(gen_df):
         mode="gauge+number",
         value=stats['renewable_pct'],
         number={'suffix': '%', 'font': {'size': 36, 'color': FLEXOKI['foreground']}, 'valueformat': '.0f'},
-        title={'text': 'Renewable Energy %', 'font': {'size': 14, 'color': FLEXOKI['foreground']}},
+        title={'text': '<b>Renewable Energy %</b>', 'font': {'size': 14, 'color': FLEXOKI['foreground']}},
         gauge={
             'axis': {'range': [0, 100], 'tickwidth': 1, 'tickcolor': FLEXOKI['ui_border'],
                     'tickfont': {'size': 10, 'color': FLEXOKI['muted']}},
@@ -620,7 +1047,55 @@ def create_renewable_gauge_stacked(gen_df):
 
 
 # =============================================================================
-# KEY EVENTS
+# GENERATOR OUTAGES (from PASA tab, displayed on Today tab)
+# =============================================================================
+
+def load_outages_panel():
+    """Build the generator outages summary for the Today tab.
+
+    Reuses the PASA tab's create_generator_fuel_summary() with a clickable
+    title that links to the full PASA tab (tab index 7).
+    """
+    try:
+        detector = ChangeDetector(data_path=PASA_DATA_PATH)
+        gen_info = load_gen_info()
+        outage_col = create_generator_fuel_summary(detector, gen_info)
+
+        # Replace the PASA component's own header with a clickable version
+        # The first child of outage_col is the section_header pane
+        if len(outage_col) > 0:
+            # Extract the original header text to get the MW total
+            original_header = outage_col[0]
+            # Build a clickable replacement that links to PASA tab (index 7)
+            outage_col[0] = pn.pane.HTML(f"""
+            <a href="#" onclick="
+                var tabs = document.querySelectorAll('.bk-tab');
+                if (tabs && tabs.length > 7) {{ tabs[7].click(); }}
+                return false;
+            " style="text-decoration: none; cursor: pointer;">
+                <h3 style="margin: 8px 0 6px 0; padding-bottom: 6px;
+                    border-bottom: 1px solid {FLEXOKI['ui_border']};
+                    color: {FLEXOKI['foreground']}; font-size: 15px; font-weight: 600;">
+                    Generator Outages
+                    <span style="font-size: 11px; font-weight: normal; color: {FLEXOKI['muted']};">
+                        &nbsp;→ full PASA tab
+                    </span>
+                </h3>
+            </a>
+            """, sizing_mode='stretch_width')
+
+        return outage_col
+
+    except Exception as e:
+        logger.error(f"Error loading outages for Today tab: {e}")
+        return pn.pane.HTML(
+            f'<div style="color: {FLEXOKI["muted"]}; font-style: italic; padding: 5px;">Outage data unavailable</div>',
+            sizing_mode='stretch_width',
+        )
+
+
+# =============================================================================
+# KEY EVENTS (commented out — replaced by generator outages panel above)
 # =============================================================================
 
 def create_key_events(prices_df, gen_df):
@@ -668,7 +1143,11 @@ def create_key_events(prices_df, gen_df):
 # =============================================================================
 
 def _build_tab_content():
-    """Build the actual tab content - called after loading indicator is shown."""
+    """Build the actual tab content - called after loading indicator is shown.
+
+    Returns (layout, updatable_panes) where updatable_panes is a dict of
+    pane references that can be refreshed by _refresh_today_tab().
+    """
     import time
     timings = {}
     total_start = time.time()
@@ -697,10 +1176,34 @@ def _build_tab_content():
     timings['fetch_notices'] = time.time() - t0
     logger.info(f"Fetched notices ({timings['fetch_notices']:.2f}s)")
 
-    # Create key events
+    # Load demand data
     t0 = time.time()
-    events = create_key_events(prices_df, gen_df)
-    timings['create_events'] = time.time() - t0
+    demand_stats = load_demand_data()
+    timings['load_demand'] = time.time() - t0
+
+    t0 = time.time()
+    batt_stats = load_battery_stored()
+    timings['load_battery'] = time.time() - t0
+
+    # Extract forecast peak demand from predispatch data
+    forecast_peak_mw = None
+    if predispatch_df is not None and len(predispatch_df) > 0:
+        try:
+            demand_col = None
+            for col in ['DEMAND_FORECAST', 'demand_forecast']:
+                if col in predispatch_df.columns:
+                    demand_col = col
+                    break
+            if demand_col:
+                ts_col = 'SETTLEMENTDATE' if 'SETTLEMENTDATE' in predispatch_df.columns else 'settlementdate'
+                forecast_peak_mw = predispatch_df.groupby(ts_col)[demand_col].sum().max()
+        except Exception as e:
+            logger.warning(f"Could not extract forecast peak demand: {e}")
+
+    # # Create key events (commented out — replaced by generator outages)
+    # t0 = time.time()
+    # events = create_key_events(prices_df, gen_df)
+    # timings['create_events'] = time.time() - t0
 
     # === LEFT COLUMN: Past 24 Hours ===
     t0 = time.time()
@@ -711,28 +1214,48 @@ def _build_tab_content():
     )
     timings['gen_chart'] = time.time() - t0
 
-    # Events panel
-    events_html = f'<div style="font-size: 12px;"><h4 style="margin: 5px 0 8px 0; color: {FLEXOKI["foreground"]};">Key Events (24h)</h4>'
-    for event in events:
-        events_html += f'<div style="margin: 4px 0; padding: 5px 8px; border-left: 3px solid {event["color"]}; background: {FLEXOKI["ui"]}; font-size: 11px;">{event["text"]}</div>'
-    if not events:
-        events_html += f'<div style="color: {FLEXOKI["muted"]};">No significant events</div>'
-    events_html += "</div>"
-    events_panel = pn.pane.HTML(events_html, sizing_mode='stretch_width')
+    # # Events panel (commented out — replaced by generator outages)
+    # events_html = f'<div style="font-size: 12px;"><h4 style="margin: 5px 0 8px 0; color: {FLEXOKI["foreground"]};">Key Events (24h)</h4>'
+    # for event in events:
+    #     events_html += f'<div style="margin: 4px 0; padding: 5px 8px; border-left: 3px solid {event["color"]}; background: {FLEXOKI["ui"]}; font-size: 11px;">{event["text"]}</div>'
+    # if not events:
+    #     events_html += f'<div style="color: {FLEXOKI["muted"]};">No significant events</div>'
+    # events_html += "</div>"
+    # events_panel = pn.pane.HTML(events_html, sizing_mode='stretch_width')
+
+    # Generator outages panel (from PASA data)
+    t0 = time.time()
+    outages_content = load_outages_panel()
+    # Wrap in Column for consistent refresh (slice assignment)
+    if isinstance(outages_content, pn.Column):
+        outages_panel = outages_content
+    else:
+        outages_panel = pn.Column(outages_content, sizing_mode='stretch_width')
+    timings['outages'] = time.time() - t0
 
     # Gauge with legend
     t0 = time.time()
     gauge_fig, gauge_legend_html = create_renewable_gauge_stacked(gen_df)
+    gauge_plotly = pn.pane.Plotly(gauge_fig, sizing_mode='fixed', width=400, height=200)
+    gauge_legend = pn.pane.HTML(gauge_legend_html, width=400)
     gauge = pn.Column(
-        pn.pane.Plotly(gauge_fig, sizing_mode='fixed', width=400, height=200),
-        pn.pane.HTML(gauge_legend_html, width=400),
+        gauge_plotly,
+        gauge_legend,
         sizing_mode='fixed', width=400
     )
     timings['gauge'] = time.time() - t0
 
+    # Battery stored energy gauge
+    t0 = time.time()
+    batt_fig = create_battery_gauge(batt_stats)
+    battery_gauge = pn.pane.Matplotlib(batt_fig, sizing_mode='fixed', width=480, height=160)
+    plt.close(batt_fig)
+    timings['battery_gauge'] = time.time() - t0
+
     # === CENTER COLUMN: Prices Now ===
     t0 = time.time()
-    price_fig = create_price_chart_matplotlib(prices_df)
+    price_fig, price_legend_html = create_price_chart_matplotlib(prices_df)
+    price_legend = pn.pane.HTML(price_legend_html, sizing_mode='stretch_width')
     price_chart = pn.pane.Matplotlib(price_fig, sizing_mode='fixed', width=420, height=300)
     plt.close(price_fig)
     timings['price_chart'] = time.time() - t0
@@ -743,6 +1266,14 @@ def _build_tab_content():
         sizing_mode='stretch_width'
     )
     timings['price_table'] = time.time() - t0
+
+    # Demand gauge
+    t0 = time.time()
+    demand_fig, demand_legend_html = create_demand_gauge(demand_stats, forecast_peak_mw)
+    demand_gauge_pane = pn.pane.Matplotlib(demand_fig, sizing_mode='fixed', width=420, height=220)
+    plt.close(demand_fig)
+    demand_gauge_legend = pn.pane.HTML(demand_legend_html, width=420)
+    timings['demand_gauge'] = time.time() - t0
 
     # === RIGHT COLUMN: Looking Ahead ===
     t0 = time.time()
@@ -767,43 +1298,77 @@ def _build_tab_content():
             sizing_mode='stretch_width'
         )
 
-    # === BUILD LAYOUT ===
-    left_col = pn.Column(
-        section_header("Past 24 Hours"),
-        gen_chart,
-        events_panel,
-        pn.Spacer(height=10),
-        gauge,
-        width=500, sizing_mode='fixed',
-    )
+    # === BUILD LAYOUT (3 rows: tables, charts, gauges) ===
 
-    center_col = pn.Column(
-        section_header("Prices Now"),
-        price_chart,
+    # ROW 1: Tables & text (price table, forecast, notices)
+    row1_left = pn.Column(
         price_table,
-        width=440, sizing_mode='fixed',
+        width=400, sizing_mode='fixed',
     )
-
-    right_col = pn.Column(
-        section_header("Looking Ahead"),
+    row1_center = pn.Column(
         forecast_table,
-        pn.Spacer(height=15),
+        width=420, sizing_mode='fixed',
+    )
+    row1_right = pn.Column(
         notices_panel,
-        width=350, sizing_mode='fixed',
+        width=380, sizing_mode='fixed',
+    )
+    row1 = pn.Row(
+        row1_left, pn.Spacer(width=10),
+        row1_center, pn.Spacer(width=10),
+        row1_right,
+        sizing_mode='fixed',
     )
 
-    main = pn.Row(
-        left_col,
-        pn.Spacer(width=15),
-        center_col,
-        pn.Spacer(width=15),
-        right_col,
-        sizing_mode='fixed'
+    # ROW 2: Charts (price chart with legend, generation mix, outages)
+    row2_left = pn.Column(
+        price_legend,
+        price_chart,
+        width=420, sizing_mode='fixed',
+    )
+    row2_center = pn.Column(
+        gen_chart,
+        width=450, sizing_mode='fixed',
+    )
+    row2_right = pn.Column(
+        outages_panel,
+        width=380, sizing_mode='fixed',
+    )
+    row2 = pn.Row(
+        row2_left, pn.Spacer(width=10),
+        row2_center, pn.Spacer(width=10),
+        row2_right,
+        sizing_mode='fixed',
     )
 
-    # Wrap in container with background
+    # ROW 3: Gauges (demand, renewable, battery)
+    row3_left = pn.Column(
+        demand_gauge_pane,
+        demand_gauge_legend,
+        width=400, sizing_mode='fixed',
+    )
+    row3_center = pn.Column(
+        gauge,
+        width=400, sizing_mode='fixed',
+    )
+    row3_right = pn.Column(
+        battery_gauge,
+        width=420, sizing_mode='fixed',
+    )
+    row3 = pn.Row(
+        row3_left, pn.Spacer(width=10),
+        row3_center, pn.Spacer(width=10),
+        row3_right,
+        sizing_mode='fixed',
+    )
+
+    # Stack the three rows
     layout = pn.Column(
-        main,
+        row1,
+        pn.Spacer(height=10),
+        row2,
+        pn.Spacer(height=10),
+        row3,
         sizing_mode='stretch_width',
         styles={'background': FLEXOKI['background'], 'padding': '10px 15px 15px 15px'},
     )
@@ -814,15 +1379,118 @@ def _build_tab_content():
     timing_str = ', '.join(f"{k}={v:.2f}s" for k, v in timings.items())
     logger.info(f"Today tab timings: {timing_str}")
 
-    return layout
+    # Collect updatable pane references for periodic refresh
+    updatable_panes = {
+        'gen_chart': gen_chart,
+        'outages_panel': outages_panel,
+        'gauge_plotly': gauge_plotly,
+        'gauge_legend': gauge_legend,
+        'price_chart': price_chart,
+        'price_legend': price_legend,
+        'price_table': price_table,
+        'demand_gauge_pane': demand_gauge_pane,
+        'demand_gauge_legend': demand_gauge_legend,
+        'battery_gauge': battery_gauge,
+        'forecast_table': forecast_table,
+        'notices_panel': notices_panel,
+    }
+
+    return layout, updatable_panes
+
+
+def _refresh_today_tab(panes):
+    """Refresh all data-driven panes in the Today tab.
+
+    Called every 4.5 minutes by periodic callback.
+    Updates panes in-place so the layout doesn't need to be rebuilt.
+    """
+    import time
+    t0 = time.time()
+
+    try:
+        # Reload data
+        prices_df, prices_end = load_price_data(hours=24)
+        gen_df, gen_end = load_generation_data(hours=24)
+        predispatch_df, pd_run_time = fetch_predispatch_forecasts()
+        demand_stats = load_demand_data()
+        batt_stats = load_battery_stored()
+        notices = fetch_market_notices(limit=10)
+        # events = create_key_events(prices_df, gen_df)  # commented out — replaced by outages
+
+        # Extract forecast peak demand
+        forecast_peak_mw = None
+        if predispatch_df is not None and len(predispatch_df) > 0:
+            try:
+                demand_col = None
+                for col in ['DEMAND_FORECAST', 'demand_forecast']:
+                    if col in predispatch_df.columns:
+                        demand_col = col
+                        break
+                if demand_col:
+                    ts_col = 'SETTLEMENTDATE' if 'SETTLEMENTDATE' in predispatch_df.columns else 'settlementdate'
+                    forecast_peak_mw = predispatch_df.groupby(ts_col)[demand_col].sum().max()
+            except Exception:
+                pass
+
+        # Update generation chart
+        panes['gen_chart'].object = create_generation_stack(gen_df)
+
+        # Update generator outages panel
+        new_outages = load_outages_panel()
+        if isinstance(new_outages, pn.Column):
+            panes['outages_panel'][:] = list(new_outages)
+        else:
+            panes['outages_panel'][:] = [new_outages]
+
+        # Update gauge
+        gauge_fig, gauge_legend_html = create_renewable_gauge_stacked(gen_df)
+        panes['gauge_plotly'].object = gauge_fig
+        panes['gauge_legend'].object = gauge_legend_html
+
+        # Update price chart + legend (matplotlib - close old figure to prevent memory leak)
+        new_price_fig, new_price_legend_html = create_price_chart_matplotlib(prices_df)
+        panes['price_chart'].object = new_price_fig
+        panes['price_legend'].object = new_price_legend_html
+        plt.close(new_price_fig)
+
+        # Update price table
+        panes['price_table'].object = create_price_table_html(prices_df)
+
+        # Update demand gauge (matplotlib — close old figure to prevent memory leak)
+        demand_fig, demand_legend_html = create_demand_gauge(demand_stats, forecast_peak_mw)
+        panes['demand_gauge_pane'].object = demand_fig
+        panes['demand_gauge_legend'].object = demand_legend_html
+        plt.close(demand_fig)
+
+        # Update battery gauge
+        new_batt_fig = create_battery_gauge(batt_stats)
+        panes['battery_gauge'].object = new_batt_fig
+        plt.close(new_batt_fig)
+
+        # Update forecast
+        panes['forecast_table'].object = create_forecast_table(predispatch_df, pd_run_time)
+
+        # Update notices
+        notices_html_header = f'<h4 style="margin: 5px 0 8px 0; color: {FLEXOKI["foreground"]};">Key Market Notices</h4>'
+        panes['notices_panel'][:] = [
+            pn.pane.HTML(notices_html_header),
+            create_notices_panel(notices),
+        ]
+
+        elapsed = time.time() - t0
+        logger.info(f"Today tab refreshed (prices to {prices_end}, gen to {gen_end}, {elapsed:.1f}s)")
+
+    except Exception as e:
+        logger.error(f"Error refreshing Today tab: {e}")
+        # Don't crash - the tab will just show stale data until next refresh
 
 
 def create_nem_dash_tab(dashboard_instance=None):
     """
-    Create the Today tab with immediate loading indicator.
+    Create the Today tab with immediate loading indicator and auto-refresh.
 
     Shows a loading spinner immediately, then builds content after page loads.
-    Uses pn.state.onload to defer heavy content loading until after the page is served.
+    Registers a periodic callback (every 4.5 min) to refresh all data panes.
     """
     logger.info("Creating Today tab (NEM at a Glance)")
 
@@ -853,9 +1521,17 @@ def create_nem_dash_tab(dashboard_instance=None):
         """Called after page loads in browser via websocket callback."""
         logger.info("onload callback triggered - building Today tab content")
         try:
-            content = _build_tab_content()
+            content, updatable_panes = _build_tab_content()
             container[:] = [content]  # Replace loading indicator with actual content
             logger.info("Today tab content loaded successfully")
+
+            # Register periodic refresh every 4.5 minutes (270,000ms)
+            pn.state.add_periodic_callback(
+                lambda: _refresh_today_tab(updatable_panes),
+                period=270000,
+            )
+            logger.info("Today tab auto-refresh registered (4.5 min interval)")
+
         except Exception as e:
             logger.error(f"Error building Today tab: {e}")
             container[:] = [pn.pane.HTML(
@@ -871,7 +1547,7 @@ def create_nem_dash_tab(dashboard_instance=None):
 
 # Alias for backward compatibility
 def create_nem_dash_tab_with_updates(dashboard_instance=None, auto_update=True):
-    """Create Today tab - auto_update not yet implemented for new layout."""
+    """Create Today tab with auto-refresh enabled."""
     return create_nem_dash_tab(dashboard_instance)
 
 
