@@ -63,7 +63,7 @@ def load_transmission_data(
         # For now, transmission data is only available in 30-minute resolution
         # TODO: Add 5-minute transmission when available
         use_5min = False
-        table = 'transmission_flows_30min'
+        table = 'transmission_30min'
         
         if resolution == 'auto':
             logger.info("Transmission data only available in 30-minute resolution")
@@ -146,7 +146,7 @@ def get_transmission_summary(
             MAX(settlementdate) as end_date,
             AVG(meteredmwflow) as avg_flow,
             MAX(ABS(meteredmwflow)) as max_abs_flow
-        FROM transmission_flows_30min
+        FROM transmission_30min
         WHERE settlementdate >= '{start_date.strftime('%Y-%m-%d %H:%M:%S')}'
         AND settlementdate <= '{end_date.strftime('%Y-%m-%d %H:%M:%S')}'
         """
@@ -185,7 +185,7 @@ def get_available_interconnectors() -> list:
     try:
         query = """
         SELECT DISTINCT interconnectorid
-        FROM transmission_flows_30min
+        FROM transmission_30min
         ORDER BY interconnectorid
         """
         
@@ -238,7 +238,7 @@ def get_flow_statistics(
             SUM(CASE WHEN meteredmwflow < 0 THEN 1 ELSE 0 END) as negative_flow_count,
             AVG(exportlimit) as avg_export_limit,
             AVG(importlimit) as avg_import_limit
-        FROM transmission_flows_30min
+        FROM transmission_30min
         WHERE interconnectorid = '{interconnector_id}'
         AND settlementdate >= '{start_date.strftime('%Y-%m-%d %H:%M:%S')}'
         AND settlementdate <= '{end_date.strftime('%Y-%m-%d %H:%M:%S')}'
