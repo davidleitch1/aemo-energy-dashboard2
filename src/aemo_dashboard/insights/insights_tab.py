@@ -30,6 +30,15 @@ def set_flexoki_backgrounds(plot, element):
             legend.background_fill_color = FLEXOKI_PAPER
             legend.border_line_color = FLEXOKI_BORDER
 
+def set_flexoki_full(plot, element):
+    """Hook: Flexoki cream on both plot area and outer frame, borderless legend."""
+    plot.state.background_fill_color = FLEXOKI_PAPER
+    plot.state.border_fill_color = FLEXOKI_PAPER
+    if hasattr(plot.state, 'legend') and plot.state.legend:
+        for legend in plot.state.legend:
+            legend.background_fill_color = FLEXOKI_PAPER
+            legend.border_line_color = None
+
 # Optional LOESS import
 try:
     from statsmodels.nonparametric.smoothers_lowess import lowess
@@ -43,6 +52,10 @@ class InsightsTab:
     
     def __init__(self):
         """Initialize the batteries tab"""
+        # Force left-align for CheckBoxGroup widgets inside scroll containers
+        pn.config.raw_css.append("""
+            .bk-CheckboxGroup { width: 100% !important; margin-left: 0 !important; margin-right: auto !important; }
+        """)
         # Initialize config
         self.config = Config()
         
@@ -55,7 +68,10 @@ class InsightsTab:
         # Initialize components
         self._setup_controls()
         self._setup_content_area()
-        self._setup_one_bess_controls()
+        self._updating_batteries = False  # Guard flag for checkbox callbacks
+        self._updating_regions = False
+        self._updating_owners = False
+        self._setup_region_controls()
     
     def _load_battery_info(self):
         """Load battery storage information from gen_info"""
@@ -213,599 +229,504 @@ class InsightsTab:
             width=600
         )
     
-    def _setup_one_bess_controls(self):
-        """Set up controls for One BESS subtab"""
-        # Date preset radio buttons for BESS
-        self.bess_date_presets = pn.widgets.RadioBoxGroup(
+    def _setup_region_controls(self):
+        """Set up controls for Region aggregation subtab"""
+        # Region checkboxes (multi-select replaces RadioButtonGroup)
+        self.region_checkboxes = pn.widgets.CheckBoxGroup(
             name='',
-            options=['1 day', '7 days', '30 days', '90 days', '1 year', 'All data'],
-            value='7 days',
-            inline=False,
-            width=100
+            options=['NSW1', 'QLD1', 'SA1', 'VIC1'],
+            value=['NSW1', 'QLD1', 'SA1', 'VIC1'],
+            inline=False
         )
-        
-        # Date pickers for BESS
+        self.region_select_all = pn.widgets.Checkbox(
+            name='Select All', value=True, width=100
+        )
+
+        # Owner checkboxes (replaces MultiChoice dropdown)
+        _left_justify_css = [
+            ':host { width: 100% !important; display: block !important; text-align: left !important; }',
+            '.bk-input-group { text-align: left !important; width: 100% !important; align-items: start !important; }',
+            '.bk-input-group label { padding-left: 2px; margin-left: 0; text-align: left; }',
+        ]
+        self.owner_checkboxes = pn.widgets.CheckBoxGroup(
+            name='', options=[], value=[], inline=False,
+            sizing_mode='stretch_width', align='start',
+            stylesheets=_left_justify_css
+        )
+        self.owner_select_all = pn.widgets.Checkbox(
+            name='Select All', value=True, width=200
+        )
+        _col_left_css = [
+            '* { align-items: start !important; justify-items: start !important; }',
+        ]
+        self.owner_scroll = pn.Column(
+            self.owner_checkboxes, scroll=True, height=250,
+            width=250,
+            align='start', stylesheets=_col_left_css
+        )
+
+        # Battery checkboxes (scrollable, stretch width)
+        self.battery_select_all = pn.widgets.Checkbox(
+            name='Select All', value=True
+        )
+        self.region_battery_checkboxes = pn.widgets.CheckBoxGroup(
+            name='', options={}, value=[], inline=False,
+            sizing_mode='stretch_width', align='start',
+            stylesheets=_left_justify_css
+        )
+        self.region_battery_scroll = pn.Column(
+            self.region_battery_checkboxes,
+            scroll=True, height=250,
+            sizing_mode='stretch_width',
+            align='start', stylesheets=_col_left_css
+        )
+
+        # Date preset buttons (horizontal row)
+        self.region_date_presets = pn.widgets.RadioButtonGroup(
+            name='',
+            options=['1d', '7d', '30d', '90d', '1yr', 'All'],
+            value='30d',
+            button_type='default'
+        )
+
+        # Date pickers
         default_end = pd.Timestamp.now().date()
-        default_start = default_end - pd.Timedelta(days=7)
-        
-        self.bess_start_date = pn.widgets.DatePicker(
+        default_start = default_end - pd.Timedelta(days=30)
+
+        self.region_start_date = pn.widgets.DatePicker(
             name='Start Date',
             value=default_start,
             width=120
         )
-        
-        self.bess_end_date = pn.widgets.DatePicker(
+
+        self.region_end_date = pn.widgets.DatePicker(
             name='End Date',
             value=default_end,
             width=120
         )
-        
-        # Frequency selector for BESS
-        self.bess_frequency = pn.widgets.RadioBoxGroup(
+
+        # Frequency selector (horizontal toggle)
+        self.region_frequency = pn.widgets.RadioButtonGroup(
             name='',
-            value='1 hour',
-            options=['5 min', '30 min', '1 hour', 'Daily'],
-            inline=False,
-            width=120
+            value='1h',
+            options=['5m', '1h'],
+            button_type='default',
+            button_style='outline'
         )
-        
-        # Region selector for BESS
-        self.bess_region_selector = pn.widgets.Select(
-            name='Select Region',
-            value='NSW1',
-            options=['NSW1', 'QLD1', 'SA1', 'VIC1'],
-            width=150
-        )
-        
-        # Battery selector - will be populated based on region
-        initial_batteries = self.batteries_by_region.get('NSW1', [])
-        self.bess_selector = pn.widgets.Select(
-            name='Select Battery',
-            value=initial_batteries[0][1] if initial_batteries else None,
-            options=dict(initial_batteries),
-            width=400
-        )
-        
-        # Analysis button
-        self.bess_analyze_button = pn.widgets.Button(
-            name='Analyze Battery',
-            button_type='primary',
-            width=150
-        )
-        
-        # Log scale selector for price plot
-        self.bess_log_scale = pn.widgets.Checkbox(
+
+        # Log scale checkbox
+        self.region_log_scale = pn.widgets.Checkbox(
             name='Log Scale (Price)',
             value=False,
             width=120
         )
-        
+
+        # Analyze button
+        self.region_analyze_button = pn.widgets.Button(
+            name='Analyze Fleet',
+            button_type='primary',
+            width=130
+        )
+
         # Results panes
-        self.bess_info_pane = pn.pane.HTML(
+        self.region_info_pane = pn.pane.HTML(
             """
             <div style="background-color: #FFFCF0; border: 1px solid #B7B5AC; padding: 10px; border-radius: 5px;">
-                <p style="color: #100F0F;">Select a battery and click Analyze to view details.</p>
+                <p style="color: #100F0F;">Select a region and click Analyze to view fleet-level battery metrics.</p>
             </div>
             """,
             sizing_mode='stretch_width'
         )
-        
-        self.bess_chart_pane = pn.pane.HoloViews(
+
+        self.region_chart_pane = pn.pane.Plotly(
             object=None,
             sizing_mode='stretch_width',
-            height=400
+            height=600
         )
-        
-        # Set up callbacks
-        def update_bess_date_range(event):
-            """Update date range based on preset selection for BESS"""
-            preset = event.new
-            current_end = self.bess_end_date.value
-            
-            if preset == '1 day':
-                new_start = current_end - pd.Timedelta(days=1)
-            elif preset == '7 days':
-                new_start = current_end - pd.Timedelta(days=7)
-            elif preset == '30 days':
-                new_start = current_end - pd.Timedelta(days=30)
-            elif preset == '90 days':
-                new_start = current_end - pd.Timedelta(days=90)
-            elif preset == '1 year':
-                new_start = current_end - pd.Timedelta(days=365)
-            else:  # All data
+
+        # Time of Day sub-tab panes
+        self.region_tod_chart_pane = pn.pane.Plotly(
+            object=None,
+            sizing_mode='stretch_width',
+            height=500
+        )
+        self.region_tod_info_pane = pn.pane.HTML(
+            """
+            <div style="background-color: #FFFCF0; border: 1px solid #B7B5AC; padding: 10px; border-radius: 5px;">
+                <p style="color: #100F0F;">Click <strong>Analyze Region</strong> to view hourly battery profiles.</p>
+            </div>
+            """,
+            sizing_mode='stretch_width'
+        )
+
+        # Callbacks
+        def update_region_date_range(event):
+            """Update date range based on preset selection"""
+            preset_days = {'1d': 1, '7d': 7, '30d': 30, '90d': 90, '1yr': 365, 'All': None}
+            days = preset_days.get(event.new)
+            current_end = self.region_end_date.value
+            if days is None:
                 new_start = pd.Timestamp('2020-01-01').date()
-            
-            self.bess_start_date.value = new_start
-        
-        def update_battery_list(event):
-            """Update battery list when region changes"""
-            selected_region = event.new
-            batteries = self.batteries_by_region.get(selected_region, [])
-            self.bess_selector.options = dict(batteries)
-            if batteries:
-                self.bess_selector.value = batteries[0][1]
-            logger.info(f"Updated battery list for region {selected_region}: {len(batteries)} batteries")
-        
-        def analyze_battery(event):
-            """Analyze selected battery with date range and frequency"""
-            selected_duid = self.bess_selector.value
-            selected_region = self.bess_region_selector.value
-            start_date = self.bess_start_date.value
-            end_date = self.bess_end_date.value
-            frequency = self.bess_frequency.value
-            
-            if not selected_duid:
-                self.bess_info_pane.object = """
+            else:
+                new_start = current_end - pd.Timedelta(days=days)
+            self.region_start_date.value = new_start
+
+        def analyze_region(event):
+            """Analyze all batteries in selected regions"""
+            selected_regions = self.region_checkboxes.value
+            start_date = self.region_start_date.value
+            end_date = self.region_end_date.value
+            frequency = self.region_frequency.value
+
+            if not selected_regions:
+                self.region_info_pane.object = """
                 <div style="background-color: #FFFCF0; border: 1px solid #B7B5AC; padding: 10px; border-radius: 5px;">
-                    <p style="color: #AF3029;">No battery selected.</p>
+                    <p style="color: #AF3029;">No regions selected. Check at least one region.</p>
                 </div>
                 """
+                self.region_chart_pane.object = None
                 return
-            
-            # Get battery info
-            battery_data = self.battery_info[self.battery_info['DUID'] == selected_duid]
-            if not battery_data.empty:
-                battery = battery_data.iloc[0].to_dict()  # Convert to dict for safer access
-                
-                # Debug: Print available keys
-                logger.info(f"Battery dict keys: {list(battery.keys())}")
-                
-                capacity_mw = battery.get('Capacity(MW)', battery.get('Reg Cap (MW)', 0))
-                storage_mwh = battery.get('Storage(MWh)', 0)
-                duration = storage_mwh / capacity_mw if capacity_mw > 0 else 0
-                
-                # Load generation and price data for analysis
-                try:
-                    # Convert dates to datetime
-                    start_dt = pd.Timestamp(start_date)
-                    end_dt = pd.Timestamp(end_date) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
-                    
-                    # Load generation data - use 5min if requested, otherwise 30min
-                    from aemo_dashboard.shared.adapter_selector import load_generation_data
-                    base_resolution = '5min' if frequency == '5 min' else '30min'
-                    gen_data = load_generation_data(
-                        start_date=start_dt,
-                        end_date=end_dt,
-                        resolution=base_resolution
-                    )
-                    
-                    if not gen_data.empty:
-                        # Standardize column names to uppercase for consistency
-                        gen_data.columns = gen_data.columns.str.upper()
-                        
-                        # Filter for selected DUID
-                        battery_gen = gen_data[gen_data['DUID'] == selected_duid].copy()
-                        
-                        if not battery_gen.empty:
-                            # Load price data - same resolution as generation
-                            from aemo_dashboard.shared.adapter_selector import load_price_data
-                            price_data = load_price_data(
-                                start_date=start_dt,
-                                end_date=end_dt,
-                                resolution=base_resolution,
-                                regions=[selected_region]
-                            )
-                            
-                            if not price_data.empty:
-                                # Merge generation and price data
-                                battery_gen['SETTLEMENTDATE'] = pd.to_datetime(battery_gen['SETTLEMENTDATE'])
-                                price_data.index.name = 'SETTLEMENTDATE'
-                                price_data = price_data.reset_index()
-                                price_data['SETTLEMENTDATE'] = pd.to_datetime(price_data['SETTLEMENTDATE'])
-                                
-                                # Debug: Check data before merge
-                                logger.info(f"Battery gen records: {len(battery_gen)}, unique timestamps: {battery_gen['SETTLEMENTDATE'].nunique()}")
-                                logger.info(f"Price data records: {len(price_data)}, unique timestamps: {price_data['SETTLEMENTDATE'].nunique()}")
-                                
-                                # Use outer merge to keep all timestamps from both datasets
-                                analysis_data = battery_gen.merge(
-                                    price_data[['SETTLEMENTDATE', 'RRP']],
-                                    on='SETTLEMENTDATE',
-                                    how='outer'  # Changed from 'left' to 'outer' to keep all price data
-                                )
-                                
-                                # Fill missing SCADAVALUE with 0 (battery idle) and DUID with the selected DUID
-                                analysis_data['SCADAVALUE'] = analysis_data['SCADAVALUE'].fillna(0)
-                                analysis_data['DUID'] = analysis_data['DUID'].fillna(selected_duid)
-                                
-                                logger.info(f"After merge: {len(analysis_data)} records, RRP nulls: {analysis_data['RRP'].isnull().sum()}")
-                                
-                                # Determine base time multiplier for the source data
-                                if base_resolution == '5min':
-                                    base_time_multiplier = 1/12  # 5 minutes = 1/12 hours
-                                else:  # 30min
-                                    base_time_multiplier = 0.5  # 30 minutes = 0.5 hours
-                                
-                                # First, calculate MWh and revenue for each base period
-                                analysis_data['MWH'] = analysis_data['SCADAVALUE'] * base_time_multiplier
-                                analysis_data['REVENUE'] = analysis_data['MWH'] * analysis_data['RRP']
-                                
-                                # Aggregate data based on frequency selection
-                                if frequency == '5 min':
-                                    # Using 5-minute data as-is
-                                    aggregated_data = analysis_data.copy()
-                                elif frequency == '30 min':
-                                    # Use 30-minute data as-is
-                                    aggregated_data = analysis_data.copy()
-                                elif frequency == '1 hour':
-                                    # Aggregate to hourly
-                                    analysis_data['SETTLEMENTDATE'] = pd.to_datetime(analysis_data['SETTLEMENTDATE'])
-                                    
-                                    # Group by hour and aggregate
-                                    aggregated_data = analysis_data.set_index('SETTLEMENTDATE').resample('1H').agg({
-                                        'SCADAVALUE': 'mean',  # Average MW for display
-                                        'MWH': 'sum',  # Total MWh for the hour
-                                        'REVENUE': 'sum',  # Total revenue for the hour
-                                        'RRP': 'mean',  # Simple average price for display
-                                        'DUID': 'first'
-                                    }).reset_index()
-                                    
-                                elif frequency == 'Daily':
-                                    # Aggregate to daily
-                                    analysis_data['SETTLEMENTDATE'] = pd.to_datetime(analysis_data['SETTLEMENTDATE'])
-                                    
-                                    # Group by day and aggregate
-                                    aggregated_data = analysis_data.set_index('SETTLEMENTDATE').resample('1D').agg({
-                                        'SCADAVALUE': 'mean',  # Average MW for display
-                                        'MWH': 'sum',  # Total MWh for the day
-                                        'REVENUE': 'sum',  # Total revenue for the day
-                                        'RRP': 'mean',  # Simple average price for display
-                                        'DUID': 'first'
-                                    }).reset_index()
-                                    
-                                else:
-                                    # Default to base resolution
-                                    aggregated_data = analysis_data.copy()
-                                
-                                # Calculate metrics using aggregated data
-                                # Split by charge/discharge based on MWH (which preserves the sign from SCADAVALUE)
-                                discharge_data = aggregated_data[aggregated_data['MWH'] > 0]
-                                charge_data = aggregated_data[aggregated_data['MWH'] < 0]
-                                
-                                # Calculate totals from pre-aggregated data
-                                # Energy totals
-                                total_discharge_mwh = discharge_data['MWH'].sum() if not discharge_data.empty else 0
-                                total_charge_mwh = abs(charge_data['MWH'].sum()) if not charge_data.empty else 0
-                                
-                                # Revenue totals (already calculated in REVENUE column)
-                                total_discharge_revenue = discharge_data['REVENUE'].sum() if not discharge_data.empty else 0
-                                total_charge_cost = abs(charge_data['REVENUE'].sum()) if not charge_data.empty else 0
-                                
-                                # Calculate weighted average prices from totals
-                                avg_discharge_price = total_discharge_revenue / total_discharge_mwh if total_discharge_mwh > 0 else 0
-                                avg_charge_price = total_charge_cost / total_charge_mwh if total_charge_mwh > 0 else 0
-                                
-                                # Calculate average spread
-                                avg_spread = avg_discharge_price - avg_charge_price
-                                
-                                # Debug logging to verify calculations
-                                logger.info(f"Frequency: {frequency}, Base resolution: {base_resolution}")
-                                logger.info(f"Total discharge MWh: {total_discharge_mwh:.2f}")
-                                logger.info(f"Total charge MWh: {total_charge_mwh:.2f}")
-                                logger.info(f"Total discharge revenue: ${total_discharge_revenue:.2f}")
-                                logger.info(f"Total charge cost: ${total_charge_cost:.2f}")
-                                logger.info(f"Avg discharge price: ${avg_discharge_price:.2f}/MWh")
-                                logger.info(f"Avg charge price: ${avg_charge_price:.2f}/MWh")
-                                logger.info(f"Verification - Revenue/MWh: ${total_discharge_revenue/total_discharge_mwh:.2f}" if total_discharge_mwh > 0 else "No discharge")
-                                
-                                # Total spread is the net profit (revenue minus cost)
-                                total_spread = total_discharge_revenue - total_charge_cost
-                                
-                                # Days calculation
-                                total_days = (end_dt - start_dt).days + 1
-                                aggregated_data['SETTLEMENTDATE'] = pd.to_datetime(aggregated_data['SETTLEMENTDATE'])
-                                aggregated_data['date'] = aggregated_data['SETTLEMENTDATE'].dt.date
-                                days_discharged = aggregated_data[aggregated_data['SCADAVALUE'] > 0]['date'].nunique()
-                                days_charged = aggregated_data[aggregated_data['SCADAVALUE'] < 0]['date'].nunique()
-                                pct_days_discharged = (days_discharged / total_days * 100) if total_days > 0 else 0
-                                pct_days_charged = (days_charged / total_days * 100) if total_days > 0 else 0
-                                
-                                # Capacity utilization (based on one full discharge cycle per day)
-                                capacity_utilization = (total_discharge_mwh / (storage_mwh * total_days) * 100) if storage_mwh > 0 and total_days > 0 else 0
-                                
-                                # Format revenue/cost
-                                if abs(total_discharge_revenue) >= 1000000:
-                                    revenue_str = f"${total_discharge_revenue/1000000:.2f}m"
-                                else:
-                                    revenue_str = f"${total_discharge_revenue/1000:.1f}k"
-                                
-                                if abs(total_charge_cost) >= 1000000:
-                                    cost_str = f"${total_charge_cost/1000000:.2f}m"
-                                else:
-                                    cost_str = f"${total_charge_cost/1000:.1f}k"
-                                
-                                # Format total spread
-                                if abs(total_spread) >= 1000000:
-                                    total_spread_str = f"${total_spread/1000000:.2f}m"
-                                else:
-                                    total_spread_str = f"${total_spread/1000:.1f}k"
-                                
-                                # Create hvplot chart
-                                import hvplot.pandas
-                                
-                                # Prepare data for plotting - use aggregated data
-                                plot_data = aggregated_data.copy()
-                                # Set SETTLEMENTDATE as index for hvplot
-                                plot_data = plot_data.set_index('SETTLEMENTDATE')
-                                plot_data.index = pd.to_datetime(plot_data.index)
-                                plot_data = plot_data.sort_index()
-                                
-                                # IMPORTANT: Filter to the requested date range
-                                # The outer merge may have expanded the data beyond what was requested
-                                plot_data = plot_data[
-                                    (plot_data.index >= pd.Timestamp(start_date)) & 
-                                    (plot_data.index <= pd.Timestamp(end_date) + pd.Timedelta(days=1))
-                                ]
-                                
-                                # Debug logging
-                                logger.info(f"Plot data shape: {plot_data.shape}")
-                                logger.info(f"Date range in plot: {plot_data.index.min()} to {plot_data.index.max()}")
-                                logger.info(f"SCADAVALUE range: {plot_data['SCADAVALUE'].min():.2f} to {plot_data['SCADAVALUE'].max():.2f}")
-                                logger.info(f"RRP nulls after processing: {plot_data['RRP'].isnull().sum()} out of {len(plot_data)}")
-                                
-                                # Use bar plot which works perfectly with colors
-                                # In AEMO data: positive SCADAVALUE = discharge (generation), negative = charge (consumption)
-                                
-                                # Create a DataFrame with both columns
-                                power_df = pd.DataFrame(index=plot_data.index)
-                                power_df['Discharge'] = plot_data['SCADAVALUE'].where(plot_data['SCADAVALUE'] > 0, 0)
-                                power_df['Charge'] = plot_data['SCADAVALUE'].where(plot_data['SCADAVALUE'] < 0, 0)
-                                
-                                # Create bar plots with explicit xlim to prevent cross-tab interference
-                                # Set the xlim explicitly based on the selected date range
-                                xlim = (pd.Timestamp(start_date), pd.Timestamp(end_date) + pd.Timedelta(days=1))
-                                
-                                discharge_plot = power_df['Discharge'].hvplot.step(
-                                    where='mid',
-                                    color='#879A39',  # Flexoki Green
-                                    line_width=1,
-                                    label='Discharge'
-                                ).redim(x='BatteryTime').opts(
-                                    xlim=xlim  # Set xlim in opts() for proper range control
-                                )
 
-                                charge_plot = power_df['Charge'].hvplot.step(
-                                    where='mid',
-                                    color='#AF3029',  # Flexoki Red
-                                    line_width=1,
-                                    label='Charge'
-                                ).redim(x='BatteryTime').opts(
-                                    xlim=xlim  # Same xlim for linked axes within tab
-                                )
-                                
-                                # Combine the charge/discharge plots
-                                power_plot = (discharge_plot * charge_plot).opts(
-                                    ylabel='Power (MW)',
-                                    xlabel='',  # Remove x-label from top plot
-                                    height=300,
-                                    width=800,
-                                    title=f"{battery['Site Name']} - Charge/Discharge Profile",
-                                    legend_position='top_right',
-                                    bgcolor=FLEXOKI_PAPER,
-                                    show_grid=True,
-                                    gridstyle={'grid_line_alpha': 0.3, 'grid_line_color': FLEXOKI_BORDER},
-                                    xaxis='top',  # Show x-axis at the top of the first plot
-                                    hooks=[set_flexoki_backgrounds]  # Set legend background
-                                )
+            # Get selected batteries from checkboxes
+            fleet_duids = self.region_battery_checkboxes.value
+            if not fleet_duids:
+                self.region_info_pane.object = """
+                <div style="background-color: #FFFCF0; border: 1px solid #B7B5AC; padding: 10px; border-radius: 5px;">
+                    <p style="color: #AF3029;">No batteries selected. Check at least one battery.</p>
+                </div>
+                """
+                self.region_chart_pane.object = None
+                return
 
-                                # Create a horizontal line at y=0 for the price plot
-                                import holoviews as hv
-                                zero_line = hv.HLine(0).opts(
-                                    color='#100F0F',
-                                    line_width=0.5,
-                                    alpha=0.8
-                                )  # HLine doesn't need redim as it has no x dimension
-                                
-                                # Handle log scale for price plot
-                                use_log_scale = self.bess_log_scale.value
-                                
-                                if use_log_scale:
-                                    ylabel_text = 'Price ($/MWh, symlog scale)'
-                                    # Apply symlog transformation to the data for plotting
-                                    # This creates a symmetric log scale effect that handles negative values
-                                    import numpy as np
-                                    
-                                    symlog_threshold = 300
-                                    price_data_transformed = plot_data['RRP'].copy()
-                                    
-                                    # Apply symlog transformation manually
-                                    # For values between -300 and 300, keep them linear
-                                    # For values above 300 or below -300, apply log transformation
-                                    positive_mask = price_data_transformed > symlog_threshold
-                                    negative_mask = price_data_transformed < -symlog_threshold
-                                    
-                                    # Transform positive values above threshold
-                                    if positive_mask.any():
-                                        price_data_transformed.loc[positive_mask] = (
-                                            symlog_threshold * (1 + np.log10(price_data_transformed.loc[positive_mask] / symlog_threshold))
-                                        )
-                                    
-                                    # Transform negative values below threshold
-                                    if negative_mask.any():
-                                        price_data_transformed.loc[negative_mask] = (
-                                            -symlog_threshold * (1 + np.log10(-price_data_transformed.loc[negative_mask] / symlog_threshold))
-                                        )
-                                    
-                                    # Create the plot with transformed data and explicit xlim
-                                    price_line = price_data_transformed.hvplot.line(
-                                        color='#D0A215',  # Flexoki Yellow for price
-                                        line_width=2,
-                                        ylabel=ylabel_text,
-                                        xlabel='Date',
-                                        label='Price (symlog)',
-                                        height=280,  # Increased height for price plot
-                                        width=800
-                                    ).redim(x='BatteryTime').opts(  # Keep unique dimension name
-                                        bgcolor=FLEXOKI_PAPER,
-                                        show_grid=True,
-                                        gridstyle={'grid_line_alpha': 0.3, 'grid_line_color': FLEXOKI_BORDER},
-                                        line_join='round',
-                                        line_cap='round',
-                                        xlim=xlim,  # Set xlim in opts() for proper range control
-                                        hooks=[set_flexoki_backgrounds]  # Set legend background
-                                    )
-                                    
-                                else:
-                                    ylabel_text = 'Price ($/MWh)'
-                                    # Create normal linear scale price plot with explicit xlim
-                                    price_line = plot_data['RRP'].hvplot.line(
-                                        color='#D0A215',  # Flexoki Yellow for price
-                                        line_width=2,
-                                        ylabel=ylabel_text,
-                                        xlabel='Date',
-                                        label='Price',
-                                        height=280,  # Increased height for price plot
-                                        width=800
-                                    ).redim(x='BatteryTime').opts(  # Keep unique dimension name
-                                        bgcolor=FLEXOKI_PAPER,
-                                        show_grid=True,
-                                        gridstyle={'grid_line_alpha': 0.3, 'grid_line_color': FLEXOKI_BORDER},
-                                        line_join='round',
-                                        line_cap='round',
-                                        xlim=xlim,  # Set xlim in opts() for proper range control
-                                        hooks=[set_flexoki_backgrounds]  # Set legend background
-                                    )
-                                
-                                # Always overlay the zero line (visible in both linear and symlog)
-                                price_plot = price_line * zero_line
-                                
-                                # APPROACH 1: RangeXY stream for LOCAL axis linking
-                                # This creates a local link without global interference
-                                import holoviews as hv
-                                
-                                # Create RangeXY stream for local linking
-                                rangexy = hv.streams.RangeXY(source=power_plot)
-                                
-                                # Create dynamic map for price plot that follows power plot's range
-                                price_plot_linked = hv.DynamicMap(
-                                    lambda x_range, y_range: price_plot.opts(xlim=x_range) if x_range else price_plot,
-                                    streams=[rangexy]
-                                )
-                                
-                                # Stack plots WITHOUT shared_axes to avoid global linking
-                                # The RangeXY stream provides the local link instead
-                                combined_plot = (power_plot + price_plot_linked).cols(1).opts(
-                                    hv.opts.Layout(
-                                        shared_axes=False,  # No global linking
-                                        merge_tools=False   # Keep tools separate  
-                                    )
-                                )
-                                
-                                # Update the chart pane
-                                self.bess_chart_pane.object = combined_plot
-                                
-                                # APPROACH 2 (ALTERNATIVE): Panel container with manual Bokeh linking
-                                # Uncomment this block and comment out APPROACH 1 to test
-                                """
-                                # Create layout without shared_axes
-                                combined_plot = (power_plot + price_plot).cols(1).opts(
-                                    hv.opts.Layout(shared_axes=False)
-                                )
-                                
-                                # Convert to Panel panes
-                                plot_container = pn.Column()
-                                power_pane = pn.pane.HoloViews(power_plot, height=300, width=800)
-                                price_pane = pn.pane.HoloViews(price_plot, height=280, width=800)
-                                
-                                # Link axes after render
-                                def link_axes():
-                                    try:
-                                        if hasattr(power_pane, '_models') and hasattr(price_pane, '_models'):
-                                            for doc in power_pane._models:
-                                                power_model = power_pane._models[doc][0]
-                                                if doc in price_pane._models:
-                                                    price_model = price_pane._models[doc][0]
-                                                    if hasattr(power_model, 'x_range') and hasattr(price_model, 'x_range'):
-                                                        price_model.x_range = power_model.x_range
-                                                        logger.info("Linked x-axes locally")
-                                                        break
-                                    except Exception as e:
-                                        logger.debug(f"Axis linking: {e}")
-                                
-                                pn.state.onload(link_axes)
-                                plot_container.clear()
-                                plot_container.extend([power_pane, price_pane])
-                                self.bess_chart_pane.object = plot_container
-                                """
-                                
-                                # Create performance metrics table
-                                metrics_html = f"""
-                                <hr style="border-color: #B7B5AC; margin: 15px 0;">
-                                <table style="color: #100F0F; width: 100%; border-collapse: collapse;">
-                                    <tr><td colspan="2" style="color: #24837B; padding-bottom: 10px;"><strong>Performance Metrics:</strong></td></tr>
-                                    <tr style="border-bottom: 1px solid #DAD8CE;">
-                                        <td style="padding: 5px;"><strong>Average Discharge Price:</strong></td>
-                                        <td style="padding: 5px; text-align: right;">${avg_discharge_price:.0f}/MWh</td>
-                                    </tr>
-                                    <tr style="border-bottom: 1px solid #DAD8CE;">
-                                        <td style="padding: 5px;"><strong>Average Charge Price:</strong></td>
-                                        <td style="padding: 5px; text-align: right;">${avg_charge_price:.0f}/MWh</td>
-                                    </tr>
-                                    <tr style="border-bottom: 1px solid #DAD8CE;">
-                                        <td style="padding: 5px;"><strong>Average Spread:</strong></td>
-                                        <td style="padding: 5px; text-align: right; color: #24837B; font-weight: bold;">${avg_spread:.0f}/MWh</td>
-                                    </tr>
-                                    <tr style="border-bottom: 1px solid #DAD8CE;">
-                                        <td style="padding: 5px;"><strong>Total Discharge Revenue:</strong></td>
-                                        <td style="padding: 5px; text-align: right; color: #24837B;">{revenue_str}</td>
-                                    </tr>
-                                    <tr style="border-bottom: 1px solid #DAD8CE;">
-                                        <td style="padding: 5px;"><strong>Total Charge Cost:</strong></td>
-                                        <td style="padding: 5px; text-align: right; color: #AF3029;">{cost_str}</td>
-                                    </tr>
-                                    <tr style="border-bottom: 1px solid #DAD8CE;">
-                                        <td style="padding: 5px;"><strong>Total Spread (Gross Profit):</strong></td>
-                                        <td style="padding: 5px; text-align: right; color: #BC5215; font-weight: bold;">{total_spread_str}</td>
-                                    </tr>
-                                    <tr style="border-bottom: 1px solid #DAD8CE;">
-                                        <td style="padding: 5px;"><strong>Total Discharge Energy:</strong></td>
-                                        <td style="padding: 5px; text-align: right;">{total_discharge_mwh:,.1f} MWh</td>
-                                    </tr>
-                                    <tr style="border-bottom: 1px solid #DAD8CE;">
-                                        <td style="padding: 5px;"><strong>Total Charge Energy:</strong></td>
-                                        <td style="padding: 5px; text-align: right;">{total_charge_mwh:,.1f} MWh</td>
-                                    </tr>
-                                    <tr style="border-bottom: 1px solid #DAD8CE;">
-                                        <td style="padding: 5px;"><strong>Days Discharged:</strong></td>
-                                        <td style="padding: 5px; text-align: right;">{pct_days_discharged:.1f}% ({days_discharged}/{total_days} days)</td>
-                                    </tr>
-                                    <tr style="border-bottom: 1px solid #DAD8CE;">
-                                        <td style="padding: 5px;"><strong>Days Charged:</strong></td>
-                                        <td style="padding: 5px; text-align: right;">{pct_days_charged:.1f}% ({days_charged}/{total_days} days)</td>
-                                    </tr>
-                                    <tr>
-                                        <td style="padding: 5px;"><strong>Capacity Utilization:</strong></td>
-                                        <td style="padding: 5px; text-align: right; color: #BC5215;">{capacity_utilization:.1f}%</td>
-                                    </tr>
-                                </table>
-                                """
-                            else:
-                                metrics_html = '<p style="color: #AF3029;">No price data available for analysis period.</p>'
-                                self.bess_chart_pane.object = None  # Clear chart
-                        else:
-                            metrics_html = '<p style="color: #AF3029;">No generation data found for this battery in the selected period.</p>'
-                            self.bess_chart_pane.object = None  # Clear chart
-                    else:
-                        metrics_html = '<p style="color: #AF3029;">No generation data available for analysis period.</p>'
-                        self.bess_chart_pane.object = None  # Clear chart
-                        
-                except Exception as e:
-                    logger.error(f"Error analyzing battery: {e}")
-                    metrics_html = f'<p style="color: #AF3029;">Error analyzing battery: {str(e)}</p>'
-                    self.bess_chart_pane.object = None  # Clear chart on error
-                
-                # Create info display with analysis parameters and metrics
+            actual_regions = selected_regions
+
+            fleet_batteries = self.battery_info[
+                self.battery_info['DUID'].isin(fleet_duids)
+            ].copy()
+            num_batteries = len(fleet_duids)
+            num_total = len(self.region_battery_checkboxes.options)
+            total_capacity_mw = fleet_batteries['Capacity(MW)'].sum()
+            total_storage_mwh = fleet_batteries['Storage(MWh)'].sum()
+
+            try:
+                start_dt = pd.Timestamp(start_date)
+                end_dt = pd.Timestamp(end_date) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
+
+                # Load generation data
+                base_resolution = '5min' if frequency == '5m' else '30min'
+                gen_data = load_generation_data(
+                    start_date=start_dt,
+                    end_date=end_dt,
+                    resolution=base_resolution
+                )
+
+                if gen_data.empty:
+                    self.region_info_pane.object = """
+                    <div style="background-color: #FFFCF0; border: 1px solid #B7B5AC; padding: 10px; border-radius: 5px;">
+                        <p style="color: #AF3029;">No generation data available for analysis period.</p>
+                    </div>
+                    """
+                    self.region_chart_pane.object = None
+                    return
+
+                gen_data.columns = gen_data.columns.str.upper()
+
+                # Filter for fleet DUIDs
+                fleet_gen = gen_data[gen_data['DUID'].isin(fleet_duids)].copy()
+
+                if fleet_gen.empty:
+                    self.region_info_pane.object = """
+                    <div style="background-color: #FFFCF0; border: 1px solid #B7B5AC; padding: 10px; border-radius: 5px;">
+                        <p style="color: #AF3029;">No generation data found for batteries in this region.</p>
+                    </div>
+                    """
+                    self.region_chart_pane.object = None
+                    return
+
+                # Aggregate across all batteries per timestamp
+                fleet_gen['SETTLEMENTDATE'] = pd.to_datetime(fleet_gen['SETTLEMENTDATE'])
+                agg_gen = fleet_gen.groupby('SETTLEMENTDATE').agg(
+                    SCADAVALUE=('SCADAVALUE', 'sum')
+                ).reset_index()
+
+                # Load price data for all selected regions
+                price_data = load_price_data(
+                    start_date=start_dt,
+                    end_date=end_dt,
+                    resolution=base_resolution,
+                    regions=actual_regions
+                )
+                if not price_data.empty:
+                    if price_data.index.name == 'SETTLEMENTDATE':
+                        price_data = price_data.reset_index()
+                    price_data['SETTLEMENTDATE'] = pd.to_datetime(price_data['SETTLEMENTDATE'])
+                    if len(actual_regions) > 1:
+                        price_data = price_data.groupby('SETTLEMENTDATE').agg(
+                            RRP=('RRP', 'mean')
+                        ).reset_index()
+
+                if price_data.empty:
+                    self.region_info_pane.object = """
+                    <div style="background-color: #FFFCF0; border: 1px solid #B7B5AC; padding: 10px; border-radius: 5px;">
+                        <p style="color: #AF3029;">No price data available for analysis period.</p>
+                    </div>
+                    """
+                    self.region_chart_pane.object = None
+                    return
+
+                # Merge generation and price
+                analysis_data = agg_gen.merge(
+                    price_data[['SETTLEMENTDATE', 'RRP']],
+                    on='SETTLEMENTDATE',
+                    how='outer'
+                )
+                analysis_data['SCADAVALUE'] = analysis_data['SCADAVALUE'].fillna(0)
+
+                # Time multiplier
+                if base_resolution == '5min':
+                    base_time_multiplier = 1 / 12
+                else:
+                    base_time_multiplier = 0.5
+
+                analysis_data['MWH'] = analysis_data['SCADAVALUE'] * base_time_multiplier
+                analysis_data['REVENUE'] = analysis_data['MWH'] * analysis_data['RRP']
+
+                # Aggregate by frequency
+                resample_map = {'5m': None, '1h': '1h'}
+                resample_freq = resample_map.get(frequency)
+                if resample_freq is None:
+                    aggregated_data = analysis_data.copy()
+                else:
+                    analysis_data['SETTLEMENTDATE'] = pd.to_datetime(analysis_data['SETTLEMENTDATE'])
+                    aggregated_data = analysis_data.set_index('SETTLEMENTDATE').resample(resample_freq).agg({
+                        'SCADAVALUE': 'mean',
+                        'MWH': 'sum',
+                        'REVENUE': 'sum',
+                        'RRP': 'mean',
+                    }).reset_index()
+
+                # Split discharge / charge
+                discharge_data = aggregated_data[aggregated_data['MWH'] > 0]
+                charge_data = aggregated_data[aggregated_data['MWH'] < 0]
+
+                total_discharge_mwh = discharge_data['MWH'].sum() if not discharge_data.empty else 0
+                total_charge_mwh = abs(charge_data['MWH'].sum()) if not charge_data.empty else 0
+                total_discharge_revenue = discharge_data['REVENUE'].sum() if not discharge_data.empty else 0
+                total_charge_cost = abs(charge_data['REVENUE'].sum()) if not charge_data.empty else 0
+                avg_discharge_price = total_discharge_revenue / total_discharge_mwh if total_discharge_mwh > 0 else 0
+                avg_charge_price = total_charge_cost / total_charge_mwh if total_charge_mwh > 0 else 0
+                avg_spread = avg_discharge_price - avg_charge_price
+                total_spread = total_discharge_revenue - total_charge_cost
+
+                total_days = (end_dt - start_dt).days + 1
+                aggregated_data['SETTLEMENTDATE'] = pd.to_datetime(aggregated_data['SETTLEMENTDATE'])
+                aggregated_data['date'] = aggregated_data['SETTLEMENTDATE'].dt.date
+                days_discharged = aggregated_data[aggregated_data['SCADAVALUE'] > 0]['date'].nunique()
+                days_charged = aggregated_data[aggregated_data['SCADAVALUE'] < 0]['date'].nunique()
+                pct_days_discharged = (days_discharged / total_days * 100) if total_days > 0 else 0
+                pct_days_charged = (days_charged / total_days * 100) if total_days > 0 else 0
+                capacity_utilization = (total_discharge_mwh / (total_storage_mwh * total_days) * 100) if total_storage_mwh > 0 and total_days > 0 else 0
+
+                # Format money strings
+                def _fmt_money(val):
+                    if abs(val) >= 1000000:
+                        return f"${val/1000000:.2f}m"
+                    return f"${val/1000:.1f}k"
+
+                revenue_str = _fmt_money(total_discharge_revenue)
+                cost_str = _fmt_money(total_charge_cost)
+                total_spread_str = _fmt_money(total_spread)
+
+                # --- Create plots ---
+                from plotly.subplots import make_subplots
+                import plotly.graph_objects as go
+
+                plot_data = aggregated_data.set_index('SETTLEMENTDATE').sort_index()
+                plot_data = plot_data[
+                    (plot_data.index >= pd.Timestamp(start_date)) &
+                    (plot_data.index <= pd.Timestamp(end_date) + pd.Timedelta(days=1))
+                ]
+
+                power_df = pd.DataFrame(index=plot_data.index)
+                power_df['Discharge'] = plot_data['SCADAVALUE'].where(plot_data['SCADAVALUE'] > 0, 0)
+                power_df['Charge'] = plot_data['SCADAVALUE'].where(plot_data['SCADAVALUE'] < 0, 0)
+
+                # Dynamic label based on battery selection
+                all_region_set = {'NSW1', 'QLD1', 'SA1', 'VIC1'}
+                if set(selected_regions) == all_region_set:
+                    region_str = 'NEM'
+                else:
+                    region_str = '+'.join(selected_regions)
+
+                if num_batteries == 1:
+                    batt = fleet_batteries.iloc[0]
+                    region_label = f"{batt['Site Name']} ({batt['DUID']}) {batt['Capacity(MW)']:.0f} MW"
+                elif num_batteries == num_total:
+                    region_label = f"{region_str} Battery Fleet"
+                else:
+                    region_label = f"{region_str} ({num_batteries} of {num_total} batteries)"
+                date_start_str = pd.Timestamp(start_date).strftime('%d %b %y')
+                date_end_str = pd.Timestamp(end_date).strftime('%d %b %y')
+
+                fig = make_subplots(
+                    rows=2, cols=1, shared_xaxes=True,
+                    vertical_spacing=0.08,
+                    row_heights=[0.55, 0.45],
+                )
+
+                # Row 1 — Power (MW): step lines for discharge and charge
+                fig.add_trace(go.Scatter(
+                    x=power_df.index, y=power_df['Discharge'],
+                    name='Discharge', mode='lines',
+                    line=dict(color='#879A39', width=1, shape='hv'),
+                    hovertemplate='%{y:.0f} MW<extra>Discharge</extra>',
+                ), row=1, col=1)
+
+                fig.add_trace(go.Scatter(
+                    x=power_df.index, y=power_df['Charge'],
+                    name='Charge', mode='lines',
+                    line=dict(color='#AF3029', width=1, shape='hv'),
+                    hovertemplate='%{y:.0f} MW<extra>Charge</extra>',
+                ), row=1, col=1)
+
+                fig.add_hline(y=0, line_width=0.5, line_color='#100F0F', opacity=0.8, row=1, col=1)
+
+                # Row 2 — Price ($/MWh)
+                use_log_scale = self.region_log_scale.value
+                if use_log_scale:
+                    ylabel_price = 'Price ($/MWh, symlog)'
+                    price_label = 'Price (symlog)'
+                    symlog_threshold = 300
+                    price_values = plot_data['RRP'].copy()
+                    pos_mask = price_values > symlog_threshold
+                    neg_mask = price_values < -symlog_threshold
+                    if pos_mask.any():
+                        price_values.loc[pos_mask] = symlog_threshold * (1 + np.log10(price_values.loc[pos_mask] / symlog_threshold))
+                    if neg_mask.any():
+                        price_values.loc[neg_mask] = -symlog_threshold * (1 + np.log10(-price_values.loc[neg_mask] / symlog_threshold))
+                else:
+                    ylabel_price = 'Price ($/MWh)'
+                    price_label = 'Price'
+                    price_values = plot_data['RRP']
+
+                fig.add_trace(go.Scatter(
+                    x=plot_data.index, y=price_values,
+                    name=price_label, mode='lines',
+                    line=dict(color='#D0A215', width=2),
+                    hovertemplate='$%{y:.0f}/MWh<extra>Price</extra>',
+                ), row=2, col=1)
+
+                fig.add_hline(y=0, line_width=0.5, line_color='#100F0F', opacity=0.8, row=2, col=1)
+
+                # Layout
+                fig.update_layout(
+                    title=f"{region_label} — {date_start_str} – {date_end_str}",
+                    paper_bgcolor=FLEXOKI_PAPER,
+                    plot_bgcolor=FLEXOKI_PAPER,
+                    height=600,
+                    font=dict(color='#100F0F'),
+                    legend=dict(
+                        orientation='h', yanchor='bottom', y=1.02, xanchor='left', x=0,
+                        bgcolor=FLEXOKI_PAPER, borderwidth=0,
+                    ),
+                    margin=dict(t=80, b=60),
+                    annotations=[dict(
+                        text='Data: AEMO, Plot, calcs: ITK',
+                        xref='paper', yref='paper',
+                        x=0, y=-0.08,
+                        xanchor='left', yanchor='top',
+                        showarrow=False,
+                        font=dict(size=11, color='#6F6E69'),
+                    )],
+                )
+                fig.update_xaxes(showgrid=False, row=1, col=1)
+                fig.update_xaxes(title_text='Date', showgrid=False, row=2, col=1)
+                fig.update_yaxes(title_text='Power (MW)', showgrid=False, row=1, col=1)
+                fig.update_yaxes(title_text=ylabel_price, showgrid=False, row=2, col=1)
+
+                self.region_chart_pane.object = fig
+
+                # --- Create Time of Day chart ---
+                self._create_region_tod_chart(analysis_data, region_label, start_date, end_date)
+
+                # --- Create metrics HTML ---
+                metrics_html = f"""
+                <hr style="border-color: #B7B5AC; margin: 15px 0;">
+                <table style="color: #100F0F; width: 100%; border-collapse: collapse;">
+                    <tr><td colspan="2" style="color: #24837B; padding-bottom: 10px;"><strong>Performance Metrics:</strong></td></tr>
+                    <tr style="border-bottom: 1px solid #DAD8CE;">
+                        <td style="padding: 5px;"><strong>Average Discharge Price:</strong></td>
+                        <td style="padding: 5px; text-align: right;">${avg_discharge_price:.0f}/MWh</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid #DAD8CE;">
+                        <td style="padding: 5px;"><strong>Average Charge Price:</strong></td>
+                        <td style="padding: 5px; text-align: right;">${avg_charge_price:.0f}/MWh</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid #DAD8CE;">
+                        <td style="padding: 5px;"><strong>Average Spread:</strong></td>
+                        <td style="padding: 5px; text-align: right; color: #24837B; font-weight: bold;">${avg_spread:.0f}/MWh</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid #DAD8CE;">
+                        <td style="padding: 5px;"><strong>Total Discharge Revenue:</strong></td>
+                        <td style="padding: 5px; text-align: right; color: #24837B;">{revenue_str}</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid #DAD8CE;">
+                        <td style="padding: 5px;"><strong>Total Charge Cost:</strong></td>
+                        <td style="padding: 5px; text-align: right; color: #AF3029;">{cost_str}</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid #DAD8CE;">
+                        <td style="padding: 5px;"><strong>Total Spread (Gross Profit):</strong></td>
+                        <td style="padding: 5px; text-align: right; color: #BC5215; font-weight: bold;">{total_spread_str}</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid #DAD8CE;">
+                        <td style="padding: 5px;"><strong>Total Discharge Energy:</strong></td>
+                        <td style="padding: 5px; text-align: right;">{total_discharge_mwh:,.1f} MWh</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid #DAD8CE;">
+                        <td style="padding: 5px;"><strong>Total Charge Energy:</strong></td>
+                        <td style="padding: 5px; text-align: right;">{total_charge_mwh:,.1f} MWh</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid #DAD8CE;">
+                        <td style="padding: 5px;"><strong>Days Discharged:</strong></td>
+                        <td style="padding: 5px; text-align: right;">{pct_days_discharged:.1f}% ({days_discharged}/{total_days} days)</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid #DAD8CE;">
+                        <td style="padding: 5px;"><strong>Days Charged:</strong></td>
+                        <td style="padding: 5px; text-align: right;">{pct_days_charged:.1f}% ({days_charged}/{total_days} days)</td>
+                    </tr>
+                    <tr>
+                        <td style="padding: 5px;"><strong>Capacity Utilization:</strong></td>
+                        <td style="padding: 5px; text-align: right; color: #BC5215;">{capacity_utilization:.1f}%</td>
+                    </tr>
+                </table>
+                """
+
+                # Adapt header for single battery vs fleet
+                if num_batteries == 1:
+                    batt = fleet_batteries.iloc[0]
+                    duration = total_storage_mwh / total_capacity_mw if total_capacity_mw > 0 else 0
+                    fleet_header = f"""
+                    <h3 style="color: #24837B; margin-top: 0;">{batt['Site Name']}</h3>
+                    <table style="color: #100F0F; width: 100%;">
+                        <tr><td><strong>DUID:</strong></td><td>{batt['DUID']}</td></tr>
+                        <tr><td><strong>Region:</strong></td><td>{batt['Region']}</td></tr>
+                        <tr><td><strong>Power Capacity:</strong></td><td>{total_capacity_mw:.0f} MW</td></tr>
+                        <tr><td><strong>Energy Storage:</strong></td><td>{total_storage_mwh:.0f} MWh</td></tr>
+                        <tr><td><strong>Duration:</strong></td><td>{duration:.1f} hours</td></tr>
+                    </table>"""
+                else:
+                    fleet_header = f"""
+                    <h3 style="color: #24837B; margin-top: 0;">{region_label}</h3>
+                    <table style="color: #100F0F; width: 100%;">
+                        <tr><td><strong>Region:</strong></td><td>{region_str}</td></tr>
+                        <tr><td><strong>Number of Batteries:</strong></td><td>{num_batteries}</td></tr>
+                        <tr><td><strong>Total Capacity:</strong></td><td>{total_capacity_mw:.0f} MW</td></tr>
+                        <tr><td><strong>Total Storage:</strong></td><td>{total_storage_mwh:.0f} MWh</td></tr>
+                    </table>"""
+
                 info_html = f"""
                 <div style="background-color: #FFFCF0; border: 2px solid #24837B; padding: 15px; border-radius: 5px;">
-                    <h3 style="color: #24837B; margin-top: 0;">{battery['Site Name']}</h3>
-                    <table style="color: #100F0F; width: 100%;">
-                        <tr><td><strong>DUID:</strong></td><td>{battery['DUID']}</td></tr>
-                        <tr><td><strong>Region:</strong></td><td>{battery['Region']}</td></tr>
-                        <tr><td><strong>Power Capacity:</strong></td><td>{capacity_mw:.0f} MW</td></tr>
-                        <tr><td><strong>Energy Storage:</strong></td><td>{storage_mwh:.0f} MWh</td></tr>
-                        <tr><td><strong>Duration:</strong></td><td>{duration:.1f} hours</td></tr>
-                        <tr><td><strong>Technology:</strong></td><td>Battery Storage</td></tr>
-                    </table>
+                    {fleet_header}
                     <hr style="border-color: #B7B5AC; margin: 10px 0;">
                     <table style="color: #100F0F; width: 100%;">
                         <tr><td colspan="2" style="color: #24837B;"><strong>Analysis Parameters:</strong></td></tr>
@@ -815,17 +736,322 @@ class InsightsTab:
                     {metrics_html}
                 </div>
                 """
-                self.bess_info_pane.object = info_html
-                
-                logger.info(f"Analyzing battery: {battery['Site Name']} ({selected_duid}) from {start_date} to {end_date}")
-            
+                self.region_info_pane.object = info_html
+
+                logger.info(f"Region analysis complete: {region_label}, {num_batteries} batteries, {total_capacity_mw:.0f} MW")
+
+            except Exception as e:
+                logger.error(f"Error analyzing region: {e}")
+                import traceback
+                traceback.print_exc()
+                self.region_info_pane.object = f"""
+                <div style="background-color: #FFFCF0; border: 1px solid #AF3029; padding: 10px; border-radius: 5px;">
+                    <p style="color: #AF3029;">Error analyzing region: {str(e)}</p>
+                </div>
+                """
+                self.region_chart_pane.object = None
+
         # Connect callbacks
-        self.bess_date_presets.param.watch(update_bess_date_range, 'value')
-        self.bess_region_selector.param.watch(update_battery_list, 'value')
-        self.bess_analyze_button.on_click(analyze_battery)
-        # Re-analyze when log scale changes (only if already analyzed)
-        self.bess_log_scale.param.watch(lambda event: analyze_battery(event) if self.bess_chart_pane.object is not None else None, 'value')
-        
+        self.region_date_presets.param.watch(update_region_date_range, 'value')
+        self.region_analyze_button.on_click(analyze_region)
+        self.region_log_scale.param.watch(
+            lambda event: analyze_region(event) if self.region_chart_pane.object is not None else None, 'value'
+        )
+
+        # --- Region Select All ---
+        def on_region_select_all(event):
+            if self._updating_regions:
+                return
+            self._updating_regions = True
+            try:
+                if event.new:
+                    self.region_checkboxes.value = ['NSW1', 'QLD1', 'SA1', 'VIC1']
+                else:
+                    if len(self.region_checkboxes.value) == 4:
+                        self.region_checkboxes.value = []
+            finally:
+                self._updating_regions = False
+
+        self.region_select_all.param.watch(on_region_select_all, 'value')
+
+        # --- Region checkbox change → rebuild owners ---
+        def on_region_change(event):
+            if self._updating_regions:
+                return
+            self._updating_regions = True
+            try:
+                self.region_select_all.value = (len(event.new) == 4)
+            finally:
+                self._updating_regions = False
+            self._update_owner_list()
+
+        self.region_checkboxes.param.watch(on_region_change, 'value')
+
+        # --- Owner Select All ---
+        def on_owner_select_all(event):
+            if self._updating_owners:
+                return
+            self._updating_owners = True
+            try:
+                if event.new:
+                    self.owner_checkboxes.value = list(self.owner_checkboxes.options)
+                else:
+                    if len(self.owner_checkboxes.value) == len(self.owner_checkboxes.options):
+                        self.owner_checkboxes.value = []
+            finally:
+                self._updating_owners = False
+
+        self.owner_select_all.param.watch(on_owner_select_all, 'value')
+
+        # --- Owner checkbox change → rebuild batteries ---
+        def on_owner_change(event):
+            if self._updating_owners:
+                return
+            self._updating_owners = True
+            try:
+                self.owner_select_all.value = (
+                    len(event.new) == len(self.owner_checkboxes.options)
+                    and len(event.new) > 0
+                )
+            finally:
+                self._updating_owners = False
+            self._update_region_batteries()
+
+        self.owner_checkboxes.param.watch(on_owner_change, 'value')
+
+        # --- Battery Select All ---
+        def on_battery_select_all(event):
+            if self._updating_batteries:
+                return
+            self._updating_batteries = True
+            try:
+                if event.new:
+                    all_duids = list(self.region_battery_checkboxes.options.values())
+                    self.region_battery_checkboxes.value = all_duids
+                else:
+                    if len(self.region_battery_checkboxes.value) == len(self.region_battery_checkboxes.options):
+                        self.region_battery_checkboxes.value = []
+            finally:
+                self._updating_batteries = False
+
+        self.battery_select_all.param.watch(on_battery_select_all, 'value')
+
+        # --- Individual battery toggle → update battery Select All ---
+        def on_battery_toggle(event):
+            if self._updating_batteries:
+                return
+            self._updating_batteries = True
+            try:
+                all_duids = list(self.region_battery_checkboxes.options.values())
+                self.battery_select_all.value = (set(event.new) == set(all_duids))
+            finally:
+                self._updating_batteries = False
+
+        self.region_battery_checkboxes.param.watch(on_battery_toggle, 'value')
+
+        # Populate initial lists
+        self._update_owner_list()
+
+    def _update_owner_list(self):
+        """Rebuild owner checkbox list based on selected regions, then cascade to batteries."""
+        selected_regions = self.region_checkboxes.value
+        fleet = self.battery_info[self.battery_info['Region'].isin(selected_regions)]
+        owner_col = next((c for c in ('Owner', 'Participant') if c in fleet.columns), None)
+        if owner_col and not fleet.empty:
+            owners = sorted(fleet[owner_col].dropna().unique().tolist())
+        else:
+            owners = []
+        self._updating_owners = True
+        try:
+            self.owner_checkboxes.options = owners
+            self.owner_checkboxes.value = owners  # select all
+            self.owner_select_all.value = True
+        finally:
+            self._updating_owners = False
+        self._update_region_batteries()
+
+    def _update_region_batteries(self):
+        """Update battery checkbox list based on selected regions and owners."""
+        selected_regions = self.region_checkboxes.value
+        selected_owners = self.owner_checkboxes.value
+
+        fleet = self.battery_info[self.battery_info['Region'].isin(selected_regions)].copy()
+
+        # Filter by selected owners
+        owner_col = next((c for c in ('Owner', 'Participant') if c in fleet.columns), None)
+        if owner_col and selected_owners:
+            fleet = fleet[fleet[owner_col].isin(selected_owners)]
+
+        # Build checkbox options {display_label: duid}
+        options = {}
+        for _, b in fleet.sort_values('Capacity(MW)', ascending=False).iterrows():
+            cap = b.get('Capacity(MW)', 0)
+            label = f"{b['Site Name']} ({b['DUID']}) - {cap:.0f} MW"
+            options[label] = b['DUID']
+
+        self._updating_batteries = True
+        try:
+            self.region_battery_checkboxes.options = options
+            self.region_battery_checkboxes.value = list(options.values())
+            self.battery_select_all.value = True
+        finally:
+            self._updating_batteries = False
+
+    def _create_region_tod_chart(self, analysis_data, region_label, start_date, end_date):
+        """Create Time of Day Plotly chart from raw analysis_data (pre-aggregation)."""
+        from plotly.subplots import make_subplots
+        import plotly.graph_objects as go
+
+        try:
+            tod = analysis_data.copy()
+            tod['SETTLEMENTDATE'] = pd.to_datetime(tod['SETTLEMENTDATE'])
+            tod['hour'] = tod['SETTLEMENTDATE'].dt.hour
+            tod['discharge_mw'] = tod['SCADAVALUE'].where(tod['SCADAVALUE'] > 0, 0)
+            tod['charge_mw'] = tod['SCADAVALUE'].where(tod['SCADAVALUE'] < 0, 0)
+
+            tod_stats = tod.groupby('hour').agg(
+                avg_discharge=('discharge_mw', 'mean'),
+                avg_charge=('charge_mw', 'mean'),
+                avg_price=('RRP', 'mean'),
+            ).reset_index()
+
+            fig = make_subplots(specs=[[{"secondary_y": True}]])
+
+            fig.add_trace(go.Bar(
+                x=tod_stats['hour'], y=tod_stats['avg_discharge'],
+                name='Avg Discharge', marker_color='#879A39', opacity=0.85,
+                hovertemplate='%{y:.0f} MW<extra>Discharge</extra>'
+            ), secondary_y=False)
+
+            fig.add_trace(go.Bar(
+                x=tod_stats['hour'], y=tod_stats['avg_charge'],
+                name='Avg Charge', marker_color='#AF3029', opacity=0.85,
+                hovertemplate='%{y:.0f} MW<extra>Charge</extra>'
+            ), secondary_y=False)
+
+            fig.add_trace(go.Scatter(
+                x=tod_stats['hour'], y=tod_stats['avg_price'],
+                name='Avg Price', mode='lines+markers',
+                line=dict(color='#D0A215', width=2.5),
+                marker=dict(size=5, color='#D0A215'),
+                hovertemplate='$%{y:.0f}/MWh<extra>Price</extra>'
+            ), secondary_y=True)
+
+            date_start_str = pd.Timestamp(start_date).strftime('%d %b %y')
+            date_end_str = pd.Timestamp(end_date).strftime('%d %b %y')
+
+            fig.update_layout(
+                title=f"{region_label} — Time of Day {date_start_str} – {date_end_str}",
+                paper_bgcolor=FLEXOKI_PAPER,
+                plot_bgcolor=FLEXOKI_PAPER,
+                height=520,
+                barmode='relative',
+                legend=dict(
+                    orientation='h', yanchor='top', y=-0.18, xanchor='right', x=1,
+                    bgcolor=FLEXOKI_PAPER, borderwidth=0,
+                ),
+                xaxis=dict(
+                    title='Hour of Day', dtick=1, showgrid=False,
+                    tickvals=list(range(0, 24)),
+                    ticktext=[f'{h:02d}:00' for h in range(24)],
+                ),
+                margin=dict(t=60, b=100),
+                font=dict(color='#100F0F'),
+                annotations=[dict(
+                    text='Data: AEMO, Plot, calcs: ITK',
+                    xref='paper', yref='paper',
+                    x=0, y=-0.22,
+                    xanchor='left', yanchor='top',
+                    showarrow=False,
+                    font=dict(size=11, color='#6F6E69'),
+                )],
+            )
+            fig.update_yaxes(title_text='Average Power (MW)', showgrid=False, secondary_y=False)
+            fig.update_yaxes(
+                title_text='Average Price ($/MWh)', showgrid=False,
+                tickfont=dict(color='#D0A215'), title_font=dict(color='#D0A215'),
+                secondary_y=True
+            )
+
+            self.region_tod_chart_pane.object = fig
+
+            # --- TOD metrics panel ---
+            peak_discharge_hour = int(tod_stats.loc[tod_stats['avg_discharge'].idxmax(), 'hour'])
+            peak_discharge_mw = tod_stats['avg_discharge'].max()
+            peak_charge_hour = int(tod_stats.loc[tod_stats['avg_charge'].idxmin(), 'hour'])
+            peak_charge_mw = tod_stats['avg_charge'].min()
+            highest_price_hour = int(tod_stats.loc[tod_stats['avg_price'].idxmax(), 'hour'])
+            highest_price = tod_stats['avg_price'].max()
+            lowest_price_hour = int(tod_stats.loc[tod_stats['avg_price'].idxmin(), 'hour'])
+            lowest_price = tod_stats['avg_price'].min()
+
+            bands = [
+                ('Overnight', 0, 6),
+                ('Morning', 6, 12),
+                ('Afternoon', 12, 18),
+                ('Evening', 18, 24),
+            ]
+            band_rows = ""
+            for name, h_start, h_end in bands:
+                band = tod_stats[(tod_stats['hour'] >= h_start) & (tod_stats['hour'] < h_end)]
+                bd = band['avg_discharge'].mean()
+                bc = band['avg_charge'].mean()
+                bp = band['avg_price'].mean()
+                band_rows += f"""
+                <tr style="border-bottom: 1px solid #DAD8CE;">
+                    <td style="padding: 4px;"><strong>{name}</strong> ({h_start:02d}–{h_end:02d})</td>
+                    <td style="padding: 4px; text-align: right; color: #879A39;">{bd:.0f} MW</td>
+                    <td style="padding: 4px; text-align: right; color: #AF3029;">{bc:.0f} MW</td>
+                    <td style="padding: 4px; text-align: right; color: #D0A215;">${bp:.0f}</td>
+                </tr>"""
+
+            tod_html = f"""
+            <div style="background-color: #FFFCF0; border: 2px solid #24837B; padding: 15px; border-radius: 5px;">
+                <h3 style="color: #24837B; margin-top: 0;">Hourly Insights</h3>
+                <table style="color: #100F0F; width: 100%; border-collapse: collapse;">
+                    <tr style="border-bottom: 1px solid #DAD8CE;">
+                        <td style="padding: 5px;"><strong>Peak Discharge Hour:</strong></td>
+                        <td style="padding: 5px; text-align: right; color: #879A39;">{peak_discharge_hour:02d}:00 ({peak_discharge_mw:.0f} MW)</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid #DAD8CE;">
+                        <td style="padding: 5px;"><strong>Peak Charge Hour:</strong></td>
+                        <td style="padding: 5px; text-align: right; color: #AF3029;">{peak_charge_hour:02d}:00 ({peak_charge_mw:.0f} MW)</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid #DAD8CE;">
+                        <td style="padding: 5px;"><strong>Highest Price Hour:</strong></td>
+                        <td style="padding: 5px; text-align: right; color: #D0A215;">{highest_price_hour:02d}:00 (${highest_price:.0f}/MWh)</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid #DAD8CE;">
+                        <td style="padding: 5px;"><strong>Lowest Price Hour:</strong></td>
+                        <td style="padding: 5px; text-align: right; color: #D0A215;">{lowest_price_hour:02d}:00 (${lowest_price:.0f}/MWh)</td>
+                    </tr>
+                </table>
+                <hr style="border-color: #B7B5AC; margin: 12px 0;">
+                <table style="color: #100F0F; width: 100%; border-collapse: collapse;">
+                    <tr><td colspan="4" style="color: #24837B; padding-bottom: 8px;"><strong>Time Band Averages:</strong></td></tr>
+                    <tr style="border-bottom: 1px solid #B7B5AC;">
+                        <th style="padding: 4px; text-align: left;">Band</th>
+                        <th style="padding: 4px; text-align: right;">Discharge</th>
+                        <th style="padding: 4px; text-align: right;">Charge</th>
+                        <th style="padding: 4px; text-align: right;">Price</th>
+                    </tr>
+                    {band_rows}
+                </table>
+            </div>
+            """
+            self.region_tod_info_pane.object = tod_html
+
+        except Exception as e:
+            logger.error(f"Error creating TOD chart: {e}")
+            import traceback
+            traceback.print_exc()
+            self.region_tod_chart_pane.object = None
+            self.region_tod_info_pane.object = f"""
+            <div style="background-color: #FFFCF0; border: 1px solid #AF3029; padding: 10px; border-radius: 5px;">
+                <p style="color: #AF3029;">Error creating Time of Day chart: {str(e)}</p>
+            </div>
+            """
+
     def _setup_callbacks(self):
         """Set up widget callbacks"""
         # Date preset callback
@@ -978,9 +1204,12 @@ class InsightsTab:
                 
                 # Discharge metrics
                 if not discharge_data.empty:
-                    metrics['Discharge Price'] = discharge_data['RRP'].mean()
                     metrics['Discharge Energy'] = discharge_data['SCADAVALUE'].sum() / 2  # MWh for 30-min periods
                     metrics['Discharge Revenue'] = (discharge_data['SCADAVALUE'] * discharge_data['RRP'] / 2).sum()
+                    metrics['Discharge Price'] = (
+                        metrics['Discharge Revenue'] / metrics['Discharge Energy']
+                        if metrics['Discharge Energy'] > 0 else 0
+                    )
                 else:
                     metrics['Discharge Price'] = 0
                     metrics['Discharge Energy'] = 0
@@ -988,9 +1217,12 @@ class InsightsTab:
                 
                 # Charge metrics
                 if not charge_data.empty:
-                    metrics['Charge Price'] = charge_data['RRP'].mean()
                     metrics['Charge Energy'] = abs(charge_data['SCADAVALUE'].sum()) / 2  # MWh
                     metrics['Charge Cost'] = abs((charge_data['SCADAVALUE'] * charge_data['RRP'] / 2).sum())
+                    metrics['Charge Price'] = (
+                        metrics['Charge Cost'] / metrics['Charge Energy']
+                        if metrics['Charge Energy'] > 0 else 0
+                    )
                 else:
                     metrics['Charge Price'] = 0
                     metrics['Charge Energy'] = 0
@@ -1071,9 +1303,9 @@ class InsightsTab:
                     lambda x: f"{x:,.0f} MWh"
                 )
             elif selected_metric in ['Discharge Price', 'Charge Price', 'Price Spread']:
-                # Format as $/MWh with no decimals
+                # Format as plain number (units in title)
                 metrics_df['Formatted Value'] = metrics_df[selected_metric].apply(
-                    lambda x: f"${x:.0f}/MWh"
+                    lambda x: f"{x:.0f}"
                 )
             else:
                 metrics_df['Formatted Value'] = metrics_df[selected_metric].round(0).astype(int).astype(str)
@@ -1125,13 +1357,19 @@ class InsightsTab:
                     lambda x, p: f'${x:.0f}'
                 ))
 
-            # Title
-            ax.set_title(f'Top 20 Batteries by {selected_metric}',
-                        color='#100F0F', fontsize=14, pad=20)
+            # Title - include units
+            if selected_metric in ['Discharge Price', 'Charge Price', 'Price Spread']:
+                title_text = f'Top 20 Batteries by {selected_metric} ($/MWh)'
+            elif selected_metric in ['Discharge Revenue', 'Charge Cost']:
+                title_text = f'Top 20 Batteries by {selected_metric} ($)'
+            elif selected_metric in ['Discharge Energy', 'Charge Energy']:
+                title_text = f'Top 20 Batteries by {selected_metric} (MWh)'
+            else:
+                title_text = f'Top 20 Batteries by {selected_metric}'
+            ax.set_title(title_text, color='#100F0F', fontsize=14, pad=20)
 
-            # Grid
-            ax.grid(True, axis='y', alpha=0.3, color=FLEXOKI_BORDER)
-            ax.set_axisbelow(True)
+            # No grid
+            ax.grid(False)
 
             # Add horizontal line at y=0
             ax.axhline(y=0, color=FLEXOKI_BORDER, linewidth=1, alpha=0.5)
@@ -1139,10 +1377,9 @@ class InsightsTab:
             # Tick colors
             ax.tick_params(colors='#100F0F')
 
-            # Spine colors
+            # Remove spines
             for spine in ax.spines.values():
-                spine.set_edgecolor(FLEXOKI_BORDER)
-                spine.set_linewidth(1)
+                spine.set_visible(False)
             
             # Add value labels with alternating heights to avoid overlap
             for i, (val, fmt_val) in enumerate(zip(y_values, metrics_df['Formatted Value'].values)):
@@ -1150,9 +1387,9 @@ class InsightsTab:
                 if val >= 0:
                     # Even indices get normal position, odd indices get higher position
                     if i % 2 == 0:
-                        offset = val * 0.02 if val > 0 else 5  # Small offset above the dot
+                        offset = val * 0.06 if val > 0 else 8  # Offset above the dot
                     else:
-                        offset = val * 0.08 if val > 0 else 15  # Larger offset for odd indices
+                        offset = val * 0.12 if val > 0 else 18  # Larger offset for odd indices
                     ax.text(i, val + offset, fmt_val, ha='center', va='bottom', color='#100F0F',
                            fontsize=8, fontweight='bold')
                 else:
@@ -1937,84 +2174,7 @@ class InsightsTab:
         
     def create_layout(self) -> pn.Column:
         """Create the complete batteries tab layout with subtabs"""
-        
-        # Create One BESS subtab content with controls on left, analysis on right
-        # Left column - date and frequency controls
-        bess_date_controls = pn.Column(
-            "### Date Range",
-            pn.Row(
-                pn.Column(
-                    "Start Date",
-                    self.bess_start_date,
-                    width=120
-                ),
-                pn.Column(
-                    "End Date",
-                    self.bess_end_date,
-                    width=120
-                ),
-                align='start'
-            ),
-            pn.Spacer(height=10),
-            "Quick Select",
-            self.bess_date_presets,
-            width=250
-        )
-        
-        bess_freq_control = pn.Column(
-            "### Frequency",
-            self.bess_frequency,
-            width=120
-        )
-        
-        bess_options_control = pn.Column(
-            "### Options",
-            self.bess_log_scale,
-            width=120
-        )
-        
-        bess_left_controls = pn.Column(
-            bess_date_controls,
-            pn.Spacer(height=20),
-            bess_freq_control,
-            pn.Spacer(height=20),
-            bess_options_control,
-            width=300,
-            margin=(0, 20, 0, 0)
-        )
-        
-        # Right side - battery selection and analysis
-        bess_selection_controls = pn.Row(
-            self.bess_region_selector,
-            pn.Spacer(width=20),
-            self.bess_selector,
-            pn.Spacer(width=20),
-            self.bess_analyze_button,
-            align='center'
-        )
-        
-        # Create a row for chart and info table side by side
-        bess_analysis_row = pn.Row(
-            self.bess_chart_pane,  # Chart on the left
-            pn.Spacer(width=20),
-            pn.Column(self.bess_info_pane, width=400),  # Table on the right with fixed width
-            sizing_mode='stretch_width'
-        )
-        
-        bess_analysis_content = pn.Column(
-            "### Battery Selection",
-            bess_selection_controls,
-            pn.Spacer(height=20),
-            bess_analysis_row,  # Chart and table side by side
-            sizing_mode='stretch_width'
-        )
-        
-        one_bess_tab = pn.Row(
-            bess_left_controls,
-            bess_analysis_content,
-            sizing_mode='stretch_both'
-        )
-        
+
         # Create Overview subtab content (original content)
         # Left column - all controls
         region_group = pn.Column(
@@ -2099,11 +2259,84 @@ class InsightsTab:
             sizing_mode='stretch_both'
         )
         
+        # Create Fleet subtab content — top bar + three-column filters + chart
+
+        # All controls in one row: dates+quick | freq | regions | owners | batteries | analyze
+        date_block = pn.Column(
+            pn.Row(
+                pn.Column("**Start**", self.region_start_date, width=130, margin=(0, 5, 0, 0)),
+                pn.Column("**End**", self.region_end_date, width=130, margin=(0, 5, 0, 0)),
+            ),
+            self.region_date_presets,
+            width=270, margin=(0, 10, 0, 0)
+        )
+        freq_block = pn.Column(
+            "**Freq**", self.region_frequency,
+            self.region_log_scale,
+            width=135, margin=(0, 10, 0, 0)
+        )
+        region_col = pn.Column(
+            "**Regions**", self.region_select_all,
+            self.region_checkboxes, width=90,
+            margin=(0, 8, 0, 0)
+        )
+        owner_col = pn.Column(
+            "**Owners**", self.owner_select_all,
+            self.owner_scroll,
+            width=270,
+            margin=(0, 8, 0, 0)
+        )
+        battery_col = pn.Column(
+            "**Batteries**", self.battery_select_all,
+            self.region_battery_scroll,
+            sizing_mode='stretch_width', min_width=300
+        )
+        analyze_col = pn.Column(
+            pn.Spacer(height=18),
+            self.region_analyze_button,
+            width=135
+        )
+        controls_row = pn.Row(
+            date_block, freq_block,
+            region_col, owner_col, battery_col,
+            analyze_col,
+            height=300, sizing_mode='stretch_width',
+            align='start', margin=(0, 0, 0, 0)
+        )
+
+        # Inner sub-tabs: Time Series + Time of Day
+        region_ts_content = pn.Row(
+            self.region_chart_pane,
+            pn.Spacer(width=20),
+            pn.Column(self.region_info_pane, width=400),
+            sizing_mode='stretch_width'
+        )
+
+        region_tod_content = pn.Row(
+            self.region_tod_chart_pane,
+            pn.Spacer(width=20),
+            pn.Column(self.region_tod_info_pane, width=350),
+            sizing_mode='stretch_width'
+        )
+
+        region_views = pn.Tabs(
+            ('Time Series', region_ts_content),
+            ('Time of Day', region_tod_content),
+            sizing_mode='stretch_both'
+        )
+
+        region_tab = pn.Column(
+            controls_row,
+            region_views,
+            sizing_mode='stretch_both',
+            margin=(0, 0, 0, 0)
+        )
+
         # Create subtabs
         battery_subtabs = pn.Tabs(
             ('Overview', overview_tab),
-            ('One BESS', one_bess_tab),
+            ('Fleet', region_tab),
             sizing_mode='stretch_both'
         )
-        
+
         return battery_subtabs
