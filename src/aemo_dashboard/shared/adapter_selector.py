@@ -1,88 +1,55 @@
 """
-Adapter Selector - Configures which data adapters to use
+Adapter Selector - DuckDB data adapters for the AEMO dashboard.
 
-This module provides a central place to switch between pandas-based
-and DuckDB-based adapters. Change USE_DUCKDB to True to use the
-memory-efficient DuckDB adapters.
+All data access uses DuckDB for efficient memory usage.
+Legacy pandas-based adapters have been removed (see .bak files).
 """
 
-import os
+# DuckDB generation adapter
+from .generation_adapter_duckdb import (
+    load_generation_data,
+    get_generation_summary,
+    get_available_duids,
+    load_gen_data  # Legacy compatibility
+)
 
-# Configuration: Set to True to use DuckDB adapters
-USE_DUCKDB = os.getenv('USE_DUCKDB', 'true').lower() == 'true'
+# DuckDB price adapter
+from .price_adapter_duckdb import (
+    load_price_data,
+    get_price_summary,
+    get_available_regions,
+    get_price_statistics,
+    load_spot_data  # Legacy compatibility
+)
 
-if USE_DUCKDB:
-    # Import DuckDB adapters
-    from .generation_adapter_duckdb import (
-        load_generation_data,
-        get_generation_summary,
-        get_available_duids,
-        load_gen_data  # Legacy compatibility
-    )
-    
-    from .price_adapter_duckdb import (
-        load_price_data,
-        get_price_summary,
-        get_available_regions,
-        get_price_statistics,
-        load_spot_data  # Legacy compatibility
-    )
-    
-    # Import DuckDB transmission and rooftop adapters
-    from .transmission_adapter_duckdb import (
-        load_transmission_data,
-        get_transmission_summary,
-        get_available_interconnectors,
-        get_flow_statistics
-    )
-    
-    from .rooftop_adapter_duckdb import (
-        load_rooftop_data,
-        get_rooftop_at_time,
-        get_rooftop_summary,
-        smooth_rooftop_data
-    )
-    
-    # Import interpolation functions from original adapter
-    from .rooftop_adapter import (
-        interpolate_and_smooth,
-        henderson_smooth
-    )
-    
-    adapter_type = "DuckDB"
-    
-else:
-    # Import original pandas-based adapters
-    from .generation_adapter import (
-        load_generation_data,
-        get_generation_summary,
-        get_available_duids,
-        load_gen_data  # Legacy compatibility
-    )
-    
-    from .price_adapter import (
-        load_price_data,
-        get_price_summary,
-        get_available_regions,
-        get_price_statistics,
-        load_spot_data  # Legacy compatibility
-    )
-    
-    from .transmission_adapter import load_transmission_data
-    from .rooftop_adapter import (
-        load_rooftop_data,
-        interpolate_and_smooth,
-        get_rooftop_at_time
-    )
-    
-    adapter_type = "Pandas"
+# DuckDB transmission adapter
+from .transmission_adapter_duckdb import (
+    load_transmission_data,
+    get_transmission_summary,
+    get_available_interconnectors,
+    get_flow_statistics
+)
 
-# Log which adapters are being used
+# DuckDB rooftop adapter
+from .rooftop_adapter_duckdb import (
+    load_rooftop_data,
+    get_rooftop_at_time,
+    get_rooftop_summary,
+    smooth_rooftop_data
+)
+
+# Smoothing functions from rooftop_adapter (still needed)
+from .rooftop_adapter import (
+    interpolate_and_smooth,
+    henderson_smooth
+)
+
+adapter_type = "DuckDB"
+
 from .logging_config import get_logger
 logger = get_logger(__name__)
-logger.info(f"Using {adapter_type} data adapters (USE_DUCKDB={USE_DUCKDB})")
+logger.info(f"Using {adapter_type} data adapters")
 
-# Export all functions
 __all__ = [
     'load_generation_data',
     'get_generation_summary',
@@ -104,5 +71,4 @@ __all__ = [
     'get_rooftop_summary',
     'smooth_rooftop_data',
     'adapter_type',
-    'USE_DUCKDB'
 ]

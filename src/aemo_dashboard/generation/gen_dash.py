@@ -941,26 +941,11 @@ class EnergyDashboard(param.Parameterized):
             
             # Load transmission data using enhanced adapter with auto resolution and performance optimization
             # Check if this is a long date range that needs optimization
-            days_span = (end_datetime - start_datetime).total_seconds() / (24 * 3600) if start_datetime and end_datetime else 0
-            needs_optimization = days_span > 90  # Optimize for ranges > 3 months
-            
-            if needs_optimization:
-                logger.info(f"Long date range detected ({days_span:.1f} days), applying performance optimization")
-                df, metadata = load_transmission_data(
-                    start_date=start_datetime,
-                    end_date=end_datetime,
-                    resolution='auto',
-                    optimize_for_plotting=True,
-                    plot_type='transmission'
-                )
-                logger.info(f"Transmission optimization: {metadata.get('description', 'Unknown')}")
-                logger.info(f"Reduction: {metadata.get('reduction_ratio', 0):.1%} of original data")
-            else:
-                df = load_transmission_data(
-                    start_date=start_datetime,
-                    end_date=end_datetime,
-                    resolution='auto'
-                )
+            df = load_transmission_data(
+                start_date=start_datetime,
+                end_date=end_datetime,
+                resolution='auto'
+            )
             logger.info(f"Loaded transmission data using enhanced adapter: {df.shape}")
             
             if df.empty:
@@ -1184,7 +1169,7 @@ class EnergyDashboard(param.Parameterized):
                     if len(common_index) > 0:
                         # Split transmission into imports (positive) and exports (negative)
                         # Ensure we're getting the right column and it's numeric
-                        transmission_series = net_flows.reindex(pivot_df.index, fill_value=0)['net_transmission_mw']
+                        transmission_series = net_flows.reindex(pivot_df.index, method="ffill").fillna(0)['net_transmission_mw']
                         # Convert to float to ensure numeric type
                         transmission_values = pd.to_numeric(transmission_series, errors='coerce').fillna(0)
                         
@@ -2500,7 +2485,7 @@ class EnergyDashboard(param.Parameterized):
                     trans_indexed = None
 
                 if trans_indexed is not None:
-                    trans_aligned = trans_indexed.reindex(data.index, fill_value=0)
+                    trans_aligned = trans_indexed.reindex(data.index, method="ffill").fillna(0)
                     imports = trans_aligned.clip(lower=0)
                     exports = trans_aligned.clip(upper=0)
                     has_imports = (imports > 0).any()

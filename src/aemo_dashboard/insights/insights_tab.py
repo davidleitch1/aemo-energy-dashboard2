@@ -771,6 +771,8 @@ class InsightsTab:
                         self.region_checkboxes.value = []
             finally:
                 self._updating_regions = False
+            # Cascade: rebuild owners and batteries
+            self._update_owner_list()
 
         self.region_select_all.param.watch(on_region_select_all, 'value')
 
@@ -800,6 +802,8 @@ class InsightsTab:
                         self.owner_checkboxes.value = []
             finally:
                 self._updating_owners = False
+            # Cascade: rebuild batteries
+            self._update_region_batteries()
 
         self.owner_select_all.param.watch(on_owner_select_all, 'value')
 

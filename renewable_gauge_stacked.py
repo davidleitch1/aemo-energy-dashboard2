@@ -388,8 +388,10 @@ def update_records_with_alerts(stats, records, records_file):
         print(f"New {current_hour}:00 hour record: {stats['renewable_pct']:.1f}% (was {old_value:.1f}%)")
         # Don't send SMS for hourly records to avoid too many messages
     
-    # Save records if any were updated
-    if alerts_sent or len(alerts_sent) > 0:
+    # Save records if any were updated (all-time or hourly)
+    hourly_updated = (hour_key in records["hourly"] and
+                      records["hourly"][hour_key]["timestamp"] == timestamp)
+    if alerts_sent or hourly_updated:
         save_renewable_records(records, records_file)
     
     return records, alerts_sent
