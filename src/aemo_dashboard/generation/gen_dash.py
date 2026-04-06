@@ -453,20 +453,18 @@ class EnergyDashboard(param.Parameterized):
                 margin=(5, 5)
             )
 
-            self.utilization_pane = pn.pane.HoloViews(
+            self.utilization_pane = pn.pane.Plotly(
                 util_plot,
                 sizing_mode='stretch_width',
                 height=500,
                 margin=(5, 5),
-                linked_axes=False  # Prevent UFuncTypeError when switching tabs
             )
 
-            self.transmission_pane = pn.pane.HoloViews(
+            self.transmission_pane = pn.pane.Plotly(
                 transmission_plot,
                 sizing_mode='stretch_width',
                 height=400,
                 margin=(5, 5),
-                linked_axes=False  # Prevent UFuncTypeError when switching tabs
             )
 
             # Create generation TOD plot (Plotly)
@@ -1218,7 +1216,7 @@ class EnergyDashboard(param.Parameterized):
                         
                         # Forward-fill missing values at the end (up to 2 hours)
                         # This handles the case where rooftop data is less recent than generation data
-                        rooftop_values = rooftop_values.fillna(method='ffill', limit=24)  # 24 * 5min = 2 hours
+                        rooftop_values = rooftop_values.ffill(limit=24)  # 24 * 5min = 2 hours
                         
                         # Apply gentle decay for extended forward-fill periods
                         last_valid_idx = rooftop_values.last_valid_index()
@@ -2640,44 +2638,33 @@ class EnergyDashboard(param.Parameterized):
             return pn.pane.Markdown(f"**Error creating plot:** {str(e)}",
                 styles={'background': FLEXOKI_PAPER, 'color': 'red', 'padding': '20px'})
     
+    @staticmethod
+    def _hex_to_rgba(hex_color, alpha=0.3):
+        """Convert hex colour to rgba() string for Plotly fill opacity."""
+        h = hex_color.lstrip('#')
+        r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+        return f'rgba({r},{g},{b},{alpha})'
+
     def create_transmission_plot(self):
-        """Create transmission flow line chart with limit areas showing unused capacity"""
+        """Create transmission flow line chart with limit areas showing unused capacity (Plotly)"""
         try:
-            import holoviews as hv
-            
             # Skip transmission chart for NEM (no specific region)
             if self.region == 'NEM':
-                return hv.Text(0.5, 0.5, 'Transmission flows not available for NEM view\nSelect a specific region').opts(
-                    xlim=(0, 1),
-                    ylim=(0, 1),
-                    bgcolor=FLEXOKI_PAPER,
-                    width=1200,
-                    height=300,
-                    color=FLEXOKI_BLACK,
-                    fontsize=14
-                )
-            
+                return None
+
             # Load transmission data if needed
             if self.transmission_df is None:
                 self.load_transmission_data()
-            
+
             # Get the raw transmission data with limits
             if self.transmission_df is None or self.transmission_df.empty:
-                return hv.Text(0.5, 0.5, f'No transmission data for {self.region}').opts(
-                    xlim=(0, 1),
-                    ylim=(0, 1),
-                    bgcolor=FLEXOKI_PAPER,
-                    width=1200,
-                    height=300,
-                    color=FLEXOKI_BLACK,
-                    fontsize=14
-                )
-            
+                return None
+
             # Define interconnector mapping for each region
             interconnector_mapping = {
                 'NSW1': {
                     'NSW1-QLD1': 'from_nsw',      # Positive = export to QLD
-                    'VIC1-NSW1': 'to_nsw',        # Positive = import from VIC  
+                    'VIC1-NSW1': 'to_nsw',        # Positive = import from VIC
                     'N-Q-MNSP1': 'from_nsw'       # DirectLink: Positive = export to QLD
                 },
                 'QLD1': {
@@ -2698,24 +2685,16 @@ class EnergyDashboard(param.Parameterized):
                     'T-V-MNSP1': 'from_tas'       # Basslink: Positive = export to VIC
                 }
             }
-            
+
             region_interconnectors = interconnector_mapping.get(self.region, {})
             if not region_interconnectors:
-                return hv.Text(0.5, 0.5, f'No transmission lines for {self.region}').opts(
-                    xlim=(0, 1),
-                    ylim=(0, 1),
-                    bgcolor=FLEXOKI_PAPER,
-                    width=1200,
-                    height=300,
-                    color=FLEXOKI_BLACK,
-                    fontsize=14
-                )
-            
+                return None
+
             # Filter transmission data for this region's interconnectors
             region_transmission = self.transmission_df[
                 self.transmission_df['interconnectorid'].isin(region_interconnectors.keys())
             ].copy()
-            
+
             # Debug logging
             logger.info(f"=== Transmission Plot Debug for {self.region} ===")
             logger.info(f"Total transmission records: {len(self.transmission_df)}")
@@ -2725,71 +2704,46 @@ class EnergyDashboard(param.Parameterized):
                 logger.info(f"Date range: {region_transmission['settlementdate'].min()} to {region_transmission['settlementdate'].max()}")
                 logger.info(f"Unique interconnectors in data: {region_transmission['interconnectorid'].unique()}")
                 logger.info(f"Sample data (first 5 rows):")
-                # Only log columns that exist in the data
                 cols_to_log = ['settlementdate', 'interconnectorid', 'meteredmwflow']
                 if 'exportlimit' in region_transmission.columns:
                     cols_to_log.append('exportlimit')
                 if 'importlimit' in region_transmission.columns:
                     cols_to_log.append('importlimit')
                 logger.info(region_transmission[cols_to_log].head())
-            
+
             if region_transmission.empty:
-                return hv.Text(0.5, 0.5, f'No transmission data for {self.region}').opts(
-                    xlim=(0, 1),
-                    ylim=(0, 1),
-                    bgcolor=FLEXOKI_PAPER,
-                    width=1200,
-                    height=300,
-                    color=FLEXOKI_BLACK,
-                    fontsize=14
-                )
-            
+                return None
+
             # Apply flow direction corrections and get limits
             def process_flow_and_limits(row):
                 interconnector = row['interconnectorid']
                 flow_type = region_interconnectors[interconnector]
                 meteredmwflow = row['meteredmwflow']  # Original AEMO flow
-                # Handle missing columns in 30-minute data
                 import_limit = row.get('importlimit', np.nan)
                 export_limit = row.get('exportlimit', np.nan)
-                
-                # Convert to regional perspective
+
                 if flow_type.startswith('to_'):
-                    # This interconnector brings power TO our region (import)
-                    regional_flow = meteredmwflow  # Positive = import to our region
+                    regional_flow = meteredmwflow
                 else:
-                    # This interconnector takes power FROM our region (export)  
-                    regional_flow = -meteredmwflow  # Negative = export from our region
-                
-                # Determine applicable limit based on regional flow direction
-                # The logic: always show the limit in the same direction as the actual flow
-                # For positive regional flow (import): show positive limit (max import capacity)
-                # For negative regional flow (export): show negative limit (max export capacity)
-                
+                    regional_flow = -meteredmwflow
+
                 if regional_flow >= 0:
-                    # Importing to our region - use positive limit
                     if flow_type.startswith('to_'):
-                        # This interconnector normally brings power TO our region
                         applicable_limit = export_limit if meteredmwflow >= 0 else import_limit
                     else:
-                        # This interconnector normally takes power FROM our region, but flow is reversed
                         applicable_limit = import_limit if meteredmwflow < 0 else export_limit
                 else:
-                    # Exporting from our region - use negative limit
                     if flow_type.startswith('to_'):
-                        # This interconnector normally brings power TO our region, but flow is reversed
                         applicable_limit = -(import_limit if meteredmwflow < 0 else export_limit)
                     else:
-                        # This interconnector normally takes power FROM our region
                         applicable_limit = -(export_limit if meteredmwflow >= 0 else import_limit)
-                
+
                 return regional_flow, applicable_limit
-            
-            # Process flows and limits
+
             region_transmission[['regional_flow', 'applicable_limit']] = region_transmission.apply(
                 lambda row: pd.Series(process_flow_and_limits(row)), axis=1
             )
-            
+
             # Debug processed data
             logger.info(f"=== After Processing ===")
             logger.info(f"Processed data shape: {region_transmission.shape}")
@@ -2797,214 +2751,166 @@ class EnergyDashboard(param.Parameterized):
                 logger.info(f"Regional flow range: {region_transmission['regional_flow'].min():.1f} to {region_transmission['regional_flow'].max():.1f}")
                 logger.info(f"Sample processed data (first 5 rows):")
                 logger.info(region_transmission[['settlementdate', 'interconnectorid', 'regional_flow', 'applicable_limit']].head())
-            
-            # Create visualizations for each interconnector separately
-            plot_elements = []
-            
-            # Define colors for different interconnectors
+
+            # Interconnector colours
             interconnector_colors = {
-                'NSW1-QLD1': '#ff6b6b',    # Red
-                'VIC1-NSW1': '#4ecdc4',    # Cyan
-                'V-SA': '#45b7d1',         # Light Blue
-                'T-V-MNSP1': '#96ceb4',    # Light Green
-                'N-Q-MNSP1': '#ffd93d',    # Yellow
-                'V-S-MNSP1': '#dda0dd'     # Plum
+                'NSW1-QLD1': '#ff6b6b',
+                'VIC1-NSW1': '#4ecdc4',
+                'V-SA': '#45b7d1',
+                'T-V-MNSP1': '#96ceb4',
+                'N-Q-MNSP1': '#ffd93d',
+                'V-S-MNSP1': '#dda0dd',
             }
-            
-            # Create plots for each interconnector
+
+            fig = go.Figure()
+            has_traces = False
+
             for interconnector in region_interconnectors.keys():
                 ic_data = region_transmission[region_transmission['interconnectorid'] == interconnector].copy()
-                
+
                 if ic_data.empty:
                     logger.info(f"No data for interconnector {interconnector}")
                     continue
-                
+
                 logger.info(f"=== Creating plot for {interconnector} ===")
                 logger.info(f"Data points: {len(ic_data)}")
-                
-                # Sort by time
+
                 ic_data = ic_data.sort_values('settlementdate')
-                
-                # Get color for this interconnector
                 color = interconnector_colors.get(interconnector, '#ffb6c1')
-                
-                # Use the applicable limit directly (no filtering)
                 ic_data['dynamic_limit'] = ic_data['applicable_limit']
-                
-                # Log limit info for debugging
+
                 if not ic_data.empty:
                     avg_flow = ic_data['regional_flow'].mean()
                     avg_limit = ic_data['applicable_limit'].abs().mean()
                     logger.info(f"Interconnector {interconnector}: avg flow={avg_flow:.1f}MW, avg limit={avg_limit:.1f}MW")
-                
-                # Prepare data for filled area and hover
+
+                # Build area and hover data
                 area_data = []
                 hover_data = []
-                
+
                 for _, row in ic_data.iterrows():
                     time = row['settlementdate']
                     flow = row['regional_flow']
                     limit = row['dynamic_limit']
-                    
-                    # Calculate percentage of limit used
-                    if limit != 0:
-                        percent_of_limit = abs(flow / limit) * 100
-                    else:
-                        percent_of_limit = 0
-                    
-                    # Create area from flow to limit (showing unused capacity)
-                    if flow >= 0 and limit >= 0:  # Import scenario
-                        area_data.append((time, flow, limit))
-                    elif flow < 0 and limit < 0:  # Export scenario  
+
+                    percent_of_limit = abs(flow / limit) * 100 if limit != 0 else 0
+
+                    if (flow >= 0 and limit >= 0) or (flow < 0 and limit < 0):
                         area_data.append((time, flow, limit))
                     else:
-                        # No area when flow and limit have different signs
                         area_data.append((time, flow, flow))
-                    
-                    # Store hover data
+
                     hover_data.append({
                         'settlementdate': time,
                         'flow': flow,
                         'limit': limit,
                         'percent': percent_of_limit,
                         'direction': 'Import' if flow >= 0 else 'Export',
-                        'interconnector': interconnector
+                        'interconnector': interconnector,
                     })
-                
+
                 if not area_data:
                     continue
-                
+
                 area_df = pd.DataFrame(area_data, columns=['settlementdate', 'flow', 'limit'])
                 hover_df = pd.DataFrame(hover_data)
-                
-                # Create the filled area for this interconnector
-                filled_area = area_df.hvplot.area(
-                    x='settlementdate',
-                    y='flow',
-                    y2='limit',
-                    alpha=0.3,
-                    color=color,
-                    hover=False,
-                    label=f'{interconnector} unused capacity'
-                ).opts(
-                    hooks=[self._get_datetime_formatter_hook(), self._get_flexoki_background_hook()]
-                )
 
-                # Create the main flow line with enhanced tooltips
                 hover_df['capacity_status'] = hover_df['percent'].apply(
                     lambda x: 'At Capacity (>=95%)' if x >= 95 else
                              'High Utilization (>=80%)' if x >= 80 else
                              'Normal Operation'
                 )
 
-                flow_line = hover_df.hvplot.line(
-                    x='settlementdate',
-                    y='flow',
-                    color=color,
-                    line_width=3,
-                    alpha=1.0,
-                    label=interconnector,
-                    hover_cols=['limit', 'percent', 'direction', 'interconnector', 'capacity_status'],
-                    hover_tooltips=[
-                        ('Interconnector', '@interconnector'),
-                        ('Time', '@settlementdate{%F %H:%M}'),
-                        ('Flow', '@flow{0.0f} MW'),
-                        ('Limit', '@limit{0.0f} MW'),
-                        ('Utilization', '@percent{0.1f}%'),
-                        ('Status', '@capacity_status'),
-                        ('Direction', '@direction')
-                    ],
-                    hover_formatters={'@settlementdate': 'datetime'}
-                ).opts(
-                    hooks=[self._get_datetime_formatter_hook(), self._get_flexoki_background_hook()]
-                )
+                # Filled area: limit boundary (upper/lower) then flow with fill between
+                fill_color = self._hex_to_rgba(color, 0.3)
 
-                plot_elements.extend([filled_area, flow_line])
-            
-            # Add horizontal line at y=0
-            zero_line = hv.HLine(0).opts(
-                color=FLEXOKI_BASE[600],  # Use comment gray for subtle grid line
-                alpha=0.5,
-                line_width=1,
-                line_dash='dashed'
+                fig.add_trace(go.Scatter(
+                    x=area_df['settlementdate'],
+                    y=area_df['limit'],
+                    mode='lines',
+                    line=dict(width=0),
+                    showlegend=False,
+                    hoverinfo='skip',
+                ))
+                fig.add_trace(go.Scatter(
+                    x=area_df['settlementdate'],
+                    y=area_df['flow'],
+                    mode='lines',
+                    line=dict(width=0),
+                    fill='tonexty',
+                    fillcolor=fill_color,
+                    showlegend=False,
+                    hoverinfo='skip',
+                ))
+
+                # Flow line with rich hover
+                customdata = hover_df[['limit', 'percent', 'direction', 'capacity_status']].values
+                fig.add_trace(go.Scatter(
+                    x=hover_df['settlementdate'],
+                    y=hover_df['flow'],
+                    mode='lines',
+                    name=interconnector,
+                    line=dict(width=3, color=color),
+                    customdata=customdata,
+                    hovertemplate=(
+                        '<b>%{fullData.name}</b><br>'
+                        'Time: %{x|%Y-%m-%d %H:%M}<br>'
+                        'Flow: %{y:.0f} MW<br>'
+                        'Limit: %{customdata[0]} MW<br>'
+                        'Utilization: %{customdata[1]}%<br>'
+                        'Direction: %{customdata[2]}<br>'
+                        'Status: %{customdata[3]}'
+                        '<extra></extra>'
+                    ),
+                ))
+                has_traces = True
+
+            if not has_traces:
+                return None
+
+            time_range_display = self._get_time_range_display()
+
+            # Zero line
+            fig.add_hline(
+                y=0, line_dash='dash',
+                line_color=FLEXOKI_BASE[600], line_width=1, opacity=0.5,
             )
-            
-            # Combine all elements
-            if plot_elements:
-                time_range_display = self._get_time_range_display()
-                
-                # Create a more robust datetime formatter hook
-                def transmission_formatter_hook(plot, element):
-                    # Try different ways to access the x-axis
-                    xaxis = None
-                    if hasattr(plot, 'handles') and 'xaxis' in plot.handles:
-                        xaxis = plot.handles['xaxis']
-                    elif hasattr(plot, 'state'):
-                        # For composite plots, might need to access differently
-                        try:
-                            xaxis = plot.state.below[0]  # Bokeh puts x-axis in 'below'
-                        except:
-                            pass
-                    
-                    if xaxis:
-                        if self.time_range == '1':
-                            xaxis.formatter = DatetimeTickFormatter(hours="%H:%M", days="%H:%M")
-                        elif self.time_range == '7':
-                            xaxis.formatter = DatetimeTickFormatter(hours="%a %H:%M", days="%a %d", months="%b %d")
-                        else:
-                            xaxis.formatter = DatetimeTickFormatter(hours="%m/%d", days="%m/%d", months="%b %d", years="%Y")
-                
-                # Calculate the actual x-axis range from the data
-                if region_transmission.empty:
-                    x_range = None
-                else:
-                    x_min = region_transmission['settlementdate'].min()
-                    x_max = region_transmission['settlementdate'].max()
-                    # Add small padding (1% of range) - convert to pandas Timedelta
-                    time_diff = x_max - x_min
-                    padding = pd.Timedelta(seconds=time_diff.total_seconds() * 0.01)
-                    x_range = (x_min - padding, x_max + padding)
-                
-                combined_plot = hv.Overlay(plot_elements + [zero_line]).opts(
-                    width=1200,
-                    height=400,  # Increased height to accommodate multiple lines
-                    bgcolor=FLEXOKI_PAPER,
-                    ylabel='Flow (MW)',
-                    xlabel='Time',
-                    title=f'Transmission Flows with Limits - {self.region} ({time_range_display})',
-                    show_grid=False,
-                    legend_position='right',
-                    framewise=True,  # Force complete recomputation on updates
-                    xlim=x_range,  # Explicitly set x-axis range
-                    apply_ranges=False,  # Prevent automatic range determination
-                    hooks=[self._get_datetime_formatter_hook(), self._get_flexoki_background_hook()]
-                )
-            else:
-                combined_plot = hv.Text(0.5, 0.5, f'No transmission data available for {self.region}').opts(
-                    xlim=(0, 1),
-                    ylim=(0, 1),
-                    bgcolor=FLEXOKI_PAPER,
-                    width=1200,
-                    height=400,
-                    color=FLEXOKI_BLACK,
-                    fontsize=14
-                )
-            
-            return combined_plot
-            
+
+            fig.update_layout(
+                paper_bgcolor=FLEXOKI_PAPER,
+                plot_bgcolor=FLEXOKI_PAPER,
+                height=400,
+                title=dict(
+                    text=f'Transmission Flows with Limits - {self.region} ({time_range_display})',
+                    font=dict(size=14, color=FLEXOKI_BLACK),
+                ),
+                legend=dict(
+                    orientation='v', yanchor='top', y=1, xanchor='left', x=1.02,
+                    bgcolor=FLEXOKI_PAPER, font=dict(size=10),
+                ),
+                margin=dict(r=150, t=50),
+                yaxis=dict(
+                    title='Flow (MW)',
+                    showgrid=False,
+                    zeroline=True,
+                    zerolinecolor=FLEXOKI_BASE[600],
+                    zerolinewidth=1,
+                    tickfont=dict(color=FLEXOKI_BASE[800]),
+                ),
+                xaxis=dict(
+                    title='Time',
+                    showgrid=False,
+                    tickfont=dict(color=FLEXOKI_BASE[800]),
+                ),
+            )
+
+            return fig
+
         except Exception as e:
             logger.error(f"Error creating transmission plot: {e}")
             import traceback
             logger.error(traceback.format_exc())
-            return hv.Text(0.5, 0.5, 'Error loading transmission data').opts(
-                xlim=(0, 1),
-                ylim=(0, 1),
-                bgcolor=FLEXOKI_PAPER,
-                width=1200,
-                height=300,
-                color=FLEXOKI_BLACK,
-                fontsize=12
-            )
+            return None
 
     def create_generation_tod_plot(self):
         """Create time-of-day generation profile with average price overlay (Plotly)"""
@@ -3206,79 +3112,72 @@ class EnergyDashboard(param.Parameterized):
             return None
 
     def create_utilization_plot(self):
-        """Create capacity utilization line chart with proper document handling"""
+        """Create capacity utilization line chart (Plotly)"""
         try:
             utilization_data = self.calculate_capacity_utilization()
-            
+
             if utilization_data.empty:
-                # Create empty plot with message
-                empty_plot = hv.Text(0.5, 0.5, 'No utilization data available').opts(
-                    xlim=(0, 1),
-                    ylim=(0, 1),
-                    bgcolor=FLEXOKI_PAPER,
-                    width=1200,
-                    height=400,
-                    color=FLEXOKI_BLACK,
-                    fontsize=14
-                )
-                return empty_plot
-            
+                return None
+
             # Get colors (same as generation chart for consistency)
             fuel_colors = self.get_fuel_colors()
-            
+
             # Reset index to make time a column
             plot_data = utilization_data.reset_index()
-            
+
             # Get available fuel types
             fuel_types = [col for col in utilization_data.columns if col in fuel_colors]
-            
+
             if not fuel_types:
-                return hv.Text(0.5, 0.5, 'No fuel data for utilization chart').opts(
-                    bgcolor=FLEXOKI_PAPER,
-                    color=FLEXOKI_BLACK,
-                    fontsize=14
-                )
-            
-            # Create line plot for capacity utilization with different Y dimension name
+                return None
+
             time_range_display = self._get_time_range_display()
-            line_plot = plot_data.hvplot.line(
-                x='settlementdate',
-                y=fuel_types,
-                width=1200,
-                height=400,
-                title=f'Capacity Utilization by Fuel Type - {self.region} ({time_range_display}) | data:AEMO, design ITK',
-                ylabel='Capacity Utilization (%)',
-                xlabel='Time',
-                grid=False,
-                legend='right',
-                bgcolor=FLEXOKI_PAPER,
-                color=[fuel_colors.get(fuel, '#6272a4') for fuel in fuel_types],
-                alpha=0.8,
-                hover=True,
-                hover_tooltips=[('Fuel Type', '$name'), ('Utilization', '@$name{0.1f}%')],
-                ylim=(0, 100)  # Force Y-axis to 0-100%
-            ).opts(
-                show_grid=False,
-                toolbar='above',
-                bgcolor=FLEXOKI_PAPER,
-                ylim=(0, 100),  # Double ensure Y-axis range
-                yformatter='%.0f%%',  # Format Y-axis as percentage
-                hooks=[self._get_flexoki_background_hook()]
+
+            fig = go.Figure()
+
+            for fuel in fuel_types:
+                fig.add_trace(go.Scatter(
+                    x=plot_data['settlementdate'],
+                    y=plot_data[fuel],
+                    name=fuel,
+                    mode='lines',
+                    line=dict(width=2, color=fuel_colors.get(fuel, '#888888')),
+                    opacity=0.8,
+                    hovertemplate=f'{fuel}: %{{y:.1f}}%<extra></extra>',
+                ))
+
+            fig.update_layout(
+                paper_bgcolor=FLEXOKI_PAPER,
+                plot_bgcolor=FLEXOKI_PAPER,
+                height=500,
+                title=dict(
+                    text=f'Capacity Utilization by Fuel Type - {self.region} ({time_range_display}) | data:AEMO, design ITK',
+                    font=dict(size=14, color=FLEXOKI_BLACK),
+                ),
+                legend=dict(
+                    orientation='v', yanchor='top', y=1, xanchor='left', x=1.02,
+                    bgcolor=FLEXOKI_PAPER, font=dict(size=10),
+                ),
+                margin=dict(r=150, t=50),
+                yaxis=dict(
+                    title='Capacity Utilization (%)',
+                    range=[0, 100],
+                    ticksuffix='%',
+                    showgrid=False,
+                    tickfont=dict(color=FLEXOKI_BASE[800]),
+                ),
+                xaxis=dict(
+                    title='Time',
+                    showgrid=False,
+                    tickfont=dict(color=FLEXOKI_BASE[800]),
+                ),
             )
 
-            # Rename the Y dimension to make it independent from generation MW axis
-            line_plot = line_plot.redim(**{fuel: f'{fuel}_utilization' for fuel in fuel_types})
-
-            return line_plot
+            return fig
 
         except Exception as e:
             logger.error(f"Error creating utilization plot: {e}")
-            # Return fallback plot
-            return hv.Text(0.5, 0.5, f'Error creating utilization plot: {str(e)}').opts(
-                bgcolor=FLEXOKI_PAPER,
-                color='red',
-                fontsize=12
-            )
+            return None
     
     def update_plot(self):
         """Update all plots with fresh data and proper error handling"""
@@ -3310,23 +3209,6 @@ class EnergyDashboard(param.Parameterized):
                 new_summary_table = self.create_generation_summary_table()
                 self.summary_table_pane.clear()
                 self.summary_table_pane.append(new_summary_table)
-                
-                # Post-render formatting: Access Bokeh figure after HoloViews renders it
-                try:
-                    # Get the Bokeh model from the pane
-                    bokeh_model = self.transmission_pane.get_root()
-                    if hasattr(bokeh_model, 'below'):
-                        for axis in bokeh_model.below:
-                            if hasattr(axis, 'formatter'):
-                                # Apply formatter based on time range
-                                if self.time_range == '1':
-                                    axis.formatter = DatetimeTickFormatter(hours="%H:%M", days="%H:%M")
-                                elif self.time_range == '7':
-                                    axis.formatter = DatetimeTickFormatter(hours="%a %H:%M", days="%a %d", months="%b %d")
-                                else:
-                                    axis.formatter = DatetimeTickFormatter(hours="%m/%d", days="%m/%d", months="%b %d", years="%Y")
-                except Exception as e:
-                    logger.debug(f"Post-render formatting attempt failed: {e}")
             
             # Update the header with new time
             if self.header_section is not None:
