@@ -865,6 +865,7 @@ def create_price_table_html(prices_df):
         }}
     </style>
     <div class="price-table-caption">5 minute spot $/MWh {latest_time.strftime('%d %b %H:%M')}</div>
+    <div class="responsive-table">
     <table class="price-table">
         <thead>
             <tr><th>Time</th>"""
@@ -895,7 +896,7 @@ def create_price_table_html(prices_df):
         html += f"<td>{val:,.0f}</td>"
     html += "</tr>"
 
-    html += "</tbody></table>"
+    html += "</tbody></table></div>"
     return html
 
 
@@ -1303,63 +1304,60 @@ def _build_tab_content():
     # ROW 1: Tables & text (price table, forecast, notices)
     row1_left = pn.Column(
         price_table,
-        width=400, sizing_mode='fixed',
+        width=400,
     )
     row1_center = pn.Column(
         forecast_table,
-        width=420, sizing_mode='fixed',
+        width=420,
     )
     row1_right = pn.Column(
         notices_panel,
-        width=380, sizing_mode='fixed',
+        width=380,
     )
-    row1 = pn.Row(
-        row1_left, pn.Spacer(width=10),
-        row1_center, pn.Spacer(width=10),
-        row1_right,
-        sizing_mode='fixed',
+    row1 = pn.FlexBox(
+        row1_left, row1_center, row1_right,
+        flex_wrap='wrap', gap='10px',
+        sizing_mode='stretch_width',
     )
 
     # ROW 2: Charts (price chart with legend, generation mix, outages)
     row2_left = pn.Column(
         price_legend,
         price_chart,
-        width=420, sizing_mode='fixed',
+        width=420,
     )
     row2_center = pn.Column(
         gen_chart,
-        width=450, sizing_mode='fixed',
+        width=450,
     )
     row2_right = pn.Column(
         outages_panel,
-        width=380, sizing_mode='fixed',
+        width=380,
     )
-    row2 = pn.Row(
-        row2_left, pn.Spacer(width=10),
-        row2_center, pn.Spacer(width=10),
-        row2_right,
-        sizing_mode='fixed',
+    row2 = pn.FlexBox(
+        row2_left, row2_center, row2_right,
+        flex_wrap='wrap', gap='10px',
+        sizing_mode='stretch_width',
     )
 
     # ROW 3: Gauges (demand, renewable, battery)
     row3_left = pn.Column(
         demand_gauge_pane,
         demand_gauge_legend,
-        width=400, sizing_mode='fixed',
+        width=400,
     )
     row3_center = pn.Column(
         gauge,
-        width=400, sizing_mode='fixed',
+        width=400,
     )
     row3_right = pn.Column(
         battery_gauge,
-        width=420, sizing_mode='fixed',
+        width=420,
     )
-    row3 = pn.Row(
-        row3_left, pn.Spacer(width=10),
-        row3_center, pn.Spacer(width=10),
-        row3_right,
-        sizing_mode='fixed',
+    row3 = pn.FlexBox(
+        row3_left, row3_center, row3_right,
+        flex_wrap='wrap', gap='10px',
+        sizing_mode='stretch_width',
     )
 
     # Stack the three rows

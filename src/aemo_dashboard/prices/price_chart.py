@@ -1,14 +1,13 @@
-"""Price time-series and time-of-day charts for the Prices tab.
+"""Price time-series and time-of-day charts for the Prices tab (Plotly).
 
 Extracted from gen_dash.py.
 """
 
 import logging
 
-import holoviews as hv
-import hvplot.pandas
 import numpy as np
 import pandas as pd
+import plotly.graph_objects as go
 
 from ..shared.flexoki_theme import FLEXOKI_PAPER, FLEXOKI_BLACK, FLEXOKI_BASE, FLEXOKI_ACCENT
 
@@ -31,72 +30,66 @@ def build_price_time_series(
     date_range_text,
     start_date,
     end_date,
-    attribution_hook,
-    flexoki_bg_hook,
+    attribution_hook=None,
+    flexoki_bg_hook=None,
 ):
-    """Build the price time-series hvplot overlay.
-
-    Parameters
-    ----------
-    price_data : DataFrame
-        Smoothed price data with ``SETTLEMENTDATE``, ``REGIONID``, *y_col*.
-    y_col : str
-        Column name for the y-axis (``'RRP'`` or ``'RRP_adjusted'``).
-    ylabel : str
-    use_log : bool
-    date_range_text : str
-    start_date, end_date : date-like
-    attribution_hook, flexoki_bg_hook : callables
-        Bokeh hooks from the dashboard.
+    """Build the price time-series Plotly figure.
 
     Returns
     -------
-    plot : hv.Overlay
+    fig : go.Figure
     """
-    xlim = (
-        pd.Timestamp(start_date),
-        pd.Timestamp(end_date) + pd.Timedelta(days=1),
+    fig = go.Figure()
+
+    for region in price_data['REGIONID'].unique():
+        region_data = price_data[price_data['REGIONID'] == region]
+        color = REGION_COLORS.get(region, '#6F6E69')
+        fig.add_trace(go.Scatter(
+            x=region_data['SETTLEMENTDATE'],
+            y=region_data[y_col],
+            name=region,
+            mode='lines',
+            line=dict(width=2, color=color),
+            hovertemplate=f'{region}: $%{{y:.1f}}/MWh<extra></extra>',
+        ))
+
+    fig.update_layout(
+        autosize=True,
+        height=400,
+        paper_bgcolor=FLEXOKI_PAPER,
+        plot_bgcolor=FLEXOKI_PAPER,
+        title=dict(
+            text=f'Electricity Spot Prices by Region ({date_range_text})',
+            font=dict(size=14, color=FLEXOKI_BLACK),
+        ),
+        legend=dict(bgcolor=FLEXOKI_PAPER, font=dict(size=10)),
+        margin=dict(l=60, r=30, t=40, b=40),
+        xaxis=dict(
+            title='Time', showgrid=False,
+            range=[pd.Timestamp(start_date), pd.Timestamp(end_date) + pd.Timedelta(days=1)],
+            tickfont=dict(color=FLEXOKI_BASE[800]),
+        ),
+        yaxis=dict(
+            title=ylabel, showgrid=False,
+            type='log' if use_log else 'linear',
+            tickfont=dict(color=FLEXOKI_BASE[800]),
+        ),
+        annotations=[dict(
+            text='<i>data: AEMO, design: ITK</i>',
+            xref='paper', yref='paper', x=1.0, y=-0.12,
+            showarrow=False, font=dict(size=9, color=FLEXOKI_BASE[500]), xanchor='right',
+        )],
     )
 
-    color_list = [
-        REGION_COLORS.get(r, '#6F6E69') for r in price_data['REGIONID'].unique()
-    ]
-
-    plot = price_data.hvplot.line(
-        x='SETTLEMENTDATE', y=y_col, by='REGIONID',
-        width=1200, height=400,
-        xlabel='Time', ylabel=ylabel,
-        title=f'Electricity Spot Prices by Region ({date_range_text})',
-        logy=use_log, grid=True,
-        color=color_list, line_width=2,
-        hover=True, hover_cols=['REGIONID', 'RRP'],
-        bgcolor=FLEXOKI_PAPER,
-        fontsize={'title': 14, 'labels': 12, 'ticks': 10},
-    ).opts(
-        xlim=xlim, toolbar='above',
-        active_tools=['pan', 'wheel_zoom'],
-        tools=['hover', 'pan', 'wheel_zoom', 'box_zoom', 'reset', 'save'],
-        show_grid=True,
-        gridstyle={'grid_line_color': FLEXOKI_BASE[100], 'grid_line_alpha': 0.3},
-        hooks=[attribution_hook, flexoki_bg_hook],
-    )
-
-    return plot
+    return fig
 
 
-def build_tod_chart(original_price_data, date_range_text, attribution_hook, flexoki_bg_hook):
-    """Build the time-of-day average-price line chart.
-
-    Parameters
-    ----------
-    original_price_data : DataFrame
-        Resampled (but unsmoothed) price data.
-    date_range_text : str
-    attribution_hook, flexoki_bg_hook : callables
+def build_tod_chart(original_price_data, date_range_text, attribution_hook=None, flexoki_bg_hook=None):
+    """Build the time-of-day average-price line chart (Plotly).
 
     Returns
     -------
-    tod_plot : hv.Overlay
+    fig : go.Figure
     """
     df = original_price_data.copy()
     df['Hour'] = pd.to_datetime(df['SETTLEMENTDATE']).dt.hour
@@ -104,22 +97,45 @@ def build_tod_chart(original_price_data, date_range_text, attribution_hook, flex
     tod_data = df.groupby(['Hour', 'REGIONID'])['RRP'].mean().reset_index()
     tod_data.rename(columns={'RRP': 'Average Price'}, inplace=True)
 
-    tod_colors = [REGION_COLORS.get(r, '#6F6E69') for r in tod_data['REGIONID'].unique()]
+    fig = go.Figure()
 
-    tod_plot = tod_data.hvplot.line(
-        x='Hour', y='Average Price', by='REGIONID',
-        width=400, height=400,
-        xlabel='Hour of Day', ylabel='Average Price ($/MWh)',
-        title=f'Average Price by Hour ({date_range_text})',
-        color=tod_colors, bgcolor=FLEXOKI_PAPER,
-        legend='top_right',
-        xticks=list(range(0, 24, 3)),
-        toolbar='above', grid=True,
-    ).opts(
-        show_grid=True,
-        gridstyle={'grid_line_color': FLEXOKI_BASE[100], 'grid_line_alpha': 0.3},
-        fontsize={'xlabel': 10, 'ylabel': 10, 'ticks': 9},
-        hooks=[attribution_hook, flexoki_bg_hook],
+    for region in tod_data['REGIONID'].unique():
+        region_df = tod_data[tod_data['REGIONID'] == region]
+        color = REGION_COLORS.get(region, '#6F6E69')
+        fig.add_trace(go.Scatter(
+            x=region_df['Hour'],
+            y=region_df['Average Price'],
+            name=region,
+            mode='lines',
+            line=dict(width=2, color=color),
+            hovertemplate=f'{region}: $%{{y:.1f}}/MWh<extra></extra>',
+        ))
+
+    fig.update_layout(
+        autosize=True,
+        height=400,
+        paper_bgcolor=FLEXOKI_PAPER,
+        plot_bgcolor=FLEXOKI_PAPER,
+        title=dict(
+            text=f'Average Price by Hour ({date_range_text})',
+            font=dict(size=14, color=FLEXOKI_BLACK),
+        ),
+        legend=dict(bgcolor=FLEXOKI_PAPER, font=dict(size=10)),
+        margin=dict(l=60, r=30, t=40, b=40),
+        xaxis=dict(
+            title='Hour of Day', showgrid=False,
+            tickvals=list(range(0, 24, 3)),
+            tickfont=dict(color=FLEXOKI_BASE[800]),
+        ),
+        yaxis=dict(
+            title='Average Price ($/MWh)', showgrid=False,
+            tickfont=dict(color=FLEXOKI_BASE[800]),
+        ),
+        annotations=[dict(
+            text='<i>data: AEMO, design: ITK</i>',
+            xref='paper', yref='paper', x=1.0, y=-0.12,
+            showarrow=False, font=dict(size=9, color=FLEXOKI_BASE[500]), xanchor='right',
+        )],
     )
 
-    return tod_plot
+    return fig

@@ -53,22 +53,36 @@ class DuckDBViewManager:
             logger.debug("Views already created this session, skipping")
             return
 
-        # Check if views already exist in persistent DB
+        # Check if views already exist with correct column names
         if self._check_views_exist():
-            logger.info("Views already exist in persistent DB, skipping creation")
-            self._views_created = True
-            return
+            # Verify views use correct column names (lowercase)
+            try:
+                test = self.conn.execute(
+                    "SELECT nameplate_capacity FROM integrated_data_30min LIMIT 1"
+                ).fetchone()
+                logger.info("Views exist with correct schema, skipping recreation")
+                self._views_created = True
+                return
+            except Exception:
+                logger.info("Views exist but schema outdated, recreating...")
 
         logger.info("Creating DuckDB optimization views...")
 
-        with perf_logger.timer("create_views", threshold=0.5):
-            self._create_integration_views()
-            self._create_aggregation_views()
-            self._create_helper_views()
-            self._create_materialized_views()
+        try:
+            with perf_logger.timer("create_views", threshold=0.5):
+                self._create_integration_views()
+                self._create_aggregation_views()
+                self._create_helper_views()
+                self._create_materialized_views()
 
-        self._views_created = True
-        logger.info("All DuckDB views created successfully")
+            self._views_created = True
+            logger.info("All DuckDB views created successfully")
+        except Exception as e:
+            if "read-only" in str(e).lower():
+                logger.warning(f"DuckDB in read-only mode, using existing views: {e}")
+                self._views_created = True  # Allow dashboard to proceed with existing views
+            else:
+                raise
 
     def _check_views_exist(self) -> bool:
         """Check if optimization views already exist in persistent DB"""
@@ -121,28 +135,28 @@ class DuckDBViewManager:
                 g.settlementdate,
                 g.duid,
                 g.scadavalue,
-                d."Site Name" as station_name,
-                d.Owner as owner,
-                d.Fuel as fuel_type,
-                d.Region as region,
-                d."Capacity(MW)" as nameplate_capacity,
+                d."site name" as station_name,
+                d.owner as owner,
+                d.fuel as fuel_type,
+                d.region as region,
+                d.capacity_mw as nameplate_capacity,
                 p.settlementdate as price_settlementdate,
                 p.regionid as price_region,
-                p.RRP as rrp,
-                g.scadavalue * p.RRP * {MINUTES_30_TO_HOURS} as revenue_30min,
+                p.rrp as rrp,
+                g.scadavalue * p.rrp * {MINUTES_30_TO_HOURS} as revenue_30min,
                 -- Additional calculated fields
                 CASE
-                    WHEN d."Capacity(MW)" > 0
-                    THEN g.scadavalue / d."Capacity(MW)" * 100
+                    WHEN d.capacity_mw > 0
+                    THEN g.scadavalue / d.capacity_mw * 100
                     ELSE 0
                 END as capacity_factor_pct,
                 date_trunc('hour', g.settlementdate) as hour,
                 date_trunc('day', g.settlementdate) as date
             FROM generation_30min g
-            LEFT JOIN duid_mapping d ON g.duid = d.DUID
+            LEFT JOIN duid_mapping d ON g.duid = d.duid
             LEFT JOIN prices_30min p
                 ON g.settlementdate = p.settlementdate
-                AND d.Region = p.regionid
+                AND d.region = p.regionid
         """)
         
         # 5-minute integrated data view
@@ -153,28 +167,28 @@ class DuckDBViewManager:
                 g.settlementdate,
                 g.duid,
                 g.scadavalue,
-                d."Site Name" as station_name,
-                d.Owner as owner,
-                d.Fuel as fuel_type,
-                d.Region as region,
-                d."Capacity(MW)" as nameplate_capacity,
+                d."site name" as station_name,
+                d.owner as owner,
+                d.fuel as fuel_type,
+                d.region as region,
+                d.capacity_mw as nameplate_capacity,
                 p.settlementdate as price_settlementdate,
                 p.regionid as price_region,
                 p.rrp as rrp,
                 g.scadavalue * p.rrp * {MINUTES_5_TO_HOURS} as revenue_5min,
                 -- Additional calculated fields
                 CASE
-                    WHEN d."Capacity(MW)" > 0
-                    THEN g.scadavalue / d."Capacity(MW)" * 100
+                    WHEN d.capacity_mw > 0
+                    THEN g.scadavalue / d.capacity_mw * 100
                     ELSE 0
                 END as capacity_factor_pct,
                 date_trunc('hour', g.settlementdate) as hour,
                 date_trunc('day', g.settlementdate) as date
             FROM generation_5min g
-            LEFT JOIN duid_mapping d ON g.duid = d.DUID
+            LEFT JOIN duid_mapping d ON g.duid = d.duid
             LEFT JOIN prices_5min p
                 ON g.settlementdate = p.settlementdate
-                AND d.Region = p.regionid
+                AND d.region = p.regionid
         """)
         
         logger.debug("Created integration views")
@@ -313,15 +327,15 @@ class DuckDBViewManager:
                 g.scadavalue,
                 p.rrp as price,
                 g.scadavalue * p.rrp * {MINUTES_5_TO_HOURS} as revenue_5min,
-                d."Site Name" as station_name,
-                d."Owner" as owner,
-                d."Region" as region,
-                d."Fuel" as fuel_type,
-                d."Capacity(MW)" as capacity_mw
+                d."site name" as station_name,
+                d.owner as owner,
+                d.region as region,
+                d.fuel as fuel_type,
+                d.capacity_mw as capacity_mw
             FROM generation_5min g
             JOIN duid_mapping d ON g.duid = d.duid
             JOIN prices_5min p ON g.settlementdate = p.settlementdate
-                AND d."Region" = p.regionid
+                AND d.region = p.regionid
         """)
         
         # Station time series (30min version)
@@ -334,15 +348,15 @@ class DuckDBViewManager:
                 g.scadavalue,
                 p.rrp as price,
                 g.scadavalue * p.rrp * {MINUTES_30_TO_HOURS} as revenue_30min,
-                d."Site Name" as station_name,
-                d."Owner" as owner,
-                d."Region" as region,
-                d."Fuel" as fuel_type,
-                d."Capacity(MW)" as capacity_mw
+                d."site name" as station_name,
+                d.owner as owner,
+                d.region as region,
+                d.fuel as fuel_type,
+                d.capacity_mw as capacity_mw
             FROM generation_30min g
             JOIN duid_mapping d ON g.duid = d.duid
             JOIN prices_30min p ON g.settlementdate = p.settlementdate
-                AND d."Region" = p.regionid
+                AND d.region = p.regionid
         """)
         
         # Time of day averages for station analysis
@@ -398,16 +412,16 @@ class DuckDBViewManager:
             CREATE OR REPLACE VIEW generation_by_fuel_30min AS
             SELECT 
                 g.settlementdate,
-                d.Fuel as fuel_type,
-                d.Region as region,
+                d.fuel as fuel_type,
+                d.region as region,
                 SUM(g.scadavalue) as total_generation_mw,
                 COUNT(DISTINCT g.duid) as unit_count,
-                SUM(d."Capacity(MW)") as total_capacity_mw
+                SUM(d.capacity_mw) as total_capacity_mw
             FROM generation_30min g
-            JOIN duid_mapping d ON g.duid = d.DUID
-            WHERE d.Fuel IS NOT NULL
-            GROUP BY g.settlementdate, d.Fuel, d.Region
-            ORDER BY g.settlementdate, d.Fuel
+            JOIN duid_mapping d ON g.duid = d.duid
+            WHERE d.fuel IS NOT NULL
+            GROUP BY g.settlementdate, d.fuel, d.region
+            ORDER BY g.settlementdate, d.fuel
         """)
         
         # Generation by fuel type with region (5min) - for short date ranges
@@ -415,16 +429,16 @@ class DuckDBViewManager:
             CREATE OR REPLACE VIEW generation_by_fuel_5min AS
             SELECT 
                 g.settlementdate,
-                d.Fuel as fuel_type,
-                d.Region as region,
+                d.fuel as fuel_type,
+                d.region as region,
                 SUM(g.scadavalue) as total_generation_mw,
                 COUNT(DISTINCT g.duid) as unit_count,
-                SUM(d."Capacity(MW)") as total_capacity_mw
+                SUM(d.capacity_mw) as total_capacity_mw
             FROM generation_5min g
-            JOIN duid_mapping d ON g.duid = d.DUID
-            WHERE d.Fuel IS NOT NULL
-            GROUP BY g.settlementdate, d.Fuel, d.Region
-            ORDER BY g.settlementdate, d.Fuel
+            JOIN duid_mapping d ON g.duid = d.duid
+            WHERE d.fuel IS NOT NULL
+            GROUP BY g.settlementdate, d.fuel, d.region
+            ORDER BY g.settlementdate, d.fuel
         """)
         
         # Generation with price data (integrated view for revenue calculations)
@@ -438,8 +452,8 @@ class DuckDBViewManager:
                 g.total_generation_mw,
                 g.unit_count,
                 g.total_capacity_mw,
-                p.RRP as price,
-                g.total_generation_mw * p.RRP * {MINUTES_30_TO_HOURS} as revenue_30min
+                p.rrp as price,
+                g.total_generation_mw * p.rrp * {MINUTES_30_TO_HOURS} as revenue_30min
             FROM generation_by_fuel_30min g
             LEFT JOIN prices_30min p
                 ON g.settlementdate = p.settlementdate

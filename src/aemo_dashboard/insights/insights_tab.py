@@ -5,8 +5,7 @@ Based on Prices tab structure but with custom content
 import pandas as pd
 import numpy as np
 import panel as pn
-import holoviews as hv
-import hvplot.pandas
+import plotly.graph_objects as go
 from datetime import datetime, time, timedelta
 from typing import Optional, List
 
@@ -21,23 +20,6 @@ logger = get_logger(__name__)
 # Flexoki theme constants
 FLEXOKI_PAPER = '#FFFCF0'
 FLEXOKI_BORDER = '#B7B5AC'
-
-def set_flexoki_backgrounds(plot, element):
-    """Hook function to set Flexoki cream background for plot areas and legends."""
-    plot.state.background_fill_color = FLEXOKI_PAPER
-    if hasattr(plot.state, 'legend') and plot.state.legend:
-        for legend in plot.state.legend:
-            legend.background_fill_color = FLEXOKI_PAPER
-            legend.border_line_color = FLEXOKI_BORDER
-
-def set_flexoki_full(plot, element):
-    """Hook: Flexoki cream on both plot area and outer frame, borderless legend."""
-    plot.state.background_fill_color = FLEXOKI_PAPER
-    plot.state.border_fill_color = FLEXOKI_PAPER
-    if hasattr(plot.state, 'legend') and plot.state.legend:
-        for legend in plot.state.legend:
-            legend.background_fill_color = FLEXOKI_PAPER
-            legend.border_line_color = None
 
 # Optional LOESS import
 try:
@@ -1492,7 +1474,7 @@ class InsightsTab:
     def _setup_volatility_controls(self):
         """Set up volatility chart specific controls"""
         # Volatility chart pane
-        self.volatility_chart_pane = pn.pane.HoloViews(
+        self.volatility_chart_pane = pn.pane.Plotly(
             object=None,
             sizing_mode='stretch_width',
             height=500
@@ -1507,25 +1489,18 @@ class InsightsTab:
     
     def _show_placeholder_message(self):
         """Show placeholder message for volatility chart"""
-        # Create a simple plot with message
-        import pandas as pd
-        empty_df = pd.DataFrame({'x': [0], 'y': [0]})
-        placeholder = empty_df.hvplot.scatter(
-            x='x', y='y',
-            size=0,  # Make points invisible
-            label=''
-        ).opts(
-            width=1000,
-            height=500,
-            bgcolor=FLEXOKI_PAPER,
-            title='Select a region and smoothing window to generate the volatility chart',
-            fontsize={'title': 14},
-            toolbar=None,
-            xaxis=None,
-            yaxis=None,
-            hooks=[set_flexoki_backgrounds]  # Set legend background
+        fig = go.Figure()
+        fig.add_annotation(
+            text='Select a region and smoothing window to generate the volatility chart',
+            xref='paper', yref='paper', x=0.5, y=0.5,
+            showarrow=False, font=dict(size=14, color='#100F0F'),
         )
-        self.volatility_chart_pane.object = placeholder
+        fig.update_layout(
+            autosize=True, height=500,
+            paper_bgcolor=FLEXOKI_PAPER, plot_bgcolor=FLEXOKI_PAPER,
+            xaxis=dict(visible=False), yaxis=dict(visible=False),
+        )
+        self.volatility_chart_pane.object = fig
     
     def _calculate_rolling_statistics(self, df: pd.DataFrame, window_days: int) -> pd.DataFrame:
         """Calculate rolling mean and standard deviation for volatility bands"""
@@ -1685,12 +1660,17 @@ class InsightsTab:
             # Process each selected region and collect plots
             all_plots = []
             region_colors = {
-                'NSW1': 'white',
-                'QLD1': 'cyan',
-                'SA1': 'yellow',
-                'TAS1': 'green',
-                'VIC1': 'orange'
+                'NSW1': '#879A39',   # Flexoki Green
+                'QLD1': '#BC5215',   # Flexoki Orange
+                'SA1': '#CE5D97',    # Flexoki Magenta
+                'TAS1': '#3AA99F',   # Flexoki Cyan
+                'VIC1': '#8B7EC8',   # Flexoki Purple
             }
+            # RGBA helpers for fill bands
+            def _hex_to_rgba(hex_color, alpha):
+                h = hex_color.lstrip('#')
+                r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+                return f'rgba({r},{g},{b},{alpha})'
             
             mean_prices = {}  # Store mean prices for each region
             
@@ -1735,105 +1715,85 @@ class InsightsTab:
                 # Get color for this region
                 color = region_colors.get(region, 'white')
                 
-                # Create bands for each region with matching colors
-                # 2 std band (lighter shade)
-                area_2std = plot_data.hvplot.area(
-                    x='settlementdate',
-                    y='lower_2std',
-                    y2='upper_2std',
-                    label=f'{region} ±2σ',
-                    color=color,
-                    alpha=0.1,  # Very light for outer band
-                    hover=False
-                )
-                all_plots.append(area_2std)
-                
-                # 1 std band (darker shade)
-                area_1std = plot_data.hvplot.area(
-                    x='settlementdate',
-                    y='lower_1std',
-                    y2='upper_1std',
-                    label=f'{region} ±1σ',
-                    color=color,
-                    alpha=0.2,  # Slightly darker for inner band
-                    hover=False
-                )
-                all_plots.append(area_1std)
-                
-                # Create the price line for this region
-                price_line = plot_data.hvplot.line(
-                    x='settlementdate',
-                    y=price_col_to_use,
-                    label=f'{region}',
-                    color=color,
-                    line_width=2,
-                    hover=True
-                )
-                all_plots.append(price_line)
-            
+                # Store plot data for this region
+                all_plots.append({
+                    'region': region,
+                    'color': color,
+                    'dates': plot_data['settlementdate'],
+                    'price': plot_data[price_col_to_use],
+                    'upper_2std': plot_data['upper_2std'],
+                    'lower_2std': plot_data['lower_2std'],
+                    'upper_1std': plot_data['upper_1std'],
+                    'lower_1std': plot_data['lower_1std'],
+                })
+
             if not all_plots:
                 logger.warning("No plots created")
                 self.volatility_chart_pane.object = None
                 return
-            
-            # Combine all plots
-            combined_plot = all_plots[0]
-            for plot in all_plots[1:]:
-                combined_plot = combined_plot * plot
-            
+
+            # Build Plotly figure
+            fig = go.Figure()
+
+            for p in all_plots:
+                # 2 std band (lighter shade)
+                fig.add_trace(go.Scatter(
+                    x=p['dates'], y=p['upper_2std'],
+                    mode='lines', line=dict(width=0),
+                    showlegend=False, hoverinfo='skip',
+                ))
+                fig.add_trace(go.Scatter(
+                    x=p['dates'], y=p['lower_2std'],
+                    mode='lines', line=dict(width=0),
+                    fill='tonexty', fillcolor=_hex_to_rgba(p['color'], 0.1),
+                    name=f"{p['region']} ±2σ",
+                    showlegend=True, hoverinfo='skip',
+                ))
+                # 1 std band (darker shade)
+                fig.add_trace(go.Scatter(
+                    x=p['dates'], y=p['upper_1std'],
+                    mode='lines', line=dict(width=0),
+                    showlegend=False, hoverinfo='skip',
+                ))
+                fig.add_trace(go.Scatter(
+                    x=p['dates'], y=p['lower_1std'],
+                    mode='lines', line=dict(width=0),
+                    fill='tonexty', fillcolor=_hex_to_rgba(p['color'], 0.2),
+                    name=f"{p['region']} ±1σ",
+                    showlegend=True, hoverinfo='skip',
+                ))
+                # Price line
+                fig.add_trace(go.Scatter(
+                    x=p['dates'], y=p['price'],
+                    mode='lines', line=dict(color=p['color'], width=2),
+                    name=p['region'],
+                ))
+
             # Create title with mean prices
             title_parts = [f'Price Volatility Analysis ({self.volatility_window_selector.value} smoothing)']
             if mean_prices:
                 avg_text = ' - '.join([f'{r}: ${p:.0f}' for r, p in mean_prices.items()])
                 title_parts.append(f'Avg: {avg_text}')
             title = ' - '.join(title_parts)
-            
-            # Apply log scale if selected
-            if self.log_scale_checkbox.value:
-                # Symlog transformation not implemented for multi-region yet
-                # For now, just add symlog to title
-                title = title + ' - Symlog Scale'
 
-                plot_opts = dict(
-                    width=1000,
-                    height=500,
-                    bgcolor=FLEXOKI_PAPER,
-                    title=title,
-                    xlabel='Date',
-                    ylabel='Price ($/MWh) - Symlog Scale',
-                    fontsize={'title': 14, 'labels': 12, 'xticks': 10, 'yticks': 10},
-                    show_grid=True,
-                    gridstyle={'grid_line_alpha': 0.3},
-                    toolbar='above',
-                    legend_position='top_right',
-                    framewise=True,
-                    yformatter='%.0f',
-                    logy=True,  # Use built-in log scale
-                    hooks=[set_flexoki_backgrounds]  # Set legend background
-                )
+            use_log = self.log_scale_checkbox.value
+            if use_log:
+                title = title + ' - Symlog Scale'
+                ylabel = 'Price ($/MWh) - Symlog Scale'
             else:
-                plot_opts = dict(
-                    width=1000,
-                    height=500,
-                    bgcolor=FLEXOKI_PAPER,
-                    title=title,
-                    xlabel='Date',
-                    ylabel='Price ($/MWh)',
-                    fontsize={'title': 14, 'labels': 12, 'xticks': 10, 'yticks': 10},
-                    show_grid=True,
-                    gridstyle={'grid_line_alpha': 0.3},
-                    toolbar='above',
-                    legend_position='top_right',
-                    framewise=True,
-                    yformatter='%.0f',
-                    ylim=(None, None),  # Allow negative values
-                    hooks=[set_flexoki_backgrounds]  # Set legend background
-                )
-            
-            # Style the plot
-            final_plot = combined_plot.opts(**plot_opts)
-            
-            self.volatility_chart_pane.object = final_plot
+                ylabel = 'Price ($/MWh)'
+
+            fig.update_layout(
+                title=title,
+                autosize=True, height=500,
+                paper_bgcolor=FLEXOKI_PAPER, plot_bgcolor=FLEXOKI_PAPER,
+                xaxis=dict(title='Date', showgrid=False),
+                yaxis=dict(title=ylabel, showgrid=False, type='log' if use_log else 'linear', tickformat='$.0f'),
+                legend=dict(bgcolor=FLEXOKI_PAPER, borderwidth=0),
+                font=dict(color='#100F0F'),
+            )
+
+            self.volatility_chart_pane.object = fig
             logger.info(f"Volatility chart created successfully for regions: {selected_regions}")
             
         except Exception as e:

@@ -152,7 +152,7 @@ def create_price_table(prices):
             .apply(lambda x: ['font-weight: bold' if x.name in display.tail(3).index else '' for _ in x], axis=1)
             .apply(lambda x: [f'color: {FLEXOKI_BASE[600]}' if x.name not in display.tail(3).index else '' for _ in x], axis=1))
         
-        return pn.pane.DataFrame(styled_table, sizing_mode='fixed', width=550, height=350)
+        return pn.pane.DataFrame(styled_table, sizing_mode='stretch_width', height=350)
         
     except Exception as e:
         logger.error(f"Error creating price table: {e}")
@@ -245,7 +245,7 @@ def create_price_chart(prices):
         plt.tight_layout()
         refresh_logger.debug("Matplotlib chart completed, creating Panel pane...")
         
-        pane = pn.pane.Matplotlib(fig, sizing_mode='fixed', width=550, height=400)
+        pane = pn.pane.Matplotlib(fig, sizing_mode='stretch_width', height=400)
         refresh_logger.debug(f"Panel Matplotlib pane created: {type(pane)}")
         
         return pane
@@ -289,8 +289,7 @@ def create_price_section(start_date=None, end_date=None):
         result = pn.Column(
             table,
             chart,
-            sizing_mode='fixed',
-            width=550,
+            sizing_mode='stretch_width',
             margin=(5, 5)
         )
         

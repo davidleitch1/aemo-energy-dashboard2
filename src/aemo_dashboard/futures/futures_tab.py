@@ -17,19 +17,21 @@ import pandas as pd
 import plotly.graph_objects as go
 import panel as pn
 
+from ..shared.flexoki_theme import FLEXOKI_PAPER, FLEXOKI_BLACK, FLEXOKI_BASE, FLEXOKI_ACCENT
+
 logger = logging.getLogger(__name__)
 
-# ── Flexoki Light palette ──────────────────────────────────────────────
-PAPER = "#FFFCF0"
-BLACK = "#100F0F"
-TEXT = "#403E3C"
-MUTED = "#6F6E69"
-UI = "#E6E4D9"
-BLUE = "#205EA6"
-ORANGE = "#BC5215"
-CYAN = "#24837B"
-GREEN = "#66800B"
-MAGENTA = "#A02F6F"
+# ── Flexoki Light palette (from shared theme) ─────────────────────────
+PAPER = FLEXOKI_PAPER
+BLACK = FLEXOKI_BLACK
+TEXT = FLEXOKI_BASE[800]
+MUTED = FLEXOKI_BASE[600]
+UI = FLEXOKI_BASE[100]
+BLUE = FLEXOKI_ACCENT['blue']
+ORANGE = FLEXOKI_ACCENT['orange']
+CYAN = FLEXOKI_ACCENT['cyan']
+GREEN = FLEXOKI_ACCENT['green']
+MAGENTA = FLEXOKI_ACCENT['magenta']
 
 REGION_COLORS = {"NSW": BLUE, "QLD": ORANGE, "SA": CYAN, "VIC": GREEN}
 REGIONS = ["NSW", "QLD", "SA", "VIC"]
@@ -112,6 +114,8 @@ def _load_spot_weekly():
 
 def _apply_layout(fig, title, y_title="$/MWh"):
     fig.update_layout(
+        autosize=True,
+        height=480,
         paper_bgcolor=PAPER,
         plot_bgcolor=PAPER,
         font=dict(family="Inter, -apple-system, system-ui, sans-serif", color=TEXT, size=13),
@@ -291,7 +295,7 @@ def _build_single_contract(futures_df, contract_map, year, quarter):
 
 # ── Public factory ────────────────────────────────────────────────────
 
-PLOTLY_CFG = dict(sizing_mode="stretch_width", height=480)
+PLOTLY_CFG = dict(sizing_mode="stretch_width")
 
 
 def create_futures_tab():
@@ -364,9 +368,13 @@ def create_futures_tab():
 
     # ── Sub-tabs ───────────────────────────────────────────────────
     sub_tabs = pn.Tabs(
-        ("Forward Curve", pn.Column(fwd_curve_pane)),
-        ("Forward Expectations", pn.Column(fwd_expect_pane, fvs_pane)),
-        ("Single Contract", pn.Column(pn.Row(contract_select), single_pane)),
+        ("Forward Curve", pn.Column(fwd_curve_pane, sizing_mode="stretch_width")),
+        ("Forward Expectations", pn.Column(fwd_expect_pane, fvs_pane, sizing_mode="stretch_width")),
+        ("Single Contract", pn.Column(
+            pn.Row(contract_select, sizing_mode="stretch_width"),
+            single_pane,
+            sizing_mode="stretch_width",
+        )),
         sizing_mode="stretch_width",
     )
 

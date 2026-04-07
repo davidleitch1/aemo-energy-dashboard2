@@ -110,13 +110,13 @@ class LazyDuckDBViews:
                 g.settlementdate,
                 g.duid,
                 g.scadavalue,
-                d.Fuel as fuel_type,
-                d.Fuel as technology_type_descriptor,
-                d.Region as region,
-                d."Site Name" as station_name
+                d.fuel as fuel_type,
+                d.fuel as technology_type_descriptor,
+                d.region as region,
+                d."site name" as station_name
             FROM read_parquet('{self.file_paths['scada30']}') g
             LEFT JOIN duid_mapping d
-            ON UPPER(g.duid) = UPPER(d.DUID)
+            ON UPPER(g.duid) = UPPER(d.duid)
         )
         SELECT 
             settlementdate,
@@ -144,13 +144,13 @@ class LazyDuckDBViews:
                 g.settlementdate,
                 g.duid,
                 g.scadavalue,
-                d.Fuel as fuel_type,
-                d.Fuel as technology_type_descriptor,
-                d.Region as region,
-                d."Site Name" as station_name
+                d.fuel as fuel_type,
+                d.fuel as technology_type_descriptor,
+                d.region as region,
+                d."site name" as station_name
             FROM read_parquet('{self.file_paths['scada5']}') g
             LEFT JOIN duid_mapping d
-            ON UPPER(g.duid) = UPPER(d.DUID)
+            ON UPPER(g.duid) = UPPER(d.duid)
         )
         SELECT 
             settlementdate,

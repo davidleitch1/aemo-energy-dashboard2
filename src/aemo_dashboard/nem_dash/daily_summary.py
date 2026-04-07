@@ -339,6 +339,7 @@ def create_summary_table(metrics: Dict, insights: List[str]) -> str:
         html = f"""
         <div style="width: 100%; padding: 10px; background-color: {FLEXOKI_PAPER}; border-radius: 5px; border: 1px solid {FLEXOKI_BASE[150]};">
             <h4 style="color: {FLEXOKI_ACCENT['green']}; margin: 0 0 10px 0; font-size: 14px;">Daily Summary (Last 24 Hours)</h4>
+            <div class="responsive-table">
             <table style="width: 100%; border-collapse: collapse; font-size: 11px; color: {FLEXOKI_BLACK};">
                 <thead>
                     <tr style="border-bottom: 1px solid {FLEXOKI_BASE[150]};">
@@ -415,6 +416,7 @@ def create_summary_table(metrics: Dict, insights: List[str]) -> str:
         html += """
                 </tbody>
             </table>
+            </div>
         """
         
         # Only show volume-weighted note if we have generation data

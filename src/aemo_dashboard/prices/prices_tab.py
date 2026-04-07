@@ -8,11 +8,10 @@ access ``query_manager``, hooks, and other shared state.
 import logging
 from datetime import datetime, time
 
-import holoviews as hv
-import hvplot.pandas
 import numpy as np
 import pandas as pd
 import panel as pn
+import plotly.graph_objects as go
 
 from ..shared.flexoki_theme import FLEXOKI_PAPER, FLEXOKI_BLACK, FLEXOKI_BASE, FLEXOKI_ACCENT
 from ..shared.config import config
@@ -36,15 +35,22 @@ logger = logging.getLogger(__name__)
 GEN_INFO_FILE = config.gen_info_file
 
 
-def _text_background_hook(plot, element):
-    """Set background for text/placeholder elements."""
-    try:
-        p = plot.state
-        p.background_fill_color = FLEXOKI_PAPER
-        p.border_fill_color = FLEXOKI_PAPER
-        p.outline_line_color = FLEXOKI_BASE[150]
-    except Exception:
-        pass
+def _placeholder_fig(msg, color=None, height=400):
+    """Create a Plotly figure with centered text message (placeholder/error)."""
+    if color is None:
+        color = FLEXOKI_BLACK
+    fig = go.Figure()
+    fig.update_layout(
+        autosize=True, height=height,
+        paper_bgcolor=FLEXOKI_PAPER, plot_bgcolor=FLEXOKI_PAPER,
+        xaxis=dict(visible=False), yaxis=dict(visible=False),
+        annotations=[dict(
+            text=msg.replace('\n', '<br>'), xref='paper', yref='paper',
+            x=0.5, y=0.5, showarrow=False,
+            font=dict(size=16, color=color), xanchor='center', yanchor='middle',
+        )],
+    )
+    return fig
 
 
 _TABULATOR_CSS = f"""
@@ -96,60 +102,99 @@ def create_prices_tab(dashboard):
         logger.info("Creating prices tab...")
 
         # ── Widgets ────────────────────────────────────────────────────
-        date_presets = pn.widgets.RadioBoxGroup(
-            name='', options=['1 day', '7 days', '30 days', '90 days', '1 year', 'All data'],
-            value='30 days', inline=False, width=100,
-        )
-
-        default_end = pd.Timestamp.now().date()
-        default_start = default_end - pd.Timedelta(days=30)
-
-        start_date_picker = pn.widgets.DatePicker(name='Start Date', value=default_start, width=120)
-        end_date_picker = pn.widgets.DatePicker(name='End Date', value=default_end, width=120)
-
-        date_display = pn.pane.Markdown(
-            f"**Selected Period:** {default_start.strftime('%Y-%m-%d')} to {default_end.strftime('%Y-%m-%d')}",
-            width=300,
+        analyze_button = pn.widgets.Button(
+            name='\u25cf Analyze Prices', button_type='success',
+            width=140, margin=(0, 15, 0, 0),
+            stylesheets=["""
+                :host(.solid) .bk-btn-success {
+                    font-weight: 600; font-size: 13px;
+                }
+            """],
         )
 
         regions = ['NSW1', 'QLD1', 'SA1', 'TAS1', 'VIC1']
         region_selector = pn.widgets.CheckBoxGroup(
             name='', value=['NSW1', 'VIC1'], options=regions,
-            inline=False, align='start', margin=(0, 0, 0, 0),
+            inline=True, margin=(2, 0, 0, 0),
         )
 
-        aggregate_selector = pn.widgets.RadioBoxGroup(
-            name='', value='30 min',
-            options=['5 min', '30 min', '1 hour', 'Daily', 'Monthly', 'Quarterly', 'Yearly'],
-            inline=False, width=120,
+        date_presets = pn.widgets.RadioButtonGroup(
+            name='', options=['1d', '7d', '30d', '90d', '1y', 'All'],
+            value='30d', button_type='default', margin=(0, 10, 0, 0),
+        )
+
+        default_end = pd.Timestamp.now().date()
+        default_start = default_end - pd.Timedelta(days=30)
+
+        start_date_picker = pn.widgets.DatePicker(
+            name='From', value=default_start, width=110, margin=(0, 5, 0, 0),
+        )
+        end_date_picker = pn.widgets.DatePicker(
+            name='To', value=default_end, width=110, margin=(0, 10, 0, 0),
+        )
+
+        aggregate_selector = pn.widgets.RadioButtonGroup(
+            name='', value='30m',
+            options=['5m', '30m', '1h', 'D', 'M', 'Q', 'Y'],
+            button_type='default', margin=(0, 10, 0, 0),
         )
 
         smoothing_selector = pn.widgets.Select(
-            name='Smoothing', value='None',
+            name='Smooth', value='None',
             options=[
                 'None',
-                'LOESS (3 hours, frac=0.01)',
-                'LOESS (1 day, frac=0.02)',
-                'LOESS (7 days, frac=0.05)',
-                'LOESS (30 days, frac=0.1)',
-                'LOESS (90 days, frac=0.15)',
-                'EWM (7 days, fast response)',
-                'EWM (14 days, balanced)',
-                'EWM (30 days, smooth)',
-                'EWM (60 days, very smooth)',
+                'LOESS (3h)', 'LOESS (1d)', 'LOESS (7d)',
+                'LOESS (30d)', 'LOESS (90d)',
+                'EWM (7d)', 'EWM (14d)', 'EWM (30d)', 'EWM (60d)',
             ],
-            width=250,
+            width=130, margin=(0, 10, 0, 0),
         )
 
-        log_scale_checkbox = pn.widgets.Checkbox(name='Log Scale Y-axis', value=False, width=150)
+        log_scale_checkbox = pn.widgets.Checkbox(
+            name='Log', value=False, margin=(8, 0, 0, 0),
+        )
 
-        analyze_button = pn.widgets.Button(name='Analyze Prices', button_type='primary', width=150)
+        # Mapping: compact smoothing labels → original values
+        _SMOOTH_MAP = {
+            'None': 'None',
+            'LOESS (3h)': 'LOESS (3 hours, frac=0.01)',
+            'LOESS (1d)': 'LOESS (1 day, frac=0.02)',
+            'LOESS (7d)': 'LOESS (7 days, frac=0.05)',
+            'LOESS (30d)': 'LOESS (30 days, frac=0.1)',
+            'LOESS (90d)': 'LOESS (90 days, frac=0.15)',
+            'EWM (7d)': 'EWM (7 days, fast response)',
+            'EWM (14d)': 'EWM (14 days, balanced)',
+            'EWM (30d)': 'EWM (30 days, smooth)',
+            'EWM (60d)': 'EWM (60 days, very smooth)',
+        }
+
+        # Mapping: compact freq labels → original values
+        _FREQ_MAP = {
+            '5m': '5 min', '30m': '30 min', '1h': '1 hour',
+            'D': 'Daily', 'M': 'Monthly', 'Q': 'Quarterly', 'Y': 'Yearly',
+        }
+
+        # Mapping: compact date preset labels → original values
+        _DATE_MAP = {
+            '1d': '1 day', '7d': '7 days', '30d': '30 days',
+            '90d': '90 days', '1y': '1 year', 'All': 'All data',
+        }
+
+        # ── Control state tracking (dirty/clean feedback) ─────────────
+        def mark_controls_dirty(event=None):
+            """Mark analyze button as needing re-run after settings change."""
+            analyze_button.button_type = 'warning'
+            analyze_button.name = 'Analyze Prices ●'
+
+        def mark_controls_clean():
+            """Mark analyze button as up-to-date after successful analysis."""
+            analyze_button.button_type = 'primary'
+            analyze_button.name = '✓ Analyze Prices'
 
         # ── Panes ──────────────────────────────────────────────────────
-        price_plot_pane = pn.pane.HoloViews(height=400, sizing_mode='stretch_width')
-        price_plot_pane.object = hv.Text(0.5, 0.5, "Click 'Analyze Prices' to load data").opts(
-            xlim=(0, 1), ylim=(0, 1), bgcolor=FLEXOKI_PAPER, color=FLEXOKI_BLACK,
-            fontsize=16, hooks=[_text_background_hook],
+        price_plot_pane = pn.pane.Plotly(
+            _placeholder_fig("Click 'Analyze Prices' to load data"),
+            sizing_mode='stretch_width',
         )
 
         stats_title_pane = pn.pane.Markdown(
@@ -199,37 +244,25 @@ def create_prices_tab(dashboard):
             },
         )
 
-        bands_plot_pane = pn.Column(sizing_mode='stretch_width', height=550)
-        _initial_bands = pn.pane.HoloViews(
-            hv.Text(0.5, 0.5, "Price bands will appear here").opts(
-                xlim=(0, 1), ylim=(0, 1), bgcolor=FLEXOKI_PAPER,
-                color=FLEXOKI_BLACK, fontsize=14, hooks=[_text_background_hook],
-            ),
-            sizing_mode='stretch_width', height=550,
-        )
-        bands_plot_pane.clear()
-        bands_plot_pane.append(_initial_bands)
+        bands_plot_pane = pn.Column(sizing_mode='stretch_width')
+        bands_plot_pane.append(pn.pane.Plotly(
+            _placeholder_fig("Price bands will appear here", height=400),
+            sizing_mode='stretch_width',
+        ))
 
-        fuel_relatives_plot_pane = pn.pane.HoloViews(
-            hv.Text(0.5, 0.5,
-                     "Select a region and click Analyze to view fuel-weighted prices").opts(
-                xlim=(0, 1), ylim=(0, 1), bgcolor=FLEXOKI_PAPER,
-                color=FLEXOKI_BLACK, fontsize=14, hooks=[_text_background_hook],
-            ),
-            sizing_mode='stretch_both', height=400,
+        fuel_relatives_plot_pane = pn.pane.Plotly(
+            _placeholder_fig("Select a region and click Analyze to view fuel-weighted prices"),
+            sizing_mode='stretch_width',
         )
 
-        price_index_plot_pane = pn.pane.HoloViews(
-            hv.Text(0.5, 0.5, "Price index will appear here after analysis").opts(
-                xlim=(0, 1), ylim=(0, 1), bgcolor=FLEXOKI_PAPER,
-                color=FLEXOKI_BLACK, fontsize=14, hooks=[_text_background_hook],
-            ),
-            sizing_mode='stretch_both', height=400,
+        price_index_plot_pane = pn.pane.Plotly(
+            _placeholder_fig("Price index will appear here after analysis"),
+            sizing_mode='stretch_width',
         )
 
         high_price_events_pane = pn.widgets.Tabulator(
-            pd.DataFrame(), show_index=False, sizing_mode='fixed',
-            width=550, height=380, theme='fast',
+            pd.DataFrame(), show_index=False, sizing_mode='stretch_width',
+            height=380, theme='fast',
             configuration={
                 'columnDefaults': {
                     'headerSort': False, 'resizable': True, 'cellVertAlign': 'middle',
@@ -258,70 +291,79 @@ def create_prices_tab(dashboard):
             """],
         )
 
-        tod_plot_pane = pn.pane.HoloViews(height=400, sizing_mode='stretch_width')
-        tod_plot_pane.object = hv.Text(0.5, 0.5, "Time of day analysis will appear here").opts(
-            xlim=(0, 1), ylim=(0, 1), bgcolor=FLEXOKI_PAPER,
-            color=FLEXOKI_BLACK, fontsize=14, hooks=[_text_background_hook],
+        tod_plot_pane = pn.pane.Plotly(
+            _placeholder_fig("Time of day analysis will appear here"),
+            sizing_mode='stretch_width',
         )
 
-        # ── Controls layout ───────────────────────────────────────────
-        region_group = pn.Column("### Region", region_selector, align='start', width=120)
-        frequency_group = pn.Column("### Frequency", aggregate_selector, width=120)
-        top_controls = pn.Row(region_group, pn.Spacer(width=10), frequency_group, align='start')
-
-        date_controls = pn.Row(
-            pn.Column("Start Date", start_date_picker, width=100),
-            pn.Column("End Date", end_date_picker, width=100),
-            pn.Column("Quick Select", date_presets, width=100),
-            align='start',
+        # ── Controls layout — compact horizontal bar ──────────────────
+        row1 = pn.FlexBox(
+            analyze_button,
+            pn.pane.Markdown("**Region**", margin=(5, 5, 0, 0), width=50),
+            region_selector,
+            flex_wrap='wrap', align_items='center',
+            sizing_mode='stretch_width', margin=(0, 0, 5, 0),
         )
 
-        controls_column = pn.Column(
-            "## Price Analysis Controls", pn.Spacer(height=10),
-            top_controls, pn.Spacer(height=15),
-            "### Date Range", date_controls, date_display, pn.Spacer(height=15),
-            "### Smoothing", smoothing_selector, pn.Spacer(height=10),
-            log_scale_checkbox, pn.Spacer(height=15), analyze_button,
-            width=350, margin=(0, 20, 0, 0), align='start',
+        row2 = pn.FlexBox(
+            pn.pane.Markdown("**Period**", margin=(5, 5, 0, 0), width=45),
+            date_presets,
+            start_date_picker, end_date_picker,
+            flex_wrap='wrap', align_items='center',
+            sizing_mode='stretch_width', margin=(0, 0, 5, 0),
+        )
+
+        row3 = pn.FlexBox(
+            pn.pane.Markdown("**Freq**", margin=(5, 5, 0, 0), width=35),
+            aggregate_selector,
+            smoothing_selector,
+            log_scale_checkbox,
+            flex_wrap='wrap', align_items='center',
+            sizing_mode='stretch_width', margin=(0, 0, 8, 0),
+        )
+
+        controls_bar = pn.Column(
+            row1, row2, row3,
+            sizing_mode='stretch_width',
+            styles={
+                'border-bottom': f'1px solid {FLEXOKI_BASE[200]}',
+                'padding-bottom': '8px',
+                'margin-bottom': '10px',
+            },
         )
 
         # ── Subtab layouts ────────────────────────────────────────────
         price_analysis_content = pn.Column(
-            pn.Row(
-                pn.Column("## Price Statistics ($)", stats_pane, sizing_mode='stretch_width', width=550),
-                pn.Spacer(width=20),
-                pn.Column("## Time of Day Pattern", tod_plot_pane, sizing_mode='stretch_width', width=400),
-                sizing_mode='stretch_width', height=600,
+            pn.FlexBox(
+                pn.Column("## Price Statistics ($)", stats_pane, min_width=350),
+                pn.Column("## Time of Day Pattern", tod_plot_pane, min_width=350),
+                flex_wrap='wrap', gap='20px', sizing_mode='stretch_width',
             ),
             pn.Spacer(height=20),
-            pn.Column("## Price Time Series", price_plot_pane, sizing_mode='stretch_both', width_policy='max'),
-            sizing_mode='stretch_both',
+            pn.Column("## Price Time Series", price_plot_pane, sizing_mode='stretch_width'),
+            sizing_mode='stretch_width',
         )
 
-        price_bands_content = pn.Row(
-            pn.Column("## Price Band Details", high_price_events_pane, sizing_mode='stretch_both', width=500),
-            pn.Spacer(width=20),
-            pn.Column("## Price Band Distribution", bands_plot_pane, sizing_mode='stretch_width', height=600),
-            sizing_mode='stretch_both',
-        )
-
-        fuel_relatives_region_selector = pn.widgets.RadioButtonGroup(
-            name='Region', value='NSW1', options=['NSW1', 'QLD1', 'SA1', 'TAS1', 'VIC1'],
-            button_type='primary', button_style='outline',
+        price_bands_content = pn.FlexBox(
+            pn.Column("## Price Band Details", high_price_events_pane, min_width=350),
+            pn.Column("## Price Band Distribution", bands_plot_pane, min_width=400),
+            flex_wrap='wrap', gap='20px', sizing_mode='stretch_width',
         )
 
         fuel_relatives_content = pn.Column(
-            pn.Row(pn.Column("### Select Region", fuel_relatives_region_selector, width=150)),
-            pn.Spacer(height=10),
+            pn.pane.Markdown(
+                "*Uses first selected region. Data covers all available history (~5.5 years).*",
+                styles={'color': FLEXOKI_BASE[500], 'font-size': '12px'},
+            ),
             pn.Column(
                 "## Fuel-Weighted vs Flat Load Prices (90-day LOESS smoothed)",
                 fuel_relatives_plot_pane,
                 pn.Spacer(height=20),
                 "## Price Index (Flat Load = 100)",
                 price_index_plot_pane,
-                sizing_mode='stretch_both',
+                sizing_mode='stretch_width',
             ),
-            sizing_mode='stretch_both',
+            sizing_mode='stretch_width',
         )
 
         price_subtabs = pn.Tabs(
@@ -331,46 +373,46 @@ def create_prices_tab(dashboard):
             sizing_mode='stretch_both',
         )
 
-        prices_tab = pn.Row(controls_column, price_subtabs, sizing_mode='stretch_both')
+        prices_tab = pn.Column(
+            controls_bar,
+            price_subtabs,
+            sizing_mode='stretch_width',
+        )
 
         # ── Date callbacks ────────────────────────────────────────────
         def update_date_range(event):
             preset = event.new
             current_end = end_date_picker.value
-            if preset == '1 day':
+            if preset == '1d':
                 new_start = current_end - pd.Timedelta(days=1)
-            elif preset == '7 days':
+            elif preset == '7d':
                 new_start = current_end - pd.Timedelta(days=7)
-            elif preset == '30 days':
+            elif preset == '30d':
                 new_start = current_end - pd.Timedelta(days=30)
-            elif preset == '90 days':
+            elif preset == '90d':
                 new_start = current_end - pd.Timedelta(days=90)
-            elif preset == '1 year':
+            elif preset == '1y':
                 new_start = current_end - pd.Timedelta(days=365)
             else:
                 new_start = pd.Timestamp('2020-01-01').date()
             start_date_picker.value = new_start
 
         def update_date_display(event):
-            date_display.object = (
-                f"**Selected Period:** {start_date_picker.value.strftime('%Y-%m-%d')} "
-                f"to {end_date_picker.value.strftime('%Y-%m-%d')}"
-            )
             current_end = end_date_picker.value
             current_start = start_date_picker.value
             days_diff = (current_end - current_start).days
             matches = False
-            if date_presets.value == '1 day' and days_diff == 1:
+            if date_presets.value == '1d' and days_diff == 1:
                 matches = True
-            elif date_presets.value == '7 days' and days_diff == 7:
+            elif date_presets.value == '7d' and days_diff == 7:
                 matches = True
-            elif date_presets.value == '30 days' and days_diff == 30:
+            elif date_presets.value == '30d' and days_diff == 30:
                 matches = True
-            elif date_presets.value == '90 days' and days_diff == 90:
+            elif date_presets.value == '90d' and days_diff == 90:
                 matches = True
-            elif date_presets.value == '1 year' and days_diff == 365:
+            elif date_presets.value == '1y' and days_diff == 365:
                 matches = True
-            elif date_presets.value == 'All data' and current_start == pd.Timestamp('2020-01-01').date():
+            elif date_presets.value == 'All' and current_start == pd.Timestamp('2020-01-01').date():
                 matches = True
             if not matches:
                 date_presets.value = None
@@ -378,9 +420,7 @@ def create_prices_tab(dashboard):
         # ── Main analysis callback ────────────────────────────────────
         def load_and_plot_prices(event=None):
             try:
-                price_plot_pane.object = hv.Text(0.5, 0.5, 'Loading price data...').opts(
-                    xlim=(0, 1), ylim=(0, 1), bgcolor=FLEXOKI_PAPER, color=FLEXOKI_BLACK, fontsize=14,
-                )
+                price_plot_pane.object = _placeholder_fig('Loading price data...')
 
                 selected_regions = region_selector.value
                 if not selected_regions:
@@ -421,7 +461,7 @@ def create_prices_tab(dashboard):
                     '5 min': '5min', '30 min': '30min', '1 hour': 'h',
                     'Daily': 'D', 'Monthly': 'M', 'Quarterly': 'Q', 'Yearly': 'Y',
                 }
-                freq = freq_map.get(aggregate_selector.value, '30min')
+                freq = freq_map.get(_FREQ_MAP.get(aggregate_selector.value, aggregate_selector.value), '30min')
                 original_30min_price_data = price_data.copy()
 
                 if freq != '5min':
@@ -439,9 +479,10 @@ def create_prices_tab(dashboard):
                 original_price_data = price_data.copy()
 
                 # Apply smoothing (for time series plot only)
-                if smoothing_selector.value != 'None':
+                smoothing_value_full = _SMOOTH_MAP.get(smoothing_selector.value, smoothing_selector.value)
+                if smoothing_value_full != 'None':
                     price_data = _apply_smoothing_to_prices(
-                        price_data, smoothing_selector.value,
+                        price_data, smoothing_value_full,
                         aggregate_selector.value, selected_regions, y_col,
                     )
 
@@ -527,17 +568,7 @@ def create_prices_tab(dashboard):
                 # ── Price bands ──
                 _, bands_df = compute_price_bands(original_price_data, selected_regions)
                 if bands_df is not None and not bands_df.empty:
-                    contrib_plot, time_plot = build_band_charts(
-                        bands_df, date_range_text, dashboard._get_flexoki_background_hook(),
-                    )
-                    contrib_plot = contrib_plot.opts(
-                        padding=(0.1, 0.1),
-                        hooks=[dashboard._get_attribution_hook(), dashboard._get_flexoki_background_hook()],
-                    )
-                    time_plot = time_plot.opts(
-                        padding=(0.1, 0.1),
-                        hooks=[dashboard._get_attribution_hook(), dashboard._get_flexoki_background_hook()],
-                    )
+                    butterfly_fig = build_band_charts(bands_df, date_range_text)
 
                     region_avg_demand = compute_region_avg_demand(
                         dashboard.query_manager, start_datetime, end_datetime, selected_regions,
@@ -554,20 +585,13 @@ def create_prices_tab(dashboard):
 
                     bands_plot_pane.clear()
                     bands_plot_pane.append(
-                        pn.pane.HoloViews(contrib_plot, sizing_mode='stretch_width', height=275),
-                    )
-                    bands_plot_pane.append(
-                        pn.pane.HoloViews(time_plot, sizing_mode='stretch_width', height=275),
+                        pn.pane.Plotly(butterfly_fig, sizing_mode='stretch_width'),
                     )
                 else:
                     bands_plot_pane.clear()
-                    bands_plot_pane.append(pn.pane.HoloViews(
-                        hv.Text(0.5, 0.5,
-                                'No price band data available\nPlease select regions and click "Analyze Prices"').opts(
-                            xlim=(0, 1), ylim=(0, 1), bgcolor=FLEXOKI_PAPER,
-                            color=FLEXOKI_BLACK, fontsize=14,
-                        ),
-                        sizing_mode='stretch_width', height=550,
+                    bands_plot_pane.append(pn.pane.Plotly(
+                        _placeholder_fig('No price band data available\nPlease select regions and click "Analyze Prices"', height=400),
+                        sizing_mode='stretch_width',
                     ))
                     high_price_events_pane.value = pd.DataFrame({'Info': ['No price band data available']})
 
@@ -578,44 +602,43 @@ def create_prices_tab(dashboard):
                 )
                 tod_plot_pane.object = tod_plot
 
+                mark_controls_clean()
+
             except Exception as e:
                 logger.error(f"Error loading price data: {e}", exc_info=True)
                 _show_error(str(e))
 
         def _show_empty(msg, is_error=False):
             color = FLEXOKI_ACCENT['red'] if is_error else FLEXOKI_BLACK
-            opts = dict(xlim=(0, 1), ylim=(0, 1), bgcolor=FLEXOKI_PAPER, color=color, fontsize=14)
-            price_plot_pane.object = hv.Text(0.5, 0.5, msg).opts(**opts)
+            price_plot_pane.object = _placeholder_fig(msg, color=color)
             stats_pane.value = pd.DataFrame({'Message': [msg]})
             high_price_events_pane.value = pd.DataFrame({'Message': [msg]})
-            tod_plot_pane.object = hv.Text(0.5, 0.5, msg).opts(**opts)
+            tod_plot_pane.object = _placeholder_fig(msg, color=color)
 
         def _show_error(msg):
-            opts = dict(xlim=(0, 1), ylim=(0, 1), bgcolor=FLEXOKI_PAPER, color=FLEXOKI_ACCENT['red'], fontsize=14)
-            price_plot_pane.object = hv.Text(0.5, 0.5, f'Error: {msg}').opts(**opts)
+            price_plot_pane.object = _placeholder_fig(f'Error: {msg}', color=FLEXOKI_ACCENT['red'])
             stats_pane.value = pd.DataFrame({'Error': [msg]})
             high_price_events_pane.value = pd.DataFrame({'Error': [msg]})
-            tod_plot_pane.object = hv.Text(0.5, 0.5, 'Error loading data').opts(**opts)
+            tod_plot_pane.object = _placeholder_fig('Error loading data', color=FLEXOKI_ACCENT['red'])
 
         # ── Fuel relatives callback ───────────────────────────────────
         def update_fuel_relatives(event=None):
             try:
-                if event is None:
-                    fuel_relatives_plot_pane.object = hv.Text(
-                        0.5, 0.5,
-                        "Select a region to view 90-day LOESS smoothed fuel-weighted prices\n"
-                        "(Uses all available data ~5.5 years, excludes biomass, includes battery discharge)",
-                    ).opts(xlim=(0, 1), ylim=(0, 1), bgcolor=FLEXOKI_PAPER, color=FLEXOKI_BLACK, fontsize=14)
+                selected_regions = region_selector.value
+                if not selected_regions:
+                    fuel_relatives_plot_pane.object = _placeholder_fig(
+                        "Select at least one region to view fuel-weighted prices",
+                    )
                     return
 
-                region = fuel_relatives_region_selector.value
+                # Use first selected region (fuel relatives is single-region)
+                region = selected_regions[0]
                 logger.info(f"Updating fuel relatives for region: {region}")
 
-                fuel_relatives_plot_pane.object = hv.Text(
-                    0.5, 0.5,
-                    f"Loading 5.5 years of data for {region}...\nThis may take 20-30 seconds",
-                ).opts(xlim=(0, 1), ylim=(0, 1), bgcolor=FLEXOKI_PAPER,
-                       color=FLEXOKI_ACCENT['green'], fontsize=14)
+                fuel_relatives_plot_pane.object = _placeholder_fig(
+                    f"Loading data for {region}...",
+                    color=FLEXOKI_ACCENT['green'],
+                )
 
                 import sys
                 from pathlib import Path
@@ -625,51 +648,44 @@ def create_prices_tab(dashboard):
                 daily_prices = query_fuel_relatives(duckdb_data_service.conn, region)
 
                 if daily_prices.empty:
-                    fuel_relatives_plot_pane.object = hv.Text(
-                        0.5, 0.5, f'No data available for {region}',
-                    ).opts(xlim=(0, 1), ylim=(0, 1), bgcolor=FLEXOKI_PAPER, color=FLEXOKI_BLACK, fontsize=14)
+                    fuel_relatives_plot_pane.object = _placeholder_fig(f'No data available for {region}')
                     return
 
                 smoothed = apply_loess_smoothing(daily_prices)
 
-                fr_chart = build_fuel_relatives_chart(
-                    smoothed, region,
-                    dashboard._get_attribution_hook(), dashboard._get_flexoki_background_hook(),
-                )
+                fr_chart = build_fuel_relatives_chart(smoothed, region)
                 if fr_chart is not None:
                     fuel_relatives_plot_pane.object = fr_chart
                 else:
-                    fuel_relatives_plot_pane.object = hv.Text(
-                        0.5, 0.5, 'Insufficient data for smoothing',
-                    ).opts(xlim=(0, 1), ylim=(0, 1), bgcolor=FLEXOKI_PAPER, color=FLEXOKI_BLACK, fontsize=14)
-                    price_index_plot_pane.object = hv.Text(
-                        0.5, 0.5, 'Insufficient data for indexing',
-                    ).opts(xlim=(0, 1), ylim=(0, 1), bgcolor=FLEXOKI_PAPER, color=FLEXOKI_BLACK, fontsize=14)
+                    fuel_relatives_plot_pane.object = _placeholder_fig('Insufficient data for smoothing')
+                    price_index_plot_pane.object = _placeholder_fig('Insufficient data for indexing')
                     return
 
-                pi_chart = build_price_index_chart(
-                    smoothed, region,
-                    dashboard._get_attribution_hook(), dashboard._get_flexoki_background_hook(),
-                )
+                pi_chart = build_price_index_chart(smoothed, region)
                 if pi_chart is not None:
                     price_index_plot_pane.object = pi_chart
                 else:
-                    price_index_plot_pane.object = hv.Text(
-                        0.5, 0.5, 'Flat Load data not available for indexing',
-                    ).opts(xlim=(0, 1), ylim=(0, 1), bgcolor=FLEXOKI_PAPER, color=FLEXOKI_BLACK, fontsize=14)
+                    price_index_plot_pane.object = _placeholder_fig('Flat Load data not available for indexing')
 
             except Exception as e:
                 logger.error(f"Error in fuel relatives calculation: {e}", exc_info=True)
-                opts = dict(xlim=(0, 1), ylim=(0, 1), bgcolor=FLEXOKI_PAPER, color=FLEXOKI_BLACK, fontsize=14)
-                fuel_relatives_plot_pane.object = hv.Text(0.5, 0.5, f'Error: {e}').opts(**opts)
-                price_index_plot_pane.object = hv.Text(0.5, 0.5, f'Error: {e}').opts(**opts)
+                fuel_relatives_plot_pane.object = _placeholder_fig(f'Error: {e}')
+                price_index_plot_pane.object = _placeholder_fig(f'Error: {e}')
 
         # ── Wire up callbacks ─────────────────────────────────────────
+        def analyze_all(event=None):
+            """Run price analysis AND fuel relatives with one click."""
+            load_and_plot_prices()
+            update_fuel_relatives(event='analyze')
+
         date_presets.param.watch(update_date_range, 'value')
         start_date_picker.param.watch(update_date_display, 'value')
         end_date_picker.param.watch(update_date_display, 'value')
-        analyze_button.on_click(lambda event: load_and_plot_prices())
-        fuel_relatives_region_selector.param.watch(update_fuel_relatives, 'value')
+        analyze_button.on_click(analyze_all)
+
+        # Mark dirty when any control changes
+        for widget in [region_selector, aggregate_selector, smoothing_selector, log_scale_checkbox]:
+            widget.param.watch(mark_controls_dirty, 'value')
 
         logger.info("Prices tab created successfully")
         return prices_tab
@@ -682,12 +698,12 @@ def create_prices_tab(dashboard):
 def _get_date_range_text(preset_value, start_val, end_val):
     """Convert the date preset selection to a human-readable string."""
     mapping = {
-        '1 day': "Last 24 hours",
-        '7 days': "Last 7 days",
-        '30 days': "Last 30 days",
-        '90 days': "Last 90 days",
-        '1 year': "Last year",
-        'All data': "All available data",
+        '1d': "Last 24 hours",
+        '7d': "Last 7 days",
+        '30d': "Last 30 days",
+        '90d': "Last 90 days",
+        '1y': "Last year",
+        'All': "All available data",
     }
     if preset_value in mapping:
         return mapping[preset_value]

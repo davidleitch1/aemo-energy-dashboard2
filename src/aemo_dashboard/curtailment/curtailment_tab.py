@@ -6,7 +6,7 @@ DuckDB-based curtailment analysis with efficient querying
 
 import panel as pn
 import pandas as pd
-import hvplot.pandas
+import plotly.graph_objects as go
 import pickle
 from datetime import datetime, timedelta, date
 from pathlib import Path
@@ -55,25 +55,6 @@ TABULATOR_CSS = f"""
     color: {FLEXOKI_BLACK};
 }}
 """
-
-
-def set_flexoki_backgrounds(plot, element):
-    """Hook function to set Flexoki theme backgrounds on hvplot charts."""
-    try:
-        p = plot.state
-        # Set plot area background
-        p.background_fill_color = FLEXOKI_PAPER
-        p.border_fill_color = FLEXOKI_PAPER
-
-        # Style legend if present
-        if hasattr(p, 'legend') and p.legend:
-            for legend in p.legend:
-                legend.background_fill_color = FLEXOKI_PAPER
-                legend.border_line_color = FLEXOKI_BASE[150]
-                legend.border_line_width = 1
-                legend.label_text_color = FLEXOKI_BLACK
-    except Exception:
-        pass  # Silently handle any styling errors
 
 
 class CurtailmentTab:
@@ -355,55 +336,85 @@ class CurtailmentTab:
 
             title = " - ".join(title_parts)
 
-            # Create plot using Flexoki theme colors
-            plot = data.hvplot.area(
-                x='timestamp',
-                y='scada',
-                label='Actual Generation',
-                color=FLEXOKI_ACCENT['green'],  # Flexoki green
-                alpha=0.7,
+            # Create Plotly figure
+            fig = go.Figure()
+
+            # Actual generation (filled area)
+            fig.add_trace(go.Scatter(
+                x=data['timestamp'],
+                y=data['scada'],
+                name='Actual Generation',
+                mode='lines',
+                fill='tozeroy',
+                fillcolor=f"rgba({int(FLEXOKI_ACCENT['green'][1:3], 16)}, {int(FLEXOKI_ACCENT['green'][3:5], 16)}, {int(FLEXOKI_ACCENT['green'][5:7], 16)}, 0.7)",
+                line=dict(color=FLEXOKI_ACCENT['green'], width=1),
+            ))
+
+            # Curtailment (filled area)
+            if 'curtailment' in data.columns:
+                fig.add_trace(go.Scatter(
+                    x=data['timestamp'],
+                    y=data['curtailment'],
+                    name='Curtailment',
+                    mode='lines',
+                    fill='tozeroy',
+                    fillcolor=f"rgba({int(FLEXOKI_ACCENT['red'][1:3], 16)}, {int(FLEXOKI_ACCENT['red'][3:5], 16)}, {int(FLEXOKI_ACCENT['red'][5:7], 16)}, 0.4)",
+                    line=dict(color=FLEXOKI_ACCENT['red'], width=1),
+                ))
+
+            # Available generation (dashed line)
+            if 'availgen' in data.columns:
+                fig.add_trace(go.Scatter(
+                    x=data['timestamp'],
+                    y=data['availgen'],
+                    name='Available Generation',
+                    mode='lines',
+                    line=dict(color=FLEXOKI_ACCENT['cyan'], width=2, dash='dash'),
+                ))
+
+            # Dispatch cap (solid line)
+            if 'dispatchcap' in data.columns:
+                fig.add_trace(go.Scatter(
+                    x=data['timestamp'],
+                    y=data['dispatchcap'],
+                    name='Dispatch Cap',
+                    mode='lines',
+                    line=dict(color=FLEXOKI_ACCENT['orange'], width=2),
+                ))
+
+            fig.update_layout(
+                title=dict(text=title, font=dict(color=FLEXOKI_BLACK)),
+                yaxis_title='Power (MW)',
+                autosize=True,
                 height=450,
-                width=900,
-                title=title,
-                ylabel='Power (MW)',
-                legend='top_left'
-            ).opts(
-                bgcolor=FLEXOKI_PAPER,
-                show_grid=True,
-                hooks=[set_flexoki_backgrounds]
+                paper_bgcolor=FLEXOKI_PAPER,
+                plot_bgcolor=FLEXOKI_PAPER,
+                font=dict(color=FLEXOKI_BLACK),
+                legend=dict(
+                    orientation='h',
+                    yanchor='bottom',
+                    y=1.02,
+                    xanchor='left',
+                    x=0,
+                    bgcolor=FLEXOKI_PAPER,
+                    bordercolor=FLEXOKI_BASE[150],
+                    borderwidth=1,
+                    font=dict(color=FLEXOKI_BLACK),
+                ),
+                xaxis=dict(
+                    showgrid=True,
+                    gridcolor=FLEXOKI_BASE[150],
+                    linecolor=FLEXOKI_BASE[200],
+                ),
+                yaxis=dict(
+                    showgrid=True,
+                    gridcolor=FLEXOKI_BASE[150],
+                    linecolor=FLEXOKI_BASE[200],
+                ),
+                margin=dict(l=60, r=20, t=60, b=40),
             )
 
-            # Add curtailment
-            if 'curtailment' in data.columns:
-                plot = plot * data.hvplot.area(
-                    x='timestamp',
-                    y='curtailment',
-                    label='Curtailment',
-                    color=FLEXOKI_ACCENT['red'],  # Flexoki red
-                    alpha=0.4
-                )
-
-            # Add lines
-            if 'availgen' in data.columns:
-                plot = plot * data.hvplot.line(
-                    x='timestamp',
-                    y='availgen',
-                    label='Available Generation',
-                    color=FLEXOKI_ACCENT['cyan'],  # Flexoki cyan
-                    line_dash='dashed',
-                    line_width=2
-                )
-
-            if 'dispatchcap' in data.columns:
-                plot = plot * data.hvplot.line(
-                    x='timestamp',
-                    y='dispatchcap',
-                    label='Dispatch Cap',
-                    color=FLEXOKI_ACCENT['orange'],  # Flexoki orange
-                    line_width=2
-                )
-
-            return plot
+            return pn.pane.Plotly(fig, sizing_mode='stretch_width')
 
         except Exception as e:
             return pn.pane.Markdown(f"Error: {str(e)}")
@@ -492,7 +503,7 @@ class CurtailmentTab:
                 display_df,
                 show_index=False,
                 height=200,
-                width=650,
+                sizing_mode='stretch_width',
                 stylesheets=[TABULATOR_CSS]
             )
 
@@ -533,7 +544,7 @@ class CurtailmentTab:
                 display_df,
                 show_index=False,
                 height=300,
-                width=800,
+                sizing_mode='stretch_width',
                 stylesheets=[TABULATOR_CSS]
             )
 
@@ -598,11 +609,12 @@ class CurtailmentTab:
                 self.create_top_units_table,
                 self.date_range_slider.param.value,
                 self.region_selector.param.value
-            )
+            ),
+            sizing_mode='stretch_width',
         )
 
         # Return row layout with sidebar and main content
-        return pn.Row(controls, main_content)
+        return pn.Row(controls, main_content, sizing_mode='stretch_width')
 
 
 def create_curtailment_tab():

@@ -168,10 +168,10 @@ def _query_raw_generation(
                 g.duid,
                 g.scadavalue
             FROM {table} g
-            JOIN duid_mapping d ON g.duid = d.DUID
+            JOIN duid_mapping d ON g.duid = d.duid
             WHERE g.settlementdate >= '{start_date.isoformat()}'
               AND g.settlementdate <= '{end_date.isoformat()}'
-              AND d.Region = '{region}'
+              AND d.region = '{region}'
             ORDER BY g.settlementdate, g.duid
         """
     

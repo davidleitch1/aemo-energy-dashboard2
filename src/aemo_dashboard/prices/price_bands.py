@@ -1,14 +1,15 @@
-"""Price-band analysis for the Prices tab.
+"""Price-band analysis for the Prices tab (Plotly).
 
-Extracted from gen_dash.py — computes band contributions,
-builds the butterfly stacked-bar charts, and the detail table.
+Computes band contributions, builds butterfly stacked-bar charts,
+and the detail table.
 """
 
 import logging
 
-import holoviews as hv
 import numpy as np
 import pandas as pd
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 from ..shared.flexoki_theme import FLEXOKI_PAPER, FLEXOKI_BLACK, FLEXOKI_BASE, FLEXOKI_ACCENT
 
@@ -23,12 +24,12 @@ PRICE_BANDS = [
 
 BAND_ORDER = ['Below $0', '$0-$300', '$301-$1000', 'Above $1000']
 
-BAND_COLORS = [
-    FLEXOKI_ACCENT['red'],
-    FLEXOKI_ACCENT['green'],
-    FLEXOKI_ACCENT['orange'],
-    FLEXOKI_ACCENT['magenta'],
-]
+BAND_COLORS = {
+    'Below $0': FLEXOKI_ACCENT['red'],
+    '$0-$300': FLEXOKI_ACCENT['green'],
+    '$301-$1000': FLEXOKI_ACCENT['orange'],
+    'Above $1000': FLEXOKI_ACCENT['magenta'],
+}
 
 DEFAULT_DEMANDS = {
     'NSW1': 7500,
@@ -42,18 +43,10 @@ DEFAULT_DEMANDS = {
 def compute_price_bands(original_price_data, selected_regions):
     """Compute price-band contributions for each region.
 
-    Parameters
-    ----------
-    original_price_data : DataFrame
-        Resampled (but unsmoothed) price data with ``REGIONID`` and ``RRP``.
-    selected_regions : list[str]
-
     Returns
     -------
     band_contributions : list[dict]
-        One entry per (region, band) combination.
     bands_df : DataFrame | None
-        Same data as a DataFrame, or ``None`` when empty.
     """
     band_contributions = []
 
@@ -99,94 +92,184 @@ def compute_price_bands(original_price_data, selected_regions):
     return band_contributions, bands_df
 
 
-def build_band_charts(bands_df, date_range_text, flexoki_bg_hook):
-    """Build the two stacked-bar charts (contribution + time distribution).
+def build_band_charts(bands_df, date_range_text, flexoki_bg_hook=None):
+    """Build butterfly chart: Time % (left) vs Contribution $/MWh (right).
 
-    Parameters
-    ----------
-    bands_df : DataFrame
-        Output of :func:`compute_price_bands`.
-    date_range_text : str
-        Human-readable date range for titles.
-    flexoki_bg_hook : callable
-        Bokeh hook returned by ``dashboard._get_flexoki_background_hook()``.
+    One subplot per region. Returns a single Plotly figure.
 
     Returns
     -------
-    contrib_plot, time_plot : hv.Overlay
+    fig : go.Figure
     """
-    # Chart 1: Price Contribution
-    contrib_plot = bands_df.hvplot.bar(
-        x='Region', y='Contribution', by='Price Band',
-        stacked=True, responsive=True, height=250,
-        xlabel='', ylabel='Price Contribution ($/MWh)',
-        title=f'Price Band Contribution ({date_range_text})',
-        color=BAND_COLORS, bgcolor=FLEXOKI_PAPER,
-        legend='top', toolbar='above',
-    ).opts(
-        xrotation=0, show_grid=True,
-        gridstyle={'grid_line_color': FLEXOKI_BASE[100], 'grid_line_alpha': 0.3},
-        fontsize={'ticks': 10, 'title': 12, 'ylabel': 10},
-        hooks=[flexoki_bg_hook],
+    regions = list(bands_df['Region'].unique())
+    n_regions = len(regions)
+
+    if n_regions == 0:
+        fig = go.Figure()
+        fig.update_layout(
+            autosize=True, height=400,
+            paper_bgcolor=FLEXOKI_PAPER, plot_bgcolor=FLEXOKI_PAPER,
+            annotations=[dict(text='No data available', xref='paper', yref='paper',
+                              x=0.5, y=0.5, showarrow=False,
+                              font=dict(size=14, color=FLEXOKI_BASE[600]))],
+        )
+        return fig
+
+    # Compute contribution % for butterfly right side
+    region_means = bands_df.groupby('Region')['Contribution'].sum().to_dict()
+    bands_df = bands_df.copy()
+    bands_df['Contribution %'] = bands_df.apply(
+        lambda row: (row['Contribution'] / region_means[row['Region']] * 100)
+        if region_means.get(row['Region'], 0) > 0 else 0,
+        axis=1,
     )
 
-    # Labels for contribution bars
-    contrib_overlays = []
-    for region in bands_df['Region'].unique():
-        region_bands = bands_df[bands_df['Region'] == region]
-        cumulative = 0
-        for _, row in region_bands.iterrows():
-            label = f"${int(row['Contribution'])}"
-            if row['Contribution'] > 3:
-                y_pos = cumulative + row['Contribution'] / 2
-                contrib_overlays.append(
-                    hv.Text(region, y_pos, label).opts(
-                        color=FLEXOKI_BLACK, fontsize=8,
-                        text_align='center', text_baseline='middle',
-                    )
-                )
-            cumulative += row['Contribution']
-    if contrib_overlays:
-        contrib_plot = contrib_plot * hv.Overlay(contrib_overlays)
+    # Grid layout
+    if n_regions <= 2:
+        rows, cols = 1, n_regions
+    elif n_regions <= 4:
+        rows, cols = 2, 2
+    else:
+        rows, cols = 2, 3
 
-    # Chart 2: Time Distribution
-    time_plot = bands_df.hvplot.bar(
-        x='Region', y='Percentage', by='Price Band',
-        stacked=True, responsive=True, height=250,
-        xlabel='Region', ylabel='Time Distribution (%)',
-        title='Time in Each Price Band',
-        color=BAND_COLORS, bgcolor=FLEXOKI_PAPER,
-        legend='bottom', toolbar='above',
-    ).opts(
-        xrotation=0, show_grid=True,
-        gridstyle={'grid_line_color': FLEXOKI_BASE[100], 'grid_line_alpha': 0.3},
-        fontsize={'ticks': 10, 'title': 12, 'ylabel': 10, 'xlabel': 10},
-        hooks=[flexoki_bg_hook],
+    height = 320 * rows
+    subplot_titles = [
+        f"{r}  (Flat load: ${region_means.get(r, 0):.0f}/MWh)" for r in regions
+    ]
+
+    fig = make_subplots(
+        rows=rows, cols=cols,
+        subplot_titles=subplot_titles,
+        horizontal_spacing=0.12,
+        vertical_spacing=0.25,
     )
 
-    # Labels for time bars
-    time_overlays = []
-    for region in bands_df['Region'].unique():
-        region_bands = bands_df[bands_df['Region'] == region]
-        cumulative = 0
-        for _, row in region_bands.iterrows():
-            if row['Percentage'] < 1:
-                label = f"{row['Percentage']:.2f}%"
+    for idx, region in enumerate(regions):
+        row = idx // cols + 1
+        col = idx % cols + 1
+        region_df = bands_df[bands_df['Region'] == region]
+
+        for band in BAND_ORDER:
+            band_row = region_df[region_df['Price Band'] == band]
+            if band_row.empty:
+                continue
+
+            time_pct = band_row['Percentage'].values[0]
+            contrib_pct = band_row['Contribution %'].values[0]
+            contrib_dollars = band_row['Contribution'].values[0]
+            color = BAND_COLORS[band]
+
+            # Time % bar extends LEFT (negative) — lighter shade
+            fig.add_trace(go.Bar(
+                y=[band],
+                x=[-time_pct],
+                orientation='h',
+                marker=dict(color=color, opacity=0.5),
+                text=f'{time_pct:.1f}%',
+                textposition='outside',
+                textfont=dict(size=9, color=FLEXOKI_BASE[800]),
+                hovertemplate=f'{band}: {time_pct:.1f}% of time<extra>{region}</extra>',
+                showlegend=False,
+            ), row=row, col=col)
+
+            # Contribution % bar extends RIGHT (positive) — full color
+            # Label: show $/MWh contribution
+            bar_width = abs(contrib_pct)
+            if bar_width > 12:
+                text_label = f'${contrib_dollars:.0f}'
+                text_pos = 'inside'
+                text_color = 'white'
+            elif bar_width > 5:
+                text_label = f'${contrib_dollars:.0f}'
+                text_pos = 'inside'
+                text_color = 'white'
+            elif abs(contrib_dollars) > 1:
+                text_label = f'${contrib_dollars:.0f}'
+                text_pos = 'outside'
+                text_color = color
             else:
-                label = f"{row['Percentage']:.0f}%"
-            if row['Percentage'] > 5:
-                y_pos = cumulative + row['Percentage'] / 2
-                time_overlays.append(
-                    hv.Text(region, y_pos, label).opts(
-                        color=FLEXOKI_BLACK, fontsize=8,
-                        text_align='center', text_baseline='middle',
-                    )
-                )
-            cumulative += row['Percentage']
-    if time_overlays:
-        time_plot = time_plot * hv.Overlay(time_overlays)
+                text_label = ''
+                text_pos = 'none'
+                text_color = color
 
-    return contrib_plot, time_plot
+            fig.add_trace(go.Bar(
+                y=[band],
+                x=[contrib_pct],
+                orientation='h',
+                marker=dict(color=color),
+                text=text_label,
+                textposition=text_pos,
+                textfont=dict(size=10, color=text_color),
+                hovertemplate=(
+                    f'{band}: ${contrib_dollars:.0f}/MWh '
+                    f'({contrib_pct:.1f}% of flat load)<extra>{region}</extra>'
+                ),
+                showlegend=False,
+            ), row=row, col=col)
+
+        # Symmetric x-axis
+        max_val = max(
+            100,
+            region_df['Percentage'].max() if not region_df.empty else 100,
+            abs(region_df['Contribution %']).max() if not region_df.empty else 100,
+        )
+        x_limit = max_val + 15
+
+        fig.update_xaxes(
+            range=[-x_limit, x_limit],
+            showgrid=True, gridcolor=FLEXOKI_BASE[100], gridwidth=0.5,
+            zeroline=True, zerolinecolor=FLEXOKI_BASE[300], zerolinewidth=1.5,
+            showline=False,
+            tickfont=dict(color=FLEXOKI_BASE[600], size=9),
+            title=dict(
+                text='<-- Time %          Contribution $/MWh -->',
+                font=dict(size=9, color=FLEXOKI_BASE[800]),
+            ),
+            row=row, col=col,
+        )
+        fig.update_yaxes(
+            categoryorder='array',
+            categoryarray=list(reversed(BAND_ORDER)),
+            tickfont=dict(color=FLEXOKI_BLACK, size=10),
+            showgrid=False, showline=False,
+            row=row, col=col,
+        )
+
+    fig.update_layout(
+        autosize=True,
+        height=height,
+        barmode='overlay',
+        bargap=0.35,
+        paper_bgcolor=FLEXOKI_PAPER,
+        plot_bgcolor=FLEXOKI_PAPER,
+        title=dict(
+            text=(
+                f'Price Band Contribution ({date_range_text})<br>'
+                f'<sub>Left = % of time  |  Right = $/MWh contribution to flat load average</sub>'
+            ),
+            font=dict(size=14, color=FLEXOKI_BLACK),
+            x=0.5,
+        ),
+        margin=dict(l=100, r=40, t=80, b=40),
+        annotations=[
+            a for a in fig.layout.annotations
+        ] + [
+            dict(
+                text='Data: AEMO', xref='paper', yref='paper',
+                x=1.0, y=-0.02, showarrow=False,
+                font=dict(size=9, color=FLEXOKI_BASE[600], style='italic'),
+                xanchor='right',
+            ),
+        ],
+    )
+
+    # Style subplot titles
+    for ann in fig.layout.annotations:
+        if hasattr(ann, 'font') and ann.font is not None:
+            ann.font.size = 12
+            ann.font.color = FLEXOKI_BLACK
+
+    return fig
 
 
 def build_band_detail_table(
@@ -196,14 +279,6 @@ def build_band_detail_table(
     region_avg_demand,
 ):
     """Build the price-band details DataFrame for the Tabulator widget.
-
-    Parameters
-    ----------
-    bands_df : DataFrame
-    original_price_data : DataFrame
-    selected_regions : list[str]
-    region_avg_demand : dict[str, float]
-        Average demand (MW) per region.
 
     Returns
     -------

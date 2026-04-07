@@ -7,9 +7,9 @@ including search interface, time series charts, time-of-day analysis, and summar
 
 import pandas as pd
 import panel as pn
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import param
-import holoviews as hv
-import hvplot.pandas
 from typing import Dict, List, Optional
 from datetime import datetime, timedelta
 
@@ -896,87 +896,54 @@ class StationAnalysisUI(param.Parameterized):
             else:
                 logger.info(f"No smoothing applied. Has selector: {hasattr(self, 'smoothing_selector')}, Value: {getattr(self, 'smoothing_selector', None) and self.smoothing_selector.value}")
             
-            # Use Bokeh directly for proper dual-axis control
-            from bokeh.plotting import figure
-            from bokeh.models import LinearAxis, Range1d
-            
             # Extract data
             timestamps = chart_data['settlementdate'].values
             generation = chart_data['scadavalue'].values
             prices = chart_data['price'].values
-            
-            # Get appropriate title based on mode
-            if self.analysis_mode == 'station' and self.selected_station_duids:
-                title = f'Generation & Price Over Time ({freq_label} Data)'
-            else:
-                title = f'Generation & Price Over Time ({freq_label} Data)'
-            
-            # Create figure with primary y-axis for generation
-            p = figure(
-                title=title,
-                x_axis_type='datetime',
-                width=1000,  # Larger width for better visibility
-                height=500,   # Increased height
-                tools='pan,wheel_zoom,box_zoom,reset,save,hover'
+
+            title = f'Generation & Price Over Time ({freq_label} Data)'
+
+            fig = make_subplots(specs=[[{"secondary_y": True}]])
+
+            fig.add_trace(go.Scatter(
+                x=timestamps, y=generation, mode='lines', name='Generation (MW)',
+                line=dict(width=3, color='#2ca02c'),
+            ), secondary_y=False)
+
+            # Capacity reference line
+            if hasattr(self.motor, 'station_data') and 'capacity_mw' in self.motor.station_data.columns:
+                capacity_mw = self.motor.station_data['capacity_mw'].iloc[0]
+                if capacity_mw > 0:
+                    fig.add_trace(go.Scatter(
+                        x=[timestamps[0], timestamps[-1]], y=[capacity_mw, capacity_mw],
+                        mode='lines', name=f'Max Capacity ({capacity_mw:.0f} MW)',
+                        line=dict(width=2, color='#2ca02c', dash='dash'),
+                        opacity=0.7,
+                    ), secondary_y=False)
+
+            fig.add_trace(go.Scatter(
+                x=timestamps, y=prices, mode='lines', name='Price ($/MWh)',
+                line=dict(width=3, color='#d62728'),
+            ), secondary_y=True)
+
+            fig.update_layout(
+                title=title, autosize=True, height=500,
+                paper_bgcolor=FLEXOKI_PAPER, plot_bgcolor=FLEXOKI_PAPER,
+                legend=dict(x=0, y=1, bgcolor=FLEXOKI_PAPER),
+                margin=dict(l=60, r=60, t=50, b=40),
+                annotations=[dict(
+                    text='Design: ITK, Data: AEMO', xref='paper', yref='paper',
+                    x=1.0, y=-0.08, showarrow=False,
+                    font=dict(size=9, color='#6272a4', style='italic'),
+                )],
             )
+            fig.update_xaxes(title_text='Time', showgrid=False)
+            fig.update_yaxes(title_text='Generation (MW)', secondary_y=False, showgrid=False,
+                             title_font_color='#2ca02c')
+            fig.update_yaxes(title_text='Price ($/MWh)', secondary_y=True, showgrid=False,
+                             title_font_color='#d62728')
 
-            # Apply Flexoki theme - set plot background to cream color
-            p.background_fill_color = FLEXOKI_PAPER
-            p.border_fill_color = FLEXOKI_PAPER
-
-            # Remove grid
-            p.grid.visible = False
-            
-            # Primary axis (left) - Generation
-            p.line(timestamps, generation, line_width=3, color='#2ca02c', legend_label='Generation (MW)')
-            
-            # Add capacity reference line if capacity data is available
-            if hasattr(self.motor, 'station_data') and 'capacity_mw' in self.motor.station_data.columns:
-                capacity_mw = self.motor.station_data['capacity_mw'].iloc[0]
-                if capacity_mw > 0:
-                    # Add horizontal dashed line for maximum capacity
-                    p.line([timestamps[0], timestamps[-1]], [capacity_mw, capacity_mw], 
-                           line_width=2, color='#2ca02c', line_dash='dashed', line_alpha=0.7,
-                           legend_label=f'Max Capacity ({capacity_mw:.0f} MW)')
-            
-            # Set y-range to include capacity line
-            y_max = max(generation) * 1.1
-            if hasattr(self.motor, 'station_data') and 'capacity_mw' in self.motor.station_data.columns:
-                capacity_mw = self.motor.station_data['capacity_mw'].iloc[0]
-                if capacity_mw > 0:
-                    y_max = max(y_max, capacity_mw * 1.05)  # 5% above capacity line
-            
-            p.y_range = Range1d(start=min(generation) * 0.9, end=y_max)
-            p.yaxis.axis_label = 'Generation (MW)'
-            p.yaxis.axis_label_text_color = '#2ca02c'
-            
-            # Secondary axis (right) - Price
-            price_range = Range1d(start=min(prices) * 0.9, end=max(prices) * 1.1)
-            p.extra_y_ranges = {'price': price_range}
-            p.line(timestamps, prices, line_width=3, color='#d62728', legend_label='Price ($/MWh)', y_range_name='price')
-            
-            # Add secondary y-axis on the right
-            price_axis = LinearAxis(y_range_name='price', axis_label='Price ($/MWh)')
-            price_axis.axis_label_text_color = '#d62728'
-            p.add_layout(price_axis, 'right')
-            
-            # Configure legend and axes
-            p.legend.location = "top_left"
-            p.legend.click_policy = "hide"
-            p.legend.background_fill_color = FLEXOKI_PAPER
-            p.legend.border_line_color = FLEXOKI_BASE[150]
-            p.xaxis.axis_label = 'Time'
-
-            # Add attribution
-            from bokeh.models import Title
-            attribution = Title(text='Design: ITK, Data: AEMO',
-                              text_font_size='9pt',
-                              text_color='#6272a4',
-                              align='right',
-                              offset=-5)
-            p.add_layout(attribution, 'below')
-
-            return pn.pane.Bokeh(p, sizing_mode='stretch_width', height=500)
+            return pn.pane.Plotly(fig, sizing_mode='stretch_width')
             
         except Exception as e:
             logger.error(f"Error creating time series charts: {e}")
@@ -990,89 +957,52 @@ class StationAnalysisUI(param.Parameterized):
             if time_of_day_data is None or len(time_of_day_data) == 0:
                 return pn.pane.Markdown("No data available for time-of-day analysis.")
             
-            # Use Bokeh directly for proper dual-axis control
-            from bokeh.plotting import figure
-            from bokeh.models import LinearAxis, Range1d
-            
-            # Extract data
             hours = time_of_day_data['hour'].values
             generation = time_of_day_data['scadavalue'].values
             prices = time_of_day_data['price'].values
-            
-            # Get appropriate title based on mode
-            if self.analysis_mode == 'station' and self.selected_station_duids:
-                title = f'Average Performance by Hour of Day'
-            else:
-                title = f'Average Performance by Hour of Day'
-            
-            # Create figure with primary y-axis for generation
-            p = figure(
-                title=title,
-                width=1000,  # Consistent with time series chart
-                height=500,   # Increased height
-                tools='pan,wheel_zoom,box_zoom,reset,save,hover'
+
+            title = 'Average Performance by Hour of Day'
+
+            fig = make_subplots(specs=[[{"secondary_y": True}]])
+
+            fig.add_trace(go.Scatter(
+                x=hours, y=generation, mode='lines+markers', name='Average Generation (MW)',
+                line=dict(width=4, color='#2ca02c'), marker=dict(size=8, color='#2ca02c'),
+            ), secondary_y=False)
+
+            if hasattr(self.motor, 'station_data') and 'capacity_mw' in self.motor.station_data.columns:
+                capacity_mw = self.motor.station_data['capacity_mw'].iloc[0]
+                if capacity_mw > 0:
+                    fig.add_trace(go.Scatter(
+                        x=[0, 23], y=[capacity_mw, capacity_mw],
+                        mode='lines', name=f'Max Capacity ({capacity_mw:.0f} MW)',
+                        line=dict(width=2, color='#2ca02c', dash='dash'), opacity=0.7,
+                    ), secondary_y=False)
+
+            fig.add_trace(go.Scatter(
+                x=hours, y=prices, mode='lines+markers', name='Average Price ($/MWh)',
+                line=dict(width=4, color='#d62728'), marker=dict(size=8, color='#d62728'),
+            ), secondary_y=True)
+
+            fig.update_layout(
+                title=title, autosize=True, height=500,
+                paper_bgcolor=FLEXOKI_PAPER, plot_bgcolor=FLEXOKI_PAPER,
+                legend=dict(x=0, y=1, bgcolor=FLEXOKI_PAPER),
+                margin=dict(l=60, r=60, t=50, b=40),
+                annotations=[dict(
+                    text='Design: ITK, Data: AEMO', xref='paper', yref='paper',
+                    x=1.0, y=-0.08, showarrow=False,
+                    font=dict(size=9, color='#6272a4', style='italic'),
+                )],
             )
+            fig.update_xaxes(title_text='Hour of Day', showgrid=False,
+                             tickvals=list(range(0, 24, 3)))
+            fig.update_yaxes(title_text='Average Generation (MW)', secondary_y=False,
+                             showgrid=False, title_font_color='#2ca02c')
+            fig.update_yaxes(title_text='Average Price ($/MWh)', secondary_y=True,
+                             showgrid=False, title_font_color='#d62728')
 
-            # Apply Flexoki theme - set plot background to cream color
-            p.background_fill_color = FLEXOKI_PAPER
-            p.border_fill_color = FLEXOKI_PAPER
-
-            # Remove grid
-            p.grid.visible = False
-            
-            # Primary axis (left) - Generation with line and markers
-            p.line(hours, generation, line_width=4, color='#2ca02c', legend_label='Average Generation (MW)')
-            p.scatter(hours, generation, size=8, color='#2ca02c')
-            
-            # Add capacity reference line if capacity data is available
-            if hasattr(self.motor, 'station_data') and 'capacity_mw' in self.motor.station_data.columns:
-                capacity_mw = self.motor.station_data['capacity_mw'].iloc[0]
-                if capacity_mw > 0:
-                    # Add horizontal dashed line for maximum capacity
-                    p.line([0, 23], [capacity_mw, capacity_mw], 
-                           line_width=2, color='#2ca02c', line_dash='dashed', line_alpha=0.7,
-                           legend_label=f'Max Capacity ({capacity_mw:.0f} MW)')
-            
-            # Set y-range to include capacity line
-            y_max = max(generation) * 1.1
-            if hasattr(self.motor, 'station_data') and 'capacity_mw' in self.motor.station_data.columns:
-                capacity_mw = self.motor.station_data['capacity_mw'].iloc[0]
-                if capacity_mw > 0:
-                    y_max = max(y_max, capacity_mw * 1.05)  # 5% above capacity line
-            
-            p.y_range = Range1d(start=min(generation) * 0.9, end=y_max)
-            p.yaxis.axis_label = 'Average Generation (MW)'
-            p.yaxis.axis_label_text_color = '#2ca02c'
-            
-            # Secondary axis (right) - Price with line and markers
-            price_range = Range1d(start=min(prices) * 0.9, end=max(prices) * 1.1)
-            p.extra_y_ranges = {'price': price_range}
-            p.line(hours, prices, line_width=4, color='#d62728', legend_label='Average Price ($/MWh)', y_range_name='price')
-            p.scatter(hours, prices, size=8, color='#d62728', y_range_name='price')
-            
-            # Add secondary y-axis on the right
-            price_axis = LinearAxis(y_range_name='price', axis_label='Average Price ($/MWh)')
-            price_axis.axis_label_text_color = '#d62728'
-            p.add_layout(price_axis, 'right')
-            
-            # Configure legend and axes
-            p.legend.location = "top_left"
-            p.legend.click_policy = "hide"
-            p.legend.background_fill_color = FLEXOKI_PAPER
-            p.legend.border_line_color = FLEXOKI_BASE[150]
-            p.xaxis.axis_label = 'Hour of Day'
-            p.xaxis.ticker = list(range(0, 24, 3))  # Show every 3 hours
-
-            # Add attribution
-            from bokeh.models import Title
-            attribution = Title(text='Design: ITK, Data: AEMO',
-                              text_font_size='9pt',
-                              text_color='#6272a4',
-                              align='right',
-                              offset=-5)
-            p.add_layout(attribution, 'below')
-
-            return pn.pane.Bokeh(p, sizing_mode='stretch_width', height=500)
+            return pn.pane.Plotly(fig, sizing_mode='stretch_width')
             
         except Exception as e:
             logger.error(f"Error creating time-of-day chart: {e}")

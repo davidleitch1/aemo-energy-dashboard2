@@ -1,16 +1,15 @@
-"""Fuel-relatives analysis for the Prices tab.
+"""Fuel-relatives analysis for the Prices tab (Plotly).
 
-Extracted from gen_dash.py — queries DuckDB for daily fuel-weighted
-prices, applies 90-day LOESS smoothing, builds two hvplot charts
-(absolute prices and price index normalised to Flat Load = 100).
+Queries DuckDB for daily fuel-weighted prices, applies 90-day LOESS
+smoothing, builds two Plotly charts (absolute prices and price index
+normalised to Flat Load = 100).
 """
 
 import logging
 
-import holoviews as hv
-import hvplot.pandas
 import numpy as np
 import pandas as pd
+import plotly.graph_objects as go
 
 from ..shared.flexoki_theme import FLEXOKI_PAPER, FLEXOKI_BLACK, FLEXOKI_BASE, FLEXOKI_ACCENT
 
@@ -34,22 +33,22 @@ def _build_fuel_relatives_query(selected_fuel_region, start_dt, end_dt):
             SELECT
                 DATE(g.settlementdate) as date,
                 CASE
-                    WHEN d.Fuel IN ('Gas', 'Gas other', 'CCGT', 'OCGT') THEN 'Gas'
-                    ELSE d.Fuel
+                    WHEN d.fuel IN ('Gas', 'Gas other', 'CCGT', 'OCGT') THEN 'Gas'
+                    ELSE d.fuel
                 END as fuel_type,
                 g.duid,
                 SUM(g.scadavalue) as daily_generation
             FROM generation_30min g
-            JOIN duid_mapping d ON g.duid = d.DUID
+            JOIN duid_mapping d ON g.duid = d.duid
             WHERE g.settlementdate >= '{start_dt.isoformat()}'
               AND g.settlementdate <= '{end_dt.isoformat()}'
-              AND d.Region = '{selected_fuel_region}'
-              AND d.Fuel IN ('Coal', 'Gas', 'Gas other', 'Wind', 'Solar', 'Water', 'CCGT', 'OCGT', 'Battery Storage')
-              AND NOT (d.Fuel = 'Battery Storage' AND g.scadavalue < 0)
+              AND d.region = '{selected_fuel_region}'
+              AND d.fuel IN ('Coal', 'Gas', 'Gas other', 'Wind', 'Solar', 'Water', 'CCGT', 'OCGT', 'Battery Storage')
+              AND NOT (d.fuel = 'Battery Storage' AND g.scadavalue < 0)
             GROUP BY DATE(g.settlementdate),
                      CASE
-                         WHEN d.Fuel IN ('Gas', 'Gas other', 'CCGT', 'OCGT') THEN 'Gas'
-                         ELSE d.Fuel
+                         WHEN d.fuel IN ('Gas', 'Gas other', 'CCGT', 'OCGT') THEN 'Gas'
+                         ELSE d.fuel
                      END,
                      g.duid
         ),
@@ -69,18 +68,18 @@ def _build_fuel_relatives_query(selected_fuel_region, start_dt, end_dt):
                 dg.fuel_type,
                 SUM(g.scadavalue * dp.rrp) / NULLIF(SUM(g.scadavalue), 0) as weighted_price
             FROM generation_30min g
-            JOIN duid_mapping d ON g.duid = d.DUID
+            JOIN duid_mapping d ON g.duid = d.duid
             JOIN daily_prices dp ON g.settlementdate = dp.settlementdate
             JOIN daily_generation dg ON DATE(g.settlementdate) = dg.date
                 AND CASE
-                    WHEN d.Fuel IN ('Gas', 'Gas other', 'CCGT', 'OCGT') THEN 'Gas'
-                    ELSE d.Fuel
+                    WHEN d.fuel IN ('Gas', 'Gas other', 'CCGT', 'OCGT') THEN 'Gas'
+                    ELSE d.fuel
                 END = dg.fuel_type
                 AND g.duid = dg.duid
             WHERE g.settlementdate >= '{start_dt.isoformat()}'
               AND g.settlementdate <= '{end_dt.isoformat()}'
-              AND d.Region = '{selected_fuel_region}'
-              AND NOT (d.Fuel = 'Battery Storage' AND g.scadavalue < 0)
+              AND d.region = '{selected_fuel_region}'
+              AND NOT (d.fuel = 'Battery Storage' AND g.scadavalue < 0)
             GROUP BY dp.date, dg.fuel_type
         ),
         flat_load AS (
@@ -226,43 +225,66 @@ def apply_loess_smoothing(daily_prices):
     return smoothed_data
 
 
-def build_fuel_relatives_chart(smoothed_data, selected_fuel_region, attribution_hook, flexoki_bg_hook):
-    """Build the absolute fuel-weighted price chart.
+def _apply_fuel_layout(fig, title):
+    """Apply standard Flexoki layout to fuel relatives charts."""
+    fig.update_layout(
+        autosize=True,
+        height=400,
+        paper_bgcolor=FLEXOKI_PAPER,
+        plot_bgcolor=FLEXOKI_PAPER,
+        title=dict(text=title, font=dict(size=14, color=FLEXOKI_BLACK)),
+        legend=dict(bgcolor=FLEXOKI_PAPER, font=dict(size=10)),
+        margin=dict(l=60, r=30, t=40, b=40),
+        xaxis=dict(title='Date', showgrid=False, tickfont=dict(color=FLEXOKI_BASE[800])),
+        yaxis=dict(showgrid=False, tickfont=dict(color=FLEXOKI_BASE[800])),
+        annotations=[dict(
+            text='<i>data: AEMO, design: ITK</i>',
+            xref='paper', yref='paper', x=1.0, y=-0.12,
+            showarrow=False, font=dict(size=9, color=FLEXOKI_BASE[500]), xanchor='right',
+        )],
+    )
+
+
+def build_fuel_relatives_chart(smoothed_data, selected_fuel_region, attribution_hook=None, flexoki_bg_hook=None):
+    """Build the absolute fuel-weighted price chart (Plotly).
 
     Returns
     -------
-    plot : hv.Overlay | None
+    fig : go.Figure | None
     """
     if smoothed_data.empty or not smoothed_data.notna().any().any():
         return None
 
-    color_list = [FUEL_COLOR_MAP.get(c, FLEXOKI_BASE[500]) for c in smoothed_data.columns]
-    line_dash_map = {c: 'dotted' if c == 'Flat Load' else 'solid' for c in smoothed_data.columns}
+    fig = go.Figure()
 
-    plot = smoothed_data.hvplot.line(
-        y=smoothed_data.columns.tolist(),
-        xlabel='Date', ylabel='Price ($/MWh)',
-        title=f'90-Day LOESS Smoothed Fuel-Weighted Prices - {selected_fuel_region} '
-              f'(Gas combined, Battery discharge only)',
-        height=400, width=900, line_width=2,
-        legend='top_right', grid=True,
-        color=color_list,
-        line_dash=list(line_dash_map.values()),
-    ).opts(
-        bgcolor=FLEXOKI_PAPER,
-        active_tools=['pan', 'wheel_zoom'],
-        hooks=[attribution_hook, flexoki_bg_hook],
+    for col in smoothed_data.columns:
+        color = FUEL_COLOR_MAP.get(col, FLEXOKI_BASE[500])
+        dash = 'dot' if col == 'Flat Load' else 'solid'
+        fig.add_trace(go.Scatter(
+            x=smoothed_data.index,
+            y=smoothed_data[col],
+            name=col,
+            mode='lines',
+            line=dict(width=2, color=color, dash=dash),
+            hovertemplate=f'{col}: $%{{y:.1f}}/MWh<extra></extra>',
+        ))
+
+    _apply_fuel_layout(
+        fig,
+        f'90-Day LOESS Smoothed Fuel-Weighted Prices - {selected_fuel_region} '
+        f'(Gas combined, Battery discharge only)',
     )
+    fig.update_yaxes(title='Price ($/MWh)')
 
-    return plot
+    return fig
 
 
-def build_price_index_chart(smoothed_data, selected_fuel_region, attribution_hook, flexoki_bg_hook):
-    """Build the price-index chart (normalised to Flat Load = 100).
+def build_price_index_chart(smoothed_data, selected_fuel_region, attribution_hook=None, flexoki_bg_hook=None):
+    """Build the price-index chart (normalised to Flat Load = 100, Plotly).
 
     Returns
     -------
-    plot : hv.Overlay | None
+    fig : go.Figure | None
     """
     if 'Flat Load' not in smoothed_data.columns:
         return None
@@ -276,21 +298,27 @@ def build_price_index_chart(smoothed_data, selected_fuel_region, attribution_hoo
         indexed[valid] = (fuel_vals[valid] / flat_vals[valid]) * 100
         indexed_data[col] = indexed
 
-    color_list = [FUEL_COLOR_MAP.get(c, FLEXOKI_BASE[500]) for c in smoothed_data.columns]
-    line_dash_map = {c: 'dotted' if c == 'Flat Load' else 'solid' for c in smoothed_data.columns}
+    fig = go.Figure()
 
-    plot = indexed_data.hvplot.line(
-        y=indexed_data.columns.tolist(),
-        xlabel='Date', ylabel='Price Index (Flat Load = 100)',
-        title=f'Price Index Relative to Flat Load - {selected_fuel_region}',
-        height=400, width=900, line_width=2,
-        legend='top_right', grid=True,
-        color=color_list,
-        line_dash=list(line_dash_map.values()),
-    ).opts(
-        bgcolor=FLEXOKI_PAPER,
-        active_tools=['pan', 'wheel_zoom'],
-        hooks=[attribution_hook, flexoki_bg_hook],
-    ) * hv.HLine(100).opts(color='gray', line_dash='dashed', line_width=1)
+    for col in indexed_data.columns:
+        color = FUEL_COLOR_MAP.get(col, FLEXOKI_BASE[500])
+        dash = 'dot' if col == 'Flat Load' else 'solid'
+        fig.add_trace(go.Scatter(
+            x=indexed_data.index,
+            y=indexed_data[col],
+            name=col,
+            mode='lines',
+            line=dict(width=2, color=color, dash=dash),
+            hovertemplate=f'{col}: %{{y:.1f}}<extra></extra>',
+        ))
 
-    return plot
+    # Reference line at 100
+    fig.add_hline(y=100, line_dash='dash', line_color='gray', line_width=1)
+
+    _apply_fuel_layout(
+        fig,
+        f'Price Index Relative to Flat Load - {selected_fuel_region}',
+    )
+    fig.update_yaxes(title='Price Index (Flat Load = 100)')
+
+    return fig

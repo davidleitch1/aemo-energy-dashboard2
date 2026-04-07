@@ -316,13 +316,13 @@ _loading_html = f"""
 # Create containers that hold loading indicator initially
 # These will have their contents replaced after data loads
 _chart_container = pn.Column(
-    pn.pane.HTML(_loading_html, sizing_mode='fixed', width=450, height=300),
-    sizing_mode='fixed', width=450, height=300, margin=(0, 0, 0, 0),
+    pn.pane.HTML(_loading_html, sizing_mode='stretch_width', width=450, height=300),
+    sizing_mode='stretch_width', width=450, height=300, margin=(0, 0, 0, 0),
     styles={'background-color': FLEXOKI_PAPER}
 )
 _table_container = pn.Column(
-    pn.pane.HTML(_loading_html, sizing_mode='fixed', width=450, height=310),
-    sizing_mode='fixed', width=450, height=310, margin=(0, 0, 0, 0),
+    pn.pane.HTML(_loading_html, sizing_mode='stretch_width', width=450, height=310),
+    sizing_mode='stretch_width', width=450, height=310, margin=(0, 0, 0, 0),
     styles={'background-color': FLEXOKI_PAPER}
 )
 
@@ -350,9 +350,9 @@ def load_initial_data():
         table = display_table(prices)
 
         # Create the actual panes
-        _mpl_pane = pn.pane.Matplotlib(fig, sizing_mode='fixed', width=450, height=300,
+        _mpl_pane = pn.pane.Matplotlib(fig, sizing_mode='stretch_width', width=450, height=300,
                                         margin=(0, 0, 0, 0), styles={'background-color': FLEXOKI_PAPER})
-        _table_pane = pn.pane.DataFrame(table, sizing_mode='fixed', width=450, height=310,
+        _table_pane = pn.pane.DataFrame(table, sizing_mode='stretch_width', width=450, height=310,
                                          margin=(0, 0, 0, 0), styles={'background-color': FLEXOKI_PAPER})
 
         # Replace loading indicators with actual content
@@ -376,7 +376,7 @@ pn.state.onload(load_initial_data)
 layout = pn.Column(
     _table_container,
     _chart_container,
-    sizing_mode='fixed',
+    sizing_mode='stretch_width',
     width=450,
     styles={'background-color': FLEXOKI_PAPER}
 )

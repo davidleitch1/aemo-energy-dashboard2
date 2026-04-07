@@ -241,21 +241,21 @@ class GenerationQueryManager:
             if region == 'NEM':
                 query = """
                     SELECT 
-                        d.Fuel as fuel_type,
-                        SUM(d."Capacity(MW)") as total_capacity_mw
+                        d.fuel as fuel_type,
+                        SUM(d.capacity_mw) as total_capacity_mw
                     FROM duid_mapping d
-                    WHERE d.Fuel IS NOT NULL
-                    GROUP BY d.Fuel
+                    WHERE d.fuel IS NOT NULL
+                    GROUP BY d.fuel
                 """
             else:
                 query = f"""
                     SELECT 
-                        d.Fuel as fuel_type,
-                        SUM(d."Capacity(MW)") as total_capacity_mw
+                        d.fuel as fuel_type,
+                        SUM(d.capacity_mw) as total_capacity_mw
                     FROM duid_mapping d
-                    WHERE d.Fuel IS NOT NULL
-                    AND d.Region = '{region}'
-                    GROUP BY d.Fuel
+                    WHERE d.fuel IS NOT NULL
+                    AND d.region = '{region}'
+                    GROUP BY d.fuel
                 """
             
             result = self.query_manager.conn.execute(query).df()

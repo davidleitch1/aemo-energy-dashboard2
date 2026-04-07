@@ -524,9 +524,9 @@ def create_renewable_gauge_component(dashboard_instance=None):
         except Exception as e:
             logger.error(f"Error updating renewable gauge: {e}")
             return pn.pane.HTML(
-                f"<div style='width:400px;height:350px;display:flex;align-items:center;justify-content:center;'>"
+                f"<div style='height:350px;display:flex;align-items:center;justify-content:center;'>"
                 f"<p>Renewable Gauge Error: {e}</p></div>",
-                width=400, height=350
+                sizing_mode='stretch_width'
             )
     
     return pn.pane.panel(update_gauge)

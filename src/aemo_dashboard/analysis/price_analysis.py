@@ -245,8 +245,8 @@ class PriceAnalysisMotor:
                 else:  # 30min
                     logger.info("========== DIAGNOSTIC: Applied 30min factor (0.5) ==========")
                     # Convert to MWh: sum(MW) × (30min / 60min/hr) = sum(MW) × 0.5 = MWh
-                    logger.info("===== AFTER 30MIN CONVERSION: Total_MWh=%.2f, Total_GWh=%.2f =====" % (grouped["generation_mwh"].sum(), grouped["generation_mwh"].sum()/1000))
                     grouped['generation_mwh'] = grouped['total_generation_sum'] * 0.5
+                    logger.info("===== AFTER 30MIN CONVERSION: Total_MWh=%.2f, Total_GWh=%.2f =====" % (grouped["generation_mwh"].sum(), grouped["generation_mwh"].sum()/1000))
                 grouped['average_price_per_mwh'] = np.where(
                     grouped['generation_mwh'] > 0,
                     grouped['total_revenue_dollars'] / grouped['generation_mwh'],

@@ -206,43 +206,43 @@ class HybridQueryManager:
                     g.settlementdate,
                     g.duid,
                     g.scadavalue,
-                    d."Site Name" as station_name,
-                    d.Owner as owner,
-                    d.Fuel as fuel_type,
-                    d.Region as region,
-                    d."Capacity(MW)" as nameplate_capacity,
+                    d."site name" as station_name,
+                    d.owner as owner,
+                    d.fuel as fuel_type,
+                    d.region as region,
+                    d.capacity_mw as nameplate_capacity,
                     p.rrp,
                     g.scadavalue * p.rrp * {MINUTES_5_TO_HOURS} as revenue
                 FROM generation_5min g
-                LEFT JOIN duid_mapping d ON g.duid = d.DUID
+                LEFT JOIN duid_mapping d ON g.duid = d.duid
                 LEFT JOIN prices_5min p
                     ON g.settlementdate = p.settlementdate
-                    AND d.Region = p.regionid
+                    AND d.region = p.regionid
                 WHERE g.settlementdate >= '{start_date.strftime('%Y-%m-%d %H:%M:%S')}'
                   AND g.settlementdate <= '{end_date.strftime('%Y-%m-%d %H:%M:%S')}'
             ) t
             """
         else:
-            query = f"""
             logger.info(f"🔍 [DIAGNOSTIC] Building 30min query: using generation_30min and prices_30min tables")
+            query = f"""
             SELECT {select_columns}
             FROM (
                 SELECT
                     g.settlementdate,
                     g.duid,
                     g.scadavalue,
-                    d."Site Name" as station_name,
-                    d.Owner as owner,
-                    d.Fuel as fuel_type,
-                    d.Region as region,
-                    d."Capacity(MW)" as nameplate_capacity,
+                    d."site name" as station_name,
+                    d.owner as owner,
+                    d.fuel as fuel_type,
+                    d.region as region,
+                    d.capacity_mw as nameplate_capacity,
                     p.rrp,
                     g.scadavalue * p.rrp * {MINUTES_30_TO_HOURS} as revenue
                 FROM generation_30min g
-                LEFT JOIN duid_mapping d ON g.duid = d.DUID
+                LEFT JOIN duid_mapping d ON g.duid = d.duid
                 LEFT JOIN prices_30min p
                     ON g.settlementdate = p.settlementdate
-                    AND d.Region = p.regionid
+                    AND d.region = p.regionid
                 WHERE g.settlementdate >= '{start_date.strftime('%Y-%m-%d %H:%M:%S')}'
                   AND g.settlementdate <= '{end_date.strftime('%Y-%m-%d %H:%M:%S')}'
             ) t

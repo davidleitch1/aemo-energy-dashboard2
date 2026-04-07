@@ -6,8 +6,7 @@ Fixed 24-hour stacked area chart showing NEM generation by fuel type
 import pandas as pd
 import numpy as np
 import panel as pn
-import holoviews as hv
-import hvplot.pandas
+import plotly.graph_objects as go
 from datetime import datetime, timedelta
 
 from ..shared.config import config
@@ -24,32 +23,12 @@ from ..shared.flexoki_theme import (
     FLEXOKI_ACCENT,
 )
 
-
-def set_flexoki_background(plot, element):
-    """
-    Hook to set Flexoki cream background for hvplot/Bokeh charts.
-    Sets plot area background, outline, and legend background.
-    """
-    # Set plot area background to Flexoki cream
-    plot.state.background_fill_color = FLEXOKI_PAPER
-    plot.state.border_fill_color = FLEXOKI_PAPER
-    plot.state.outline_line_color = FLEXOKI_BASE[150]
-
-    # Set legend background if legend exists
-    if plot.state.legend:
-        for legend in plot.state.legend:
-            legend.background_fill_color = FLEXOKI_PAPER
-            legend.border_line_color = FLEXOKI_BASE[150]
-            legend.background_fill_alpha = 1.0
 from .nem_dash_query_manager import NEMDashQueryManager
 
 logger = get_logger(__name__)
 
 # Initialize query manager
 query_manager = NEMDashQueryManager()
-
-# Configure HoloViews (ensure it's set up)
-hv.extension('bokeh')
 
 # Fuel colors - Flexoki-compatible, visible on light backgrounds
 FUEL_COLORS = {
@@ -68,20 +47,6 @@ FUEL_COLORS = {
     'Transmission Flow': FLEXOKI_ACCENT['magenta']  # Flexoki magenta #A02F6F
 }
 
-# HoloViews options for consistent styling
-hv.opts.defaults(
-    hv.opts.Area(
-        width=1200,
-        height=400,
-        alpha=0.8,
-        show_grid=False,
-        toolbar='above'
-    ),
-    hv.opts.Overlay(
-        show_grid=False,
-        toolbar='above'
-    )
-)
 
 
 def load_generation_data():
@@ -284,7 +249,7 @@ def prepare_generation_for_stacking(gen_data, transmission_data=None, rooftop_da
                     # Forward-fill missing values at the end (up to 2 hours)
                     # This handles the case where rooftop data is less recent than generation data
                     ffill_limit = periods_for_hours(2, resolution_minutes)  # Dynamic: 2 hours worth of periods
-                    rooftop_aligned = rooftop_aligned.fillna(method='ffill', limit=ffill_limit)
+                    rooftop_aligned = rooftop_aligned.ffill(limit=ffill_limit)
 
                     # Apply gentle decay for extended forward-fill periods
                     last_valid_idx = rooftop_aligned.last_valid_index()
@@ -356,106 +321,101 @@ def prepare_generation_for_stacking(gen_data, transmission_data=None, rooftop_da
 
 def create_24hour_generation_chart(pivot_df):
     """
-    Create 24-hour stacked area chart with proper battery handling
+    Create 24-hour stacked area chart with proper battery handling (Plotly).
     """
     try:
         if pivot_df.empty:
             return pn.pane.HTML(
-                "<div style='width:1000px;height:400px;display:flex;align-items:center;justify-content:center;'>"
+                "<div style='height:400px;display:flex;align-items:center;justify-content:center;'>"
                 "<h3>No generation data available for last 24 hours</h3></div>",
-                width=1000, height=400
+                sizing_mode='stretch_width',
             )
-        
+
         # Rename Battery Storage to Battery for consistency
         if 'Battery Storage' in pivot_df.columns:
             pivot_df = pivot_df.rename(columns={'Battery Storage': 'Battery'})
-        
+
         # Get fuel types (exclude any index columns)
         fuel_types = [col for col in pivot_df.columns if col not in ['settlementdate']]
-        
+
         if not fuel_types:
             return pn.pane.HTML(
-                "<div style='width:1000px;height:400px;display:flex;align-items:center;justify-content:center;'>"
+                "<div style='height:400px;display:flex;align-items:center;justify-content:center;'>"
                 "<h3>No fuel type data available</h3></div>",
-                width=1000, height=400
+                sizing_mode='stretch_width',
             )
-        
-        # Separate positive and negative values for battery
-        plot_data_positive = pivot_df.copy()
+
         battery_col = 'Battery'
-        has_battery = battery_col in plot_data_positive.columns
-        
-        # Handle battery - only keep positive values in main plot
-        if has_battery:
-            plot_data_positive[battery_col] = plot_data_positive[battery_col].clip(lower=0)
-        
-        # Get fuel types for positive stacking (all fuels)
-        positive_fuel_types = fuel_types
-        
-        # Create main stacked area plot with positive values
-        main_plot = plot_data_positive.hvplot.area(
-            x='settlementdate',
-            y=positive_fuel_types,
-            stacked=True,
-            width=1000,
-            height=400,
-            ylabel='Generation (MW)',
-            xlabel='Time',
-            color=[FUEL_COLORS.get(fuel, '#888888') for fuel in positive_fuel_types],
-            alpha=0.8,
-            hover_cols=['settlementdate'] + positive_fuel_types,
-            legend='right'
-        )
-        
-        # Check if we have negative battery values
+        has_battery = battery_col in pivot_df.columns
+
+        fig = go.Figure()
+
+        # Build cumulative stack for positive values
+        x = pivot_df.index
+
+        for fuel in fuel_types:
+            values = pivot_df[fuel].copy()
+            # Clip battery to positive for the main stack
+            if fuel == battery_col:
+                values = values.clip(lower=0)
+
+            color = FUEL_COLORS.get(fuel, '#888888')
+
+            fig.add_trace(go.Scatter(
+                x=x,
+                y=values,
+                name=fuel,
+                mode='lines',
+                line=dict(width=0),
+                fillcolor=color,
+                fill='tonexty' if fuel != fuel_types[0] else 'tozeroy',
+                stackgroup='positive',
+                opacity=0.8,
+                hovertemplate=f'{fuel}: %{{y:,.0f}} MW<extra></extra>',
+            ))
+
+        # Add negative battery area if present
         if has_battery and (pivot_df[battery_col].values < 0).any():
-            # Create negative battery data
-            plot_data_negative = pd.DataFrame(index=pivot_df.index)
-            plot_data_negative['settlementdate'] = plot_data_negative.index
-            plot_data_negative[battery_col] = pd.Series(
-                np.where(pivot_df[battery_col].values < 0, pivot_df[battery_col].values, 0),
-                index=pivot_df.index
-            )
-            
-            # Create battery negative area plot
-            battery_negative_plot = plot_data_negative.hvplot.area(
-                x='settlementdate',
-                y=battery_col,
-                stacked=False,
-                width=1000,
-                height=400,
-                color=FUEL_COLORS.get('Battery', '#9370DB'),
-                alpha=0.8,
-                hover=True,
-                legend=False  # Legend already shown in main plot
-            )
-            
-            # Combine positive and negative plots
-            area_plot = main_plot * battery_negative_plot
-        else:
-            area_plot = main_plot
-        
-        # Apply styling options with Flexoki Light theme
-        # Use hooks to set legend and plot area backgrounds explicitly
-        area_plot = area_plot.opts(
-            title="NEM Generation - Last 24 Hours",
-            show_grid=False,
-            toolbar='above',
-            fontsize={'title': 14, 'labels': 12, 'xticks': 10, 'yticks': 10},
-            bgcolor=FLEXOKI_PAPER,  # Flexoki Light background
-            hooks=[set_flexoki_background]  # Apply hook to set legend/border backgrounds
+            neg_values = pivot_df[battery_col].clip(upper=0)
+            fig.add_trace(go.Scatter(
+                x=x,
+                y=neg_values,
+                name='Battery (charging)',
+                mode='lines',
+                line=dict(width=0),
+                fillcolor=FUEL_COLORS.get('Battery', '#9370DB'),
+                fill='tozeroy',
+                opacity=0.8,
+                showlegend=False,
+                hovertemplate='Battery charging: %{y:,.0f} MW<extra></extra>',
+            ))
+
+        fig.update_layout(
+            autosize=True,
+            height=400,
+            paper_bgcolor=FLEXOKI_PAPER,
+            plot_bgcolor=FLEXOKI_PAPER,
+            title=dict(
+                text='NEM Generation - Last 24 Hours',
+                font=dict(size=14, color=FLEXOKI_BLACK),
+            ),
+            legend=dict(
+                orientation='v', yanchor='top', y=1, xanchor='left', x=1.02,
+                bgcolor=FLEXOKI_PAPER, font=dict(size=10),
+            ),
+            margin=dict(r=150, t=40, l=60, b=40),
+            xaxis=dict(title='Time', showgrid=False, tickfont=dict(color=FLEXOKI_BASE[800])),
+            yaxis=dict(title='Generation (MW)', showgrid=False, tickfont=dict(color=FLEXOKI_BASE[800])),
         )
-        
-        return pn.pane.HoloViews(area_plot, sizing_mode='fixed', width=1000, height=400, 
-                                css_classes=['chart-no-border'],
-                                linked_axes=False)  # Disable axis linking to prevent UFuncTypeError
-        
+
+        return pn.pane.Plotly(fig, sizing_mode='stretch_width')
+
     except Exception as e:
         logger.error(f"Error creating generation chart: {e}")
         return pn.pane.HTML(
-            f"<div style='width:1000px;height:400px;display:flex;align-items:center;justify-content:center;'>"
+            f"<div style='height:400px;display:flex;align-items:center;justify-content:center;'>"
             f"<h3>Error creating chart: {e}</h3></div>",
-            width=1000, height=400
+            sizing_mode='stretch_width',
         )
 
 
@@ -514,9 +474,9 @@ def create_generation_overview_component(dashboard_instance=None):
         except Exception as e:
             logger.error(f"Error updating generation overview: {e}")
             return pn.pane.HTML(
-                f"<div style='width:1000px;height:400px;display:flex;align-items:center;justify-content:center;'>"
+                f"<div style='height:400px;display:flex;align-items:center;justify-content:center;'>"
                 f"<h3>Error loading generation overview: {e}</h3></div>",
-                width=1000, height=400
+                sizing_mode='stretch_width',
             )
     
     return pn.pane.panel(update_generation_overview)
@@ -524,13 +484,12 @@ def create_generation_overview_component(dashboard_instance=None):
 
 if __name__ == "__main__":
     # Test the generation overview component
-    pn.extension('bokeh')
-    hv.extension('bokeh')
-    
+    pn.extension('plotly')
+
     overview = create_generation_overview_component()
-    
+
     layout = pn.Column(
         pn.pane.Markdown("## 24-Hour Generation Overview Test"),
-        overview
+        overview,
     )
     layout.show()
