@@ -91,37 +91,40 @@ class InsightsTab:
         
     def _setup_controls(self):
         """Set up all control widgets (same as Prices tab)"""
-        # Date preset radio buttons (vertical like frequency)
-        self.date_presets = pn.widgets.RadioBoxGroup(
+        # Mapping dicts: compact label -> original value used in callbacks
+        self._preset_map = {
+            '1d': '1 day', '7d': '7 days', '30d': '30 days',
+            '90d': '90 days', '1y': '1 year', 'All': 'All data'
+        }
+        self._freq_map = {
+            '5m': '5 min', '1h': '1 hour', 'D': 'Daily',
+            'M': 'Monthly', 'Q': 'Quarterly', 'Y': 'Yearly'
+        }
+
+        # Date preset toggle buttons (horizontal, compact labels)
+        self.date_presets = pn.widgets.RadioButtonGroup(
             name='',
-            options=['1 day', '7 days', '30 days', '90 days', '1 year', 'All data'],
-            value='30 days',
-            inline=False,
-            width=100
+            options=list(self._preset_map.keys()),
+            value='30d',
+            button_type='default'
         )
-        
+
         # Date pickers
         default_end = pd.Timestamp.now().date()
         default_start = default_end - pd.Timedelta(days=30)
-        
+
         self.start_date_picker = pn.widgets.DatePicker(
             name='Start Date',
             value=default_start,
             width=120
         )
-        
+
         self.end_date_picker = pn.widgets.DatePicker(
             name='End Date',
             value=default_end,
             width=120
         )
-        
-        # Show selected dates clearly
-        self.date_display = pn.pane.Markdown(
-            f"**Selected Period:** {self.start_date_picker.value.strftime('%Y-%m-%d')} to {self.end_date_picker.value.strftime('%Y-%m-%d')}",
-            width=300
-        )
-        
+
         # Region radio button group
         # Define region colors - Flexoki Light compatible
         self.region_colors = {
@@ -132,48 +135,47 @@ class InsightsTab:
             'VIC1': '#8B7EC8',  # Flexoki Purple
             'NEM': '#100F0F'    # Flexoki Black for NEM (all regions)
         }
-        
-        # Create standard RadioBoxGroup (no color styling)
+
+        # Create inline RadioBoxGroup for regions
         self.region_selector = pn.widgets.RadioBoxGroup(
             name='',
             value='NEM',  # Default to NEM
             options=['NEM', 'NSW1', 'QLD1', 'SA1', 'TAS1', 'VIC1'],
-            inline=False,
+            inline=True,
             align='start',
             margin=(0, 0, 0, 0)
         )
-        
-        
-        # Aggregate level radio buttons
-        self.aggregate_selector = pn.widgets.RadioBoxGroup(
+
+
+        # Aggregate level toggle buttons (horizontal, compact labels)
+        self.aggregate_selector = pn.widgets.RadioButtonGroup(
             name='',
-            value='1 hour',
-            options=['5 min', '1 hour', 'Daily', 'Monthly', 'Quarterly', 'Yearly'],
-            inline=False,
-            width=120
+            value='1h',
+            options=list(self._freq_map.keys()),
+            button_type='default'
         )
-        
+
         # Battery metric selector for lollipop chart
         self.metric_selector = pn.widgets.Select(
             name='Battery Metric',
             value='Discharge Revenue',
             options=[
                 'Discharge Revenue',
-                'Charge Cost', 
+                'Charge Cost',
                 'Discharge Price',
                 'Charge Price',
                 'Discharge Energy',
                 'Charge Energy',
                 'Price Spread'
             ],
-            width=150
+            width=180
         )
-        
+
         # Update button for loading battery analysis
         self.update_button = pn.widgets.Button(
-            name='Update Battery Analysis',
-            button_type='primary',
-            width=150
+            name='\u25cf Update Analysis',
+            button_type='success',
+            width=160
         )
         
         # Set up callbacks
@@ -305,9 +307,9 @@ class InsightsTab:
 
         # Analyze button
         self.region_analyze_button = pn.widgets.Button(
-            name='Analyze Fleet',
-            button_type='primary',
-            width=130
+            name='\u25cf Analyze Fleet',
+            button_type='success',
+            width=140
         )
 
         # Results panes
@@ -1040,12 +1042,13 @@ class InsightsTab:
 
     def _setup_callbacks(self):
         """Set up widget callbacks"""
-        # Date preset callback
+        # Date preset callback — maps compact labels to original values
         def update_date_range(event):
             """Update date range based on preset selection"""
-            preset = event.new
+            compact = event.new
+            preset = self._preset_map.get(compact, compact)
             current_end = self.end_date_picker.value
-            
+
             if preset == '1 day':
                 new_start = current_end - pd.Timedelta(days=1)
             elif preset == '7 days':
@@ -1058,23 +1061,18 @@ class InsightsTab:
                 new_start = current_end - pd.Timedelta(days=365)
             else:  # All data
                 new_start = pd.Timestamp('2020-01-01').date()
-            
+
             self.start_date_picker.value = new_start
-        
-        # Date picker callback
-        def update_date_display(event):
-            """Update the date display when date pickers change"""
-            self.date_display.object = f"**Selected Period:** {self.start_date_picker.value.strftime('%Y-%m-%d')} to {self.end_date_picker.value.strftime('%Y-%m-%d')}"
-        
+
         # Update button callback
         def update_insights(event):
             """Update battery analysis based on current selections"""
             logger.info(f"Updating battery analysis for regions: {self.region_selector.value}")
             logger.info(f"Date range: {self.start_date_picker.value} to {self.end_date_picker.value}")
-            
+
             # Clear the dynamic content pane
             self.dynamic_content_pane.object = ""
-            
+
             # Battery analysis will be implemented here
             self.battery_content_pane.clear()
             self.battery_content_pane.append(pn.pane.HTML("""
@@ -1090,11 +1088,9 @@ class InsightsTab:
                 <p style="color: #100F0F;">Analysis for selected regions and date range will appear here.</p>
             </div>
             """))
-        
+
         # Connect callbacks
         self.date_presets.param.watch(update_date_range, 'value')
-        self.start_date_picker.param.watch(update_date_display, 'value')
-        self.end_date_picker.param.watch(update_date_display, 'value')
         self.update_button.on_click(self._create_battery_lollipop_chart)
     
     def _calculate_battery_metrics(self, event=None):
@@ -2139,67 +2135,43 @@ class InsightsTab:
     def create_layout(self) -> pn.Column:
         """Create the complete batteries tab layout with subtabs"""
 
-        # Create Overview subtab content (original content)
-        # Left column - all controls
-        region_group = pn.Column(
-            "### Region",
-            self.region_selector,  # Use the simple selector without color styling
-            align='start',
-            width=120  # Standard width for radio buttons
-        )
-        
-        frequency_group = pn.Column(
-            "### Frequency",
-            self.aggregate_selector,
-            width=120
-        )
-        
-        top_controls = pn.Row(
-            region_group,
-            pn.Spacer(width=10),
-            frequency_group,
-            align='start'
-        )
-        
-        # Date controls in one row
-        date_controls = pn.Row(
-            pn.Column(
-                "Start Date",
-                self.start_date_picker,
-                width=100
-            ),
-            pn.Column(
-                "End Date", 
-                self.end_date_picker,
-                width=100
-            ),
-            pn.Column(
-                "Quick Select",
-                self.date_presets,
-                width=100
-            ),
-            align='start'
-        )
-        
-        # Combine all controls
-        controls_column = pn.Column(
-            "## Battery Analysis Controls",
-            pn.Spacer(height=10),
-            top_controls,
-            pn.Spacer(height=15),
-            "### Date Range",
-            date_controls,
-            self.date_display,
-            pn.Spacer(height=15),
-            "### Analysis Options",
-            self.metric_selector,
-            pn.Spacer(height=20),
+        # Create Overview subtab content — horizontal control bar + full-width charts
+
+        # Row 1: update button + region selector (inline) + frequency toggle
+        controls_row1 = pn.Row(
             self.update_button,
-            width=350,
-            margin=(0, 20, 0, 0),
-            align='start'
+            pn.Spacer(width=20),
+            pn.pane.Markdown("**Region**", margin=(8, 6, 0, 0)),
+            self.region_selector,
+            pn.Spacer(width=20),
+            pn.pane.Markdown("**Freq**", margin=(8, 6, 0, 0)),
+            self.aggregate_selector,
+            align='center'
         )
-        
+
+        # Row 2: date presets + date pickers + metric selector
+        controls_row2 = pn.Row(
+            self.date_presets,
+            pn.Spacer(width=15),
+            self.start_date_picker,
+            pn.Spacer(width=8),
+            self.end_date_picker,
+            pn.Spacer(width=20),
+            self.metric_selector,
+            align='center'
+        )
+
+        controls_bar = pn.Column(
+            controls_row1,
+            controls_row2,
+            sizing_mode='stretch_width',
+            styles={
+                'border-bottom': '1px solid #CECDC3',
+                'padding-bottom': '8px',
+                'margin-bottom': '10px'
+            }
+        )
+
         # Main content area - battery analysis with lollipop chart
         main_content = pn.Column(
             self.battery_info_pane,
@@ -2209,18 +2181,12 @@ class InsightsTab:
             self.dynamic_content_pane,
             sizing_mode='stretch_width'
         )
-        
-        # Right side - content area for overview
-        overview_content = pn.Column(
+
+        # Full-width overview: control bar on top, charts below
+        overview_tab = pn.Column(
+            controls_bar,
             main_content,
-            sizing_mode='stretch_both'
-        )
-        
-        # Complete overview tab layout - controls on left, content on right
-        overview_tab = pn.Row(
-            controls_column,
-            overview_content,
-            sizing_mode='stretch_both'
+            sizing_mode='stretch_width'
         )
         
         # Create Fleet subtab content — top bar + three-column filters + chart
@@ -2258,12 +2224,12 @@ class InsightsTab:
         analyze_col = pn.Column(
             pn.Spacer(height=18),
             self.region_analyze_button,
-            width=135
+            width=145
         )
         controls_row = pn.Row(
+            analyze_col,
             date_block, freq_block,
             region_col, owner_col, battery_col,
-            analyze_col,
             height=300, sizing_mode='stretch_width',
             align='start', margin=(0, 0, 0, 0)
         )

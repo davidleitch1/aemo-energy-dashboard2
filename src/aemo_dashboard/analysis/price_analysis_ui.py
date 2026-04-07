@@ -176,16 +176,23 @@ class PriceAnalysisUI(param.Parameterized):
                     width=150
                 )
                 
-                # Time range selector with radio buttons (same as generation tab)
-                self.time_range_widget = pn.widgets.RadioBoxGroup(
-                    name="",  # Empty name since we add label separately
-                    value=self.time_range,
-                    options=['1', '7', '30', 'All'],
-                    inline=True,  # Horizontal layout
-                    width=250
+                # Time range selector with compact button group
+                self._time_range_label_to_value = {'1d': '1', '7d': '7', '30d': '30', 'All': 'All'}
+                self._time_range_value_to_label = {v: k for k, v in self._time_range_label_to_value.items()}
+                self.time_range_widget = pn.widgets.RadioButtonGroup(
+                    name="",
+                    value=self._time_range_value_to_label.get(self.time_range, 'All'),
+                    options=list(self._time_range_label_to_value.keys()),
+                    button_type='default',
+                    width=200
                 )
-                self.time_range_widget.link(self, value='time_range')
-                
+                # Custom link: translate label back to value for the param
+                def _sync_time_range(event):
+                    mapped = self._time_range_label_to_value.get(event.new, event.new)
+                    if self.time_range != mapped:
+                        self.time_range = mapped
+                self.time_range_widget.param.watch(_sync_time_range, 'value')
+
                 # Set initial active preset to "All Data"
                 self.active_date_preset = None
                 
@@ -354,24 +361,22 @@ class PriceAnalysisUI(param.Parameterized):
                 width=400
             )
             
-            # Region filters with shorter names and compact spacing
+            # Region filters — inline for horizontal control bar
             self.region_filters = pn.widgets.CheckBoxGroup(
-                name="Regions:",
+                name="",
                 value=regions,  # Default: all regions
                 options=regions,
-                inline=False,  # Vertical layout within the column
-                width=120,
-                margin=(5, 0)  # Tighter spacing
+                inline=True,
+                margin=(5, 0)
             )
-            
-            # Fuel filters with shorter names and compact spacing
+
+            # Fuel filters — inline for horizontal control bar
             self.fuel_filters = pn.widgets.CheckBoxGroup(
-                name="Fuels:",
+                name="",
                 value=fuels,  # Default: all fuels
                 options=fuels,
-                inline=False,  # Vertical layout within the column
-                width=140,
-                margin=(5, 0)  # Tighter spacing
+                inline=True,
+                margin=(5, 0)
             )
             
             # Uncheck All checkboxes (act like master switches)
@@ -391,9 +396,9 @@ class PriceAnalysisUI(param.Parameterized):
             
             # Unified update button for all changes
             self.update_analysis_button = pn.widgets.Button(
-                name="Update Analysis",
-                button_type="primary",
-                width=150
+                name="\u25cf Update Analysis",
+                button_type="success",
+                width=170
             )
             self.update_analysis_button.on_click(self._on_update_analysis)
             
@@ -418,12 +423,11 @@ class PriceAnalysisUI(param.Parameterized):
             ]
             
             self.column_checkboxes = pn.widgets.CheckBoxGroup(
-                name="Columns:",
-                value=column_display_names,  # All columns selected by default - use same list for value and options
-                options=column_display_names,  # Use list directly like working region/fuel filters
-                inline=False,  # Vertical layout within the column
-                width=160,
-                margin=(5, 0)  # Tighter spacing
+                name="",
+                value=column_display_names,  # All columns selected by default
+                options=column_display_names,
+                inline=True,  # Horizontal for control bar
+                margin=(5, 0)
             )
             
             # Uncheck All checkbox for columns
@@ -1152,154 +1156,124 @@ class PriceAnalysisUI(param.Parameterized):
         return columns
     
     def create_layout(self) -> pn.layout.Tabs:
-        """Create the complete UI layout"""
-        
+        """Create the complete UI layout — horizontal control bar at top, full-width content below"""
+
         if not self.data_loaded:
             return pn.Column(
                 "# Average Price Analysis",
                 self.status_text if self.status_text else pn.pane.Markdown("**Status:** Checking..."),
-                pn.pane.Markdown("**❌ Cannot load price analysis - please check data files**"),
+                pn.pane.Markdown("**Cannot load price analysis - please check data files**"),
                 sizing_mode='stretch_width'
             )
-        
-        # Create date range panel
-        if hasattr(self, 'start_date_picker') and hasattr(self.start_date_picker, 'value'):
-            time_range_selector = pn.Column(
-                pn.pane.HTML("<div style='color: #aaa; font-size: 11px; margin-bottom: 4px;'>Days</div>"),
-                self.time_range_widget,
-                width=250,
-                margin=(5, 0)
+
+        # --- Shared label style for section headings inside the control bar ---
+        def _label(text):
+            return pn.pane.HTML(
+                f"<span style='font-weight:600;font-size:12px;color:{FLEXOKI_BASE};white-space:nowrap;'>{text}</span>",
+                margin=(6, 6, 0, 0),
             )
-            
-            date_range_panel = pn.Column(
-                "### Date Range",
-                pn.Row(
-                    self.start_date_picker,
-                    self.end_date_picker,
-                    sizing_mode='stretch_width'
-                ),
-                pn.pane.Markdown("**Quick Presets:**"),
-                time_range_selector,
-                width=350
-            )
-        else:
-            date_range_panel = pn.pane.Markdown("**Date range controls unavailable**")
-        
-        # Create compact horizontal filters panel
-        if hasattr(self.category_selector, 'value'):
-            # Region control section - compact vertical list
-            region_section = pn.Column(
-                "**Regions:**",
+
+        # ── Row 1: Update button  |  Region filters  |  Fuel filters ─────────
+        has_date_controls = hasattr(self, 'start_date_picker') and hasattr(self.start_date_picker, 'value')
+        has_filter_controls = hasattr(self.category_selector, 'value')
+
+        row1_items = [self.update_analysis_button, pn.Spacer(width=20)]
+
+        if has_filter_controls:
+            row1_items += [
+                _label("Region:"),
                 self.uncheck_all_regions_checkbox,
                 self.region_filters,
-                width=120,
-                margin=(0, 5)
-            )
-            
-            # Fuel control section - compact vertical list
-            fuel_section = pn.Column(
-                "**Fuels:**",
+                pn.Spacer(width=16),
+                _label("Fuel:"),
                 self.uncheck_all_fuels_checkbox,
                 self.fuel_filters,
-                width=140,
-                margin=(0, 5)
-            )
-            
-            # Column control section - compact vertical list
-            if hasattr(self.column_checkboxes, 'value'):
-                column_section = pn.Column(
-                    "**Columns:**",
-                    self.uncheck_all_columns_checkbox,
-                    self.column_checkboxes,
-                    width=160,
-                    margin=(0, 5)
-                )
-            else:
-                column_section = pn.Column(
-                    "**Columns:**",
-                    self.column_checkboxes,  # Error message
-                    width=160,
-                    margin=(0, 5)
-                )
-            
-            # Compact horizontal filters panel
-            filters_panel = pn.Column(
-                "### Grouping & Filters",
-                self.category_selector,
-                pn.Row(
-                    region_section,
-                    pn.Spacer(width=10),
-                    fuel_section,
-                    pn.Spacer(width=10),
-                    column_section,
-                    sizing_mode='fixed'
-                ),
-                width=470  # Much more compact total width
-            )
-        else:
-            filters_panel = pn.Column(
-                "### Grouping & Filters",
-                self.category_selector,  # This will be the error message
-                width=470
-            )
-        
-        # Create actions panel with unified update button only
-        actions_panel = pn.Column(
-            "### Actions",
-            self.update_analysis_button,
-            width=150
+            ]
+
+        row1 = pn.Row(
+            *row1_items,
+            sizing_mode='stretch_width',
+            margin=(0, 0, 4, 0),
+            styles={'background': FLEXOKI_PAPER, 'border-bottom': f'1px solid {FLEXOKI_BASE}22'},
         )
-        
-        # Create info panel
-        info_panel = pn.pane.Markdown("""
-        **About Average Price Analysis:**
-        
-        This analysis calculates weighted average electricity prices by aggregating:
-        - **Revenue**: Generation (MW) × Price ($/MWh) × 5-minute intervals
-        - **Average Price**: Total Revenue ÷ Total Generation (MWh)
-        - **Capacity Factor**: Generation ÷ (Capacity × Hours) × 100%
-        
-        Choose different aggregation hierarchies to explore the data from different perspectives.
-        """, width=400)
-        
-        # Main content - table back to the right side with compact controls on left
+
+        # ── Row 2: Date pickers + presets  |  Column checkboxes ───────────────
+        row2_items = []
+        if has_date_controls:
+            row2_items += [
+                _label("Date:"),
+                self.start_date_picker,
+                self.end_date_picker,
+                pn.Spacer(width=10),
+                self.time_range_widget,
+                pn.Spacer(width=20),
+            ]
+
+        if has_filter_controls and hasattr(self.column_checkboxes, 'value'):
+            row2_items += [
+                _label("Columns:"),
+                self.uncheck_all_columns_checkbox,
+                self.column_checkboxes,
+            ]
+        elif has_filter_controls:
+            row2_items += [
+                _label("Columns:"),
+                self.column_checkboxes,  # Error fallback
+            ]
+
+        row2 = pn.Row(
+            *row2_items,
+            sizing_mode='stretch_width',
+            margin=(0, 0, 4, 0),
+            styles={'background': FLEXOKI_PAPER},
+        )
+
+        # ── Row 3: Category selector  |  Status text ─────────────────────────
+        row3_items = []
+        if has_filter_controls:
+            row3_items += [
+                _label("Group by:"),
+                self.category_selector,
+                pn.Spacer(width=30),
+            ]
+        row3_items.append(self.status_text)
+
+        row3 = pn.Row(
+            *row3_items,
+            sizing_mode='stretch_width',
+            margin=(0, 0, 8, 0),
+        )
+
+        # ── Controls bar (all three rows) ─────────────────────────────────────
+        controls_bar = pn.Column(
+            row1, row2, row3,
+            sizing_mode='stretch_width',
+            margin=(0, 0, 10, 0),
+        )
+
+        # ── Content: table title + table + detail ─────────────────────────────
+        table_title_pane = (
+            self.table_title
+            if hasattr(self, 'table_title') and self.table_title is not None
+            else pn.pane.Markdown("## Aggregated Results")
+        )
+
+        content_area = pn.Column(
+            table_title_pane,
+            self.tabulator_container,
+            pn.Spacer(height=15),
+            self.detail_container,
+            sizing_mode='stretch_width',
+        )
+
+        # ── Assemble ──────────────────────────────────────────────────────────
         main_content = pn.Column(
             "# Average Price Analysis",
-            # Status and table title on same row
-            pn.Row(
-                self.status_text,
-                pn.Spacer(width=50),
-                self.table_title if hasattr(self, 'table_title') and self.table_title is not None else pn.pane.Markdown("## Aggregated Results"),
-                sizing_mode='stretch_width'
-            ),
-            pn.Spacer(height=15),
-            # Main content row - controls on left, table on right
-            pn.Row(
-                # Left side - compact controls
-                pn.Column(
-                    "## Controls",
-                    date_range_panel,
-                    pn.Spacer(height=10),
-                    actions_panel,
-                    pn.Spacer(height=15),
-                    filters_panel,
-                    pn.Spacer(height=15),
-                    info_panel,
-                    width=550  # Fixed width for controls
-                ),
-                pn.Spacer(width=20),
-                # Right side - table with full remaining width
-                pn.Column(
-                    self.tabulator_container,
-                    pn.Spacer(height=20),
-                    self.detail_container,
-                    sizing_mode='stretch_width'
-                ),
-                sizing_mode='stretch_width'
-            ),
-            sizing_mode='stretch_width'
+            controls_bar,
+            content_area,
+            sizing_mode='stretch_width',
         )
-        
+
         return main_content
 
 # Factory function for easy integration
