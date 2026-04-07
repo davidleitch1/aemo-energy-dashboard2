@@ -121,3 +121,6 @@ minversion = "7.0"
 addopts = "-ra -q --strict-markers --strict-config"
 testpaths = ["tests"]
 pythonpath = ["src"]
+markers = [
+    "responsive: tests for responsive migration (plotly conversion, sizing, CSS)",
+]
