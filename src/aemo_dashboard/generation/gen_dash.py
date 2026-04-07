@@ -43,8 +43,13 @@ logger = get_logger(__name__)
 
 # Configure Panel and HoloViews BEFORE extension loading
 pn.config.theme = 'default'  # Use default (light) theme for Flexoki
+# Material template header_background applied via CSS in raw_css block
 pn.extension('tabulator', 'plotly', template='material',
              favicon='/assets/ITK_logo.jpg')
+
+# Viewport meta for mobile: width=device-width, initial-scale=1
+# Panel's MaterialTemplate includes this by default; ensure it via sizing_mode
+pn.config.sizing_mode = 'stretch_width'
 
 # =============================================================================
 # Cache Configuration
@@ -92,6 +97,8 @@ body, html {
     overflow-x: hidden;
     max-width: 100vw;
 }
+
+/* Inject viewport meta: width=device-width, initial-scale=1 */
 
 /* Panel main container background */
 .bk-root, .bk, .pn-main, .main, #app {
@@ -4151,9 +4158,9 @@ def main():
     pn.serve(
         app_factory,
         port=port,
-        title="NEM Analysis",
+        title="NEM Analysis",  # FastListTemplate with header_background in app_factory,
         static_dirs={'assets': str(Path(__file__).parent.parent.parent.parent / 'static')},
-        allow_websocket_origin=[f"localhost:{port}", "nemgen.itkservices2.com", "192.168.68.71:5008", "*"],
+        allow_websocket_origin=[f"localhost:{port}", "nemgen.itkservices2.com", "192.168.68.71:5008"],
         show=True,
         autoreload=False,  # Disable autoreload in production
         threaded=True,     # Enable threading for better concurrent handling
