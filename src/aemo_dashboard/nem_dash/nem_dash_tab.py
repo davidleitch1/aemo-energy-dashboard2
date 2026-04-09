@@ -205,7 +205,7 @@ def load_generation_data(hours=24):
 
         # Load rooftop solar using the shared adapter (same as Generation Stack tab)
         try:
-            from ..shared.rooftop_adapter import load_rooftop_data as load_rooftop_adapter
+            from ..shared.rooftop_adapter_duckdb import load_rooftop_data as load_rooftop_adapter
 
             rooftop_data = load_rooftop_adapter()
 

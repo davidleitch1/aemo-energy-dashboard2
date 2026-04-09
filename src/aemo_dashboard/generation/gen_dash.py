@@ -930,10 +930,12 @@ class EnergyDashboard(param.Parameterized):
             net_flows.columns = ['settlementdate', 'net_transmission_mw']
             
             # Create individual line data for the third chart
-            line_data = region_transmission.pivot(
+            # Use pivot_table (not pivot) to handle duplicate timestamp entries
+            line_data = region_transmission.pivot_table(
                 index='settlementdate', 
                 columns='interconnectorid', 
-                values='regional_flow'
+                values='regional_flow',
+                aggfunc='sum'
             ).fillna(0).reset_index()
             
             logger.info(f"Calculated transmission flows for {self.region}: "

@@ -12,9 +12,8 @@ import numpy as np
 import duckdb
 import pickle
 import panel as pn
-import matplotlib.pyplot as plt
-import matplotlib
-matplotlib.use('Agg')  # Non-interactive backend for Panel
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -22,6 +21,9 @@ from scipy.ndimage import uniform_filter1d
 
 from ..shared.logging_config import get_logger
 from ..shared.config import config
+from ..shared.flexoki_theme import (
+    FLEXOKI_PAPER, FLEXOKI_BLACK, FLEXOKI_BASE, FLEXOKI_ACCENT
+)
 
 DUCKDB_PATH = os.getenv('AEMO_DUCKDB_PATH')
 
@@ -299,7 +301,7 @@ class CoalAnalysis:
             end_date: End of period
 
         Returns:
-            DataFrame with hour, station, and avg_generation columns
+            DataFrame with hour, station, and capacity_factor columns
         """
         try:
             # Get DUIDs for these stations (with precise matching)
@@ -365,78 +367,86 @@ class CoalAnalysisUI:
         self.prev_data = None
 
     def _load_data(self):
-        """Load comparison data if not already loaded"""
-        if self.latest_data is None:
-            self.latest_data, self.prev_data = self.engine.get_comparison_data()
+        """Load comparison data (always refresh)"""
+        self.latest_data = None
+        self.prev_data = None
+        self.latest_data, self.prev_data = self.engine.get_comparison_data()
 
     def _create_grouped_hbar_figure(self, merged, value_col_latest, value_col_prev,
-                                      title, xlabel, xlim=None, color_latest='#2ca02c'):
-        """Create a matplotlib grouped horizontal bar chart for comparison data"""
-        n_stations = len(merged)
-        fig_height = max(4, n_stations * 0.35)
+                                      title, xlabel, xlim=None, color_latest=None):
+        """Create a Plotly grouped horizontal bar chart for comparison data"""
+        if color_latest is None:
+            color_latest = FLEXOKI_ACCENT['green']
 
-        # Create figure with dark background
-        fig, ax = plt.subplots(figsize=(8, fig_height))
-        fig.patch.set_facecolor('#282a36')
-        ax.set_facecolor('#282a36')
+        stations = merged['station'].tolist()
 
-        # Y positions for stations
-        y_positions = range(n_stations)
-        bar_height = 0.35
+        fig = go.Figure()
 
-        # Plot bars for latest period
-        bars_latest = ax.barh(
-            [y + bar_height/2 for y in y_positions],
-            merged[value_col_latest],
-            height=bar_height,
-            color=color_latest,
-            label='Latest 12m'
+        # Previous 12m bars (drawn first so latest is on top in legend)
+        fig.add_trace(go.Bar(
+            y=stations,
+            x=merged[value_col_prev],
+            orientation='h',
+            name='Previous 12m',
+            marker_color=FLEXOKI_BASE[300],
+        ))
+
+        # Latest 12m bars
+        fig.add_trace(go.Bar(
+            y=stations,
+            x=merged[value_col_latest],
+            orientation='h',
+            name='Latest 12m',
+            marker_color=color_latest,
+        ))
+
+        n_stations = len(stations)
+        fig_height = max(300, n_stations * 35 + 120)
+
+        layout_kwargs = dict(
+            barmode='group',
+            title=dict(text=title, font=dict(size=13, color=FLEXOKI_BLACK)),
+            xaxis=dict(
+                title=dict(text=xlabel, font=dict(size=11, color=FLEXOKI_BLACK)),
+                tickfont=dict(size=10, color=FLEXOKI_BLACK),
+                showgrid=False,
+                zeroline=False,
+            ),
+            yaxis=dict(
+                tickfont=dict(size=10, color=FLEXOKI_BLACK),
+                showgrid=False,
+            ),
+            paper_bgcolor=FLEXOKI_PAPER,
+            plot_bgcolor=FLEXOKI_PAPER,
+            font=dict(color=FLEXOKI_BLACK),
+            height=fig_height,
+            autosize=True,
+            margin=dict(l=10, r=20, t=40, b=60),
+            legend=dict(
+                orientation='h',
+                yanchor='top',
+                y=-0.12,
+                xanchor='center',
+                x=0.5,
+                font=dict(size=10, color=FLEXOKI_BLACK),
+                bgcolor='rgba(0,0,0,0)',
+            ),
         )
 
-        # Plot bars for previous period (gray)
-        bars_prev = ax.barh(
-            [y - bar_height/2 for y in y_positions],
-            merged[value_col_prev],
-            height=bar_height,
-            color='#7f7f7f',
-            label='Previous 12m'
-        )
-
-        # Set y-axis labels (station names)
-        ax.set_yticks(list(y_positions))
-        ax.set_yticklabels(merged['station'].tolist(), fontsize=9)
-
-        # Set x-axis limits
         if xlim:
-            ax.set_xlim(xlim)
-        else:
-            ax.set_xlim(left=0)
+            layout_kwargs['xaxis']['range'] = list(xlim)
 
-        # Set y-axis limits with padding
-        ax.set_ylim(-0.5, n_stations - 0.5)
+        fig.update_layout(**layout_kwargs)
 
-        # Remove spines
-        for spine in ax.spines.values():
-            spine.set_visible(False)
+        # Attribution annotation
+        fig.add_annotation(
+            text='Design: ITK, Data: AEMO',
+            xref='paper', yref='paper',
+            x=1.0, y=-0.18,
+            showarrow=False,
+            font=dict(size=9, color=FLEXOKI_BASE[600]),
+        )
 
-        # Remove ticks
-        ax.tick_params(axis='both', length=0)
-
-        # Style labels for dark theme
-        ax.tick_params(axis='x', colors='#f8f8f2', labelsize=9)
-        ax.tick_params(axis='y', colors='#f8f8f2')
-        ax.xaxis.label.set_color('#f8f8f2')
-
-        # Title and labels
-        ax.set_title(title, color='#f8f8f2', fontsize=12, pad=8)
-        ax.set_xlabel(xlabel, color='#f8f8f2', fontsize=10)
-
-        # Legend - place below the chart
-        ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.08),
-                 ncol=2, facecolor='#282a36', edgecolor='none',
-                 labelcolor='#f8f8f2', fontsize=9)
-
-        plt.tight_layout()
         return fig
 
     def create_revenue_plot(self):
@@ -458,24 +468,16 @@ class CoalAnalysisUI:
             # Sort by latest revenue (ascending so highest at top in plot)
             merged = merged.sort_values('revenue_millions_latest', ascending=True).reset_index(drop=True)
 
-            # Create matplotlib figure
             fig = self._create_grouped_hbar_figure(
                 merged,
                 value_col_latest='revenue_millions_latest',
                 value_col_prev='revenue_millions_prev',
                 title='Coal Station Revenue Comparison',
                 xlabel='Revenue ($M)',
-                color_latest='#2ca02c'  # Green
+                color_latest=FLEXOKI_ACCENT['green'],
             )
 
-            # Add attribution
-            attribution = pn.pane.HTML(
-                "<div style='text-align: right; font-size: 9pt; color: #6272a4; margin-top: 5px;'>"
-                "Design: ITK, Data: AEMO"
-                "</div>"
-            )
-
-            return pn.Column(pn.pane.Matplotlib(fig, tight=True), attribution)
+            return pn.pane.Plotly(fig, sizing_mode='stretch_width')
 
         except Exception as e:
             logger.error(f"Error creating revenue plot: {e}")
@@ -502,7 +504,6 @@ class CoalAnalysisUI:
             # Sort by latest capacity factor (ascending so highest at top in plot)
             merged = merged.sort_values('capacity_factor_latest', ascending=True).reset_index(drop=True)
 
-            # Create matplotlib figure with xlim 0-100%
             fig = self._create_grouped_hbar_figure(
                 merged,
                 value_col_latest='capacity_factor_latest',
@@ -510,17 +511,10 @@ class CoalAnalysisUI:
                 title='Coal Station Capacity Utilization Comparison',
                 xlabel='Capacity Utilization (%)',
                 xlim=(0, 100),
-                color_latest='#1f77b4'  # Blue
+                color_latest=FLEXOKI_ACCENT['blue'],
             )
 
-            # Add attribution
-            attribution = pn.pane.HTML(
-                "<div style='text-align: right; font-size: 9pt; color: #6272a4; margin-top: 5px;'>"
-                "Design: ITK, Data: AEMO"
-                "</div>"
-            )
-
-            return pn.Column(pn.pane.Matplotlib(fig, tight=True), attribution)
+            return pn.pane.Plotly(fig, sizing_mode='stretch_width')
 
         except Exception as e:
             logger.error(f"Error creating utilization plot: {e}")
@@ -531,6 +525,10 @@ class CoalAnalysisUI:
     def create_content(self):
         """Create the full Coal analysis content"""
         try:
+            # Force data refresh
+            self.latest_data = None
+            self.prev_data = None
+
             # Create both plots
             revenue_plot = self.create_revenue_plot()
             utilization_plot = self.create_utilization_plot()
@@ -558,23 +556,25 @@ class CoalAnalysisUI:
 
 
 def create_coal_tab():
-    """Factory function to create coal analysis tab content"""
-    try:
-        ui = CoalAnalysisUI()
-        return ui.create_content()
-    except Exception as e:
-        logger.error(f"Error creating coal tab: {e}")
-        return pn.pane.Markdown(f"Error creating coal analysis tab: {e}")
+    """Factory function to create coal analysis tab content — refreshes on each view"""
+    def _build():
+        try:
+            ui = CoalAnalysisUI()
+            return ui.create_content()
+        except Exception as e:
+            logger.error(f"Error creating coal tab: {e}")
+            return pn.pane.Markdown(f"Error creating coal analysis tab: {e}")
+    return pn.panel(_build, loading_indicator=True)
 
 
 class CoalEvolutionUI:
     """UI components for coal evolution analysis subtab"""
 
-    # Station colors for consistency
+    # Station colors — Flexoki accent palette
     STATION_COLORS = {
-        'Bayswater': '#e41a1c',      # Red
-        'Tarong': '#377eb8',          # Blue
-        'Loy Yang B': '#4daf4a',      # Green
+        'Bayswater': FLEXOKI_ACCENT['red'],     # #AF3029
+        'Tarong': FLEXOKI_ACCENT['blue'],        # #205EA6
+        'Loy Yang B': FLEXOKI_ACCENT['green'],   # #66800B
     }
 
     def __init__(self):
@@ -584,31 +584,34 @@ class CoalEvolutionUI:
         self.hourly_historical = None
 
     def _load_data(self):
-        """Load all data for evolution analysis"""
-        if self.daily_cf_data is None:
-            # Get daily capacity factor for all time
-            self.daily_cf_data = self.engine.get_daily_capacity_factor(EVOLUTION_STATIONS)
+        """Load all data for evolution analysis (always refresh)"""
+        self.daily_cf_data = None
+        self.hourly_latest = None
+        self.hourly_historical = None
 
-            # Get hourly patterns for latest 12 months
-            now = datetime.now()
-            latest_start = now - timedelta(days=365)
-            self.hourly_latest = self.engine.get_hourly_pattern(
-                EVOLUTION_STATIONS, latest_start, now
-            )
+        # Get daily capacity factor for all time
+        self.daily_cf_data = self.engine.get_daily_capacity_factor(EVOLUTION_STATIONS)
 
-            # Get hourly patterns for 5 years ago (12 month period)
-            historical_end = now - timedelta(days=5*365)
-            historical_start = historical_end - timedelta(days=365)
-            self.hourly_historical = self.engine.get_hourly_pattern(
-                EVOLUTION_STATIONS, historical_start, historical_end
-            )
+        # Get hourly patterns for latest 12 months
+        now = datetime.now()
+        latest_start = now - timedelta(days=365)
+        self.hourly_latest = self.engine.get_hourly_pattern(
+            EVOLUTION_STATIONS, latest_start, now
+        )
+
+        # Get hourly patterns for 5 years ago (12 month period)
+        historical_end = now - timedelta(days=5*365)
+        historical_start = historical_end - timedelta(days=365)
+        self.hourly_historical = self.engine.get_hourly_pattern(
+            EVOLUTION_STATIONS, historical_start, historical_end
+        )
 
     def _get_station_color(self, station_name: str) -> str:
         """Get color for a station, handling partial name matches"""
         for key, color in self.STATION_COLORS.items():
             if key.lower() in station_name.lower():
                 return color
-        return '#999999'  # Default gray
+        return FLEXOKI_BASE[400]  # Default gray
 
     def _get_station_short_name(self, station_name: str) -> str:
         """Get short display name for station"""
@@ -618,16 +621,14 @@ class CoalEvolutionUI:
         return station_name
 
     def create_utilization_trend_plot(self):
-        """Create capacity utilization trend chart with 90-day MA and LOESS smoothing"""
+        """Create capacity utilization trend chart with 90-day MA smoothing"""
         try:
             self._load_data()
 
             if self.daily_cf_data.empty:
                 return pn.pane.Markdown("No data available for capacity utilization trend")
 
-            fig, ax = plt.subplots(figsize=(10, 5))
-            fig.patch.set_facecolor('#282a36')
-            ax.set_facecolor('#282a36')
+            fig = go.Figure()
 
             # Plot each station
             for station in self.daily_cf_data['station'].unique():
@@ -643,51 +644,66 @@ class CoalEvolutionUI:
                     window=90, min_periods=45
                 ).mean()
 
-                # Apply additional smoothing using uniform filter (similar to LOESS effect)
+                # Apply additional smoothing using uniform filter
                 valid_data = station_data.dropna(subset=['ma_90'])
                 if len(valid_data) > 30:
-                    # Apply light smoothing
                     smoothed = uniform_filter1d(valid_data['ma_90'].values, size=30)
 
                     color = self._get_station_color(station)
                     short_name = self._get_station_short_name(station)
 
-                    ax.plot(
-                        valid_data['date'].values,
-                        smoothed,
-                        color=color,
-                        linewidth=2,
-                        label=short_name
-                    )
+                    fig.add_trace(go.Scatter(
+                        x=valid_data['date'],
+                        y=smoothed,
+                        mode='lines',
+                        name=short_name,
+                        line=dict(color=color, width=2),
+                    ))
 
-            # Style the plot
-            ax.set_ylim(0, 100)
-            ax.set_ylabel('Capacity Utilization (%)', color='#f8f8f2', fontsize=10)
-            ax.set_xlabel('')
-            ax.set_title('Coal Station Capacity Utilization Over Time (90-day smoothed)',
-                        color='#f8f8f2', fontsize=12, pad=10)
-
-            # Remove spines
-            for spine in ax.spines.values():
-                spine.set_visible(False)
-
-            ax.tick_params(axis='both', length=0, colors='#f8f8f2', labelsize=9)
-            ax.yaxis.grid(True, color='#44475a', alpha=0.3, linestyle='-')
-
-            # Legend
-            ax.legend(loc='upper right', facecolor='#282a36', edgecolor='none',
-                     labelcolor='#f8f8f2', fontsize=9)
-
-            plt.tight_layout()
-
-            # Attribution
-            attribution = pn.pane.HTML(
-                "<div style='text-align: right; font-size: 9pt; color: #6272a4; margin-top: 5px;'>"
-                "Design: ITK, Data: AEMO"
-                "</div>"
+            fig.update_layout(
+                title=dict(
+                    text='Coal Station Capacity Utilization Over Time (90-day smoothed)',
+                    font=dict(size=13, color=FLEXOKI_BLACK),
+                ),
+                xaxis=dict(
+                    tickfont=dict(size=10, color=FLEXOKI_BLACK),
+                    showgrid=False,
+                    zeroline=False,
+                ),
+                yaxis=dict(
+                    title=dict(text='Capacity Utilization (%)', font=dict(size=11, color=FLEXOKI_BLACK)),
+                    range=[0, 100],
+                    tickfont=dict(size=10, color=FLEXOKI_BLACK),
+                    gridcolor=FLEXOKI_BASE[100],
+                    gridwidth=0.5,
+                    zeroline=False,
+                ),
+                paper_bgcolor=FLEXOKI_PAPER,
+                plot_bgcolor=FLEXOKI_PAPER,
+                font=dict(color=FLEXOKI_BLACK),
+                height=400,
+                autosize=True,
+                margin=dict(l=10, r=20, t=40, b=50),
+                legend=dict(
+                    yanchor='top',
+                    y=0.99,
+                    xanchor='right',
+                    x=0.99,
+                    font=dict(size=10, color=FLEXOKI_BLACK),
+                    bgcolor='rgba(0,0,0,0)',
+                ),
             )
 
-            return pn.Column(pn.pane.Matplotlib(fig, tight=True), attribution)
+            # Attribution annotation
+            fig.add_annotation(
+                text='Design: ITK, Data: AEMO',
+                xref='paper', yref='paper',
+                x=1.0, y=-0.10,
+                showarrow=False,
+                font=dict(size=9, color=FLEXOKI_BASE[600]),
+            )
+
+            return pn.pane.Plotly(fig, sizing_mode='stretch_width')
 
         except Exception as e:
             logger.error(f"Error creating utilization trend plot: {e}")
@@ -707,77 +723,109 @@ class CoalEvolutionUI:
             stations = self.hourly_latest['station'].unique()
             n_stations = len(stations)
 
-            fig, axes = plt.subplots(1, n_stations, figsize=(10, 4), sharey=True)
-            fig.patch.set_facecolor('#282a36')
-
-            if n_stations == 1:
-                axes = [axes]
+            fig = make_subplots(
+                rows=1, cols=n_stations,
+                shared_yaxes=True,
+                subplot_titles=[self._get_station_short_name(s) for s in stations],
+                horizontal_spacing=0.05,
+            )
 
             for idx, station in enumerate(stations):
-                ax = axes[idx]
-                ax.set_facecolor('#282a36')
-
+                col = idx + 1
                 color = self._get_station_color(station)
-                short_name = self._get_station_short_name(station)
 
                 # Latest data
                 latest = self.hourly_latest[self.hourly_latest['station'] == station]
                 if not latest.empty:
-                    ax.plot(
-                        latest['hour'].values,
-                        latest['capacity_factor'].values,
-                        color=color,
-                        linewidth=2,
-                        label='Latest 12m'
+                    fig.add_trace(
+                        go.Scatter(
+                            x=latest['hour'],
+                            y=latest['capacity_factor'],
+                            mode='lines',
+                            name='Latest 12m',
+                            line=dict(color=color, width=2),
+                            showlegend=(idx == n_stations - 1),
+                        ),
+                        row=1, col=col,
                     )
 
                 # Historical data (5 years ago)
-                if not self.hourly_historical.empty:
+                if self.hourly_historical is not None and not self.hourly_historical.empty:
                     historical = self.hourly_historical[
                         self.hourly_historical['station'] == station
                     ]
                     if not historical.empty:
-                        ax.plot(
-                            historical['hour'].values,
-                            historical['capacity_factor'].values,
-                            color=color,
-                            linewidth=2,
-                            linestyle='--',
-                            alpha=0.6,
-                            label='5 years ago'
+                        fig.add_trace(
+                            go.Scatter(
+                                x=historical['hour'],
+                                y=historical['capacity_factor'],
+                                mode='lines',
+                                name='5 years ago',
+                                line=dict(color=color, width=2, dash='dash'),
+                                opacity=0.6,
+                                showlegend=(idx == n_stations - 1),
+                            ),
+                            row=1, col=col,
                         )
 
-                ax.set_title(short_name, color='#f8f8f2', fontsize=11)
-                ax.set_xlabel('Hour of Day', color='#f8f8f2', fontsize=9)
-                if idx == 0:
-                    ax.set_ylabel('Capacity Factor (%)', color='#f8f8f2', fontsize=9)
+                # Per-subplot axis styling
+                fig.update_xaxes(
+                    range=[0, 23],
+                    tickvals=[0, 6, 12, 18, 23],
+                    title_text='Hour of Day' if idx == n_stations // 2 else '',
+                    tickfont=dict(size=9, color=FLEXOKI_BLACK),
+                    showgrid=False,
+                    zeroline=False,
+                    row=1, col=col,
+                )
+                fig.update_yaxes(
+                    range=[0, 100],
+                    gridcolor=FLEXOKI_BASE[100],
+                    gridwidth=0.5,
+                    zeroline=False,
+                    tickfont=dict(size=9, color=FLEXOKI_BLACK),
+                    row=1, col=col,
+                )
 
-                ax.set_xlim(0, 23)
-                ax.set_ylim(0, 100)
-                ax.set_xticks([0, 6, 12, 18, 23])
-
-                # Remove spines
-                for spine in ax.spines.values():
-                    spine.set_visible(False)
-
-                ax.tick_params(axis='both', length=0, colors='#f8f8f2', labelsize=8)
-                ax.yaxis.grid(True, color='#44475a', alpha=0.3, linestyle='-')
-
-                if idx == n_stations - 1:
-                    ax.legend(loc='upper right', facecolor='#282a36', edgecolor='none',
-                             labelcolor='#f8f8f2', fontsize=8)
-
-            fig.suptitle('Time of Day Dispatch Pattern', color='#f8f8f2', fontsize=12, y=1.02)
-            plt.tight_layout()
-
-            # Attribution
-            attribution = pn.pane.HTML(
-                "<div style='text-align: right; font-size: 9pt; color: #6272a4; margin-top: 5px;'>"
-                "Design: ITK, Data: AEMO"
-                "</div>"
+            # First y-axis label
+            fig.update_yaxes(
+                title_text='Capacity Factor (%)',
+                title_font=dict(size=10, color=FLEXOKI_BLACK),
+                row=1, col=1,
             )
 
-            return pn.Column(pn.pane.Matplotlib(fig, tight=True), attribution)
+            fig.update_layout(
+                title=dict(
+                    text='Time of Day Dispatch Pattern',
+                    font=dict(size=13, color=FLEXOKI_BLACK),
+                ),
+                paper_bgcolor=FLEXOKI_PAPER,
+                plot_bgcolor=FLEXOKI_PAPER,
+                font=dict(color=FLEXOKI_BLACK),
+                height=350,
+                autosize=True,
+                margin=dict(l=10, r=20, t=50, b=60),
+                legend=dict(
+                    orientation='h',
+                    yanchor='top',
+                    y=-0.18,
+                    xanchor='center',
+                    x=0.5,
+                    font=dict(size=10, color=FLEXOKI_BLACK),
+                    bgcolor='rgba(0,0,0,0)',
+                ),
+            )
+
+            # Attribution annotation
+            fig.add_annotation(
+                text='Design: ITK, Data: AEMO',
+                xref='paper', yref='paper',
+                x=1.0, y=-0.25,
+                showarrow=False,
+                font=dict(size=9, color=FLEXOKI_BASE[600]),
+            )
+
+            return pn.pane.Plotly(fig, sizing_mode='stretch_width')
 
         except Exception as e:
             logger.error(f"Error creating time of day plot: {e}")
@@ -788,6 +836,11 @@ class CoalEvolutionUI:
     def create_content(self):
         """Create the full Coal Evolution content"""
         try:
+            # Force data refresh
+            self.daily_cf_data = None
+            self.hourly_latest = None
+            self.hourly_historical = None
+
             trend_plot = self.create_utilization_trend_plot()
             tod_plot = self.create_time_of_day_plot()
 
@@ -817,10 +870,12 @@ class CoalEvolutionUI:
 
 
 def create_coal_evolution_tab():
-    """Factory function to create coal evolution tab content"""
-    try:
-        ui = CoalEvolutionUI()
-        return ui.create_content()
-    except Exception as e:
-        logger.error(f"Error creating coal evolution tab: {e}")
-        return pn.pane.Markdown(f"Error creating coal evolution tab: {e}")
+    """Factory function to create coal evolution tab content — refreshes on each view"""
+    def _build():
+        try:
+            ui = CoalEvolutionUI()
+            return ui.create_content()
+        except Exception as e:
+            logger.error(f"Error creating coal evolution tab: {e}")
+            return pn.pane.Markdown(f"Error creating coal evolution tab: {e}")
+    return pn.panel(_build, loading_indicator=True)
