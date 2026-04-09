@@ -310,6 +310,177 @@ class PriceAnalysisMotor:
             logger.error(f"Traceback: {traceback.format_exc()}")
             return pd.DataFrame()
     
+
+    def calculate_aggregated_prices_sql(
+        self,
+        hierarchy: list,
+        start_date: str = None,
+        end_date: str = None,
+        region_filters: list = None,
+        fuel_filters: list = None,
+    ) -> 'pd.DataFrame':
+        """Calculate aggregated prices using SQL pushdown — avoids loading raw rows."""
+        try:
+            if not self.data_available:
+                logger.error('Data not available. Call load_data() first.')
+                return pd.DataFrame()
+
+            # Convert string dates to datetime
+            if start_date:
+                start_dt = pd.to_datetime(start_date)
+            else:
+                start_dt = self.date_ranges['generation']['start']
+            if end_date:
+                end_dt = pd.to_datetime(end_date) + pd.Timedelta(days=1)
+            else:
+                end_dt = self.date_ranges['generation']['end']
+
+            # Store query dates for capacity utilisation
+            self.query_start_date = start_dt
+            self.query_end_date = end_dt
+
+            duid_df = self.query_manager.query_aggregated_data(
+                start_date=start_dt,
+                end_date=end_dt,
+                group_by=hierarchy,
+                region_filters=region_filters,
+                fuel_filters=fuel_filters,
+                resolution=self.resolution,
+            )
+
+            if duid_df.empty:
+                return pd.DataFrame()
+
+            # Convert scadavalue sum to MWh
+            hours_factor = 5.0 / 60.0 if self.resolution == '5min' else 0.5
+            duid_df['generation_mwh'] = duid_df['total_scadavalue'] * hours_factor
+
+            # Now aggregate by the requested hierarchy
+            group_cols = [c for c in hierarchy if c in duid_df.columns]
+            if not group_cols:
+                group_cols = ['fuel_type']
+
+            grouped = duid_df.groupby(group_cols, dropna=False).agg(
+                generation_mwh=('generation_mwh', 'sum'),
+                total_revenue_dollars=('total_revenue', 'sum'),
+                record_count=('record_count', 'sum'),
+                start_date=('start_date', 'min'),
+                end_date=('end_date', 'max'),
+                capacity_mw=('nameplate_capacity', 'sum'),
+            ).reset_index()
+
+            # Avg price (demand-weighted)
+            grouped['average_price_per_mwh'] = np.where(
+                grouped['generation_mwh'] > 0,
+                grouped['total_revenue_dollars'] / grouped['generation_mwh'],
+                0,
+            )
+
+            # Capacity utilisation
+            time_span_hours = (end_dt - start_dt).total_seconds() / 3600
+            grouped['capacity_utilization_pct'] = np.where(
+                (grouped['capacity_mw'] > 0) & (time_span_hours > 0),
+                (grouped['generation_mwh'] / (grouped['capacity_mw'] * time_span_hours)) * 100,
+                0,
+            )
+
+            logger.info(f'SQL aggregation: {len(grouped)} groups, {int(grouped["record_count"].sum()):,} records')
+            return grouped
+
+        except Exception as e:
+            logger.error(f'Error in calculate_aggregated_prices_sql: {e}')
+            import traceback; logger.error(traceback.format_exc())
+            return pd.DataFrame()
+
+    def create_hierarchical_data_sql(
+        self,
+        hierarchy: list,
+        selected_columns: list,
+        start_date: str = None,
+        end_date: str = None,
+        region_filters: list = None,
+        fuel_filters: list = None,
+    ) -> 'pd.DataFrame':
+        """Create DUID-level hierarchical data using SQL pushdown."""
+        try:
+            if not self.data_available:
+                return pd.DataFrame()
+
+            if start_date:
+                start_dt = pd.to_datetime(start_date)
+            else:
+                start_dt = self.date_ranges['generation']['start']
+            if end_date:
+                end_dt = pd.to_datetime(end_date) + pd.Timedelta(days=1)
+            else:
+                end_dt = self.date_ranges['generation']['end']
+
+            self.query_start_date = start_dt
+            self.query_end_date = end_dt
+
+            duid_df = self.query_manager.query_aggregated_data(
+                start_date=start_dt,
+                end_date=end_dt,
+                group_by=hierarchy,
+                region_filters=region_filters,
+                fuel_filters=fuel_filters,
+                resolution=self.resolution,
+            )
+
+            if duid_df.empty:
+                return pd.DataFrame()
+
+            hours_factor = 5.0 / 60.0 if self.resolution == '5min' else 0.5
+            duid_df['generation_mwh'] = duid_df['total_scadavalue'] * hours_factor
+
+            time_span_hours = (end_dt - start_dt).total_seconds() / 3600
+
+            # Format for display
+            duid_df['generation_gwh'] = (duid_df['generation_mwh'] / 1000).apply(
+                lambda x: round(x, 0) if x >= 10 else round(x, 2)
+            )
+            duid_df['revenue_millions'] = (duid_df['total_revenue'] / 1_000_000).apply(
+                lambda x: round(x, 0) if x >= 10 else round(x, 2)
+            )
+            duid_df['avg_price'] = np.where(
+                duid_df['generation_mwh'] > 0,
+                duid_df['total_revenue'] / duid_df['generation_mwh'],
+                0,
+            ).round(1)
+            duid_df['capacity_mw'] = duid_df['nameplate_capacity'].fillna(0).round(0)
+            duid_df['capacity_utilization'] = np.where(
+                (duid_df['nameplate_capacity'] > 0) & (time_span_hours > 0),
+                (duid_df['generation_mwh'] / (duid_df['nameplate_capacity'] * time_span_hours)) * 100,
+                0,
+            ).round(1)
+
+            # Build display columns
+            hierarchy_cols = [c for c in hierarchy if c in duid_df.columns]
+            display_cols = hierarchy_cols + ['duid']
+
+            col_map = {
+                'Gen (GWh)': 'generation_gwh',
+                'Rev ($M)': 'revenue_millions',
+                'Price ($/MWh)': 'avg_price',
+                'Util (%)': 'capacity_utilization',
+                'Cap (MW)': 'capacity_mw',
+                'Station': 'station_name',
+                'Owner': 'owner',
+            }
+            for user_col in selected_columns:
+                mapped = col_map.get(user_col, user_col)
+                if mapped in duid_df.columns and mapped not in display_cols:
+                    display_cols.append(mapped)
+
+            result = duid_df[display_cols].copy()
+            logger.info(f'Hierarchical SQL data: {len(result)} DUIDs, cols={display_cols}')
+            return result
+
+        except Exception as e:
+            logger.error(f'Error in create_hierarchical_data_sql: {e}')
+            import traceback; logger.error(traceback.format_exc())
+            return pd.DataFrame()
+
     def get_available_date_range(self) -> Tuple[Optional[str], Optional[str]]:
         """
         Get the available date range from source data files, not just currently loaded data.

@@ -272,6 +272,188 @@ class HybridQueryManager:
         
         return result
     
+
+
+
+    def query_aggregated_data(
+
+        self,
+
+        start_date: datetime,
+
+        end_date: datetime,
+
+        group_by: List[str],
+
+        region_filters: Optional[List[str]] = None,
+
+        fuel_filters: Optional[List[str]] = None,
+
+        resolution: str = "30min",
+
+        use_cache: bool = True
+
+    ) -> pd.DataFrame:
+
+        """Query pre-aggregated data from DuckDB, pushing GROUP BY into SQL."""
+
+        cache_key = self._build_cache_key(
+
+            "aggregated_data", start_date, end_date,
+
+            tuple(group_by) if group_by else None, resolution,
+
+            tuple(region_filters) if region_filters else None,
+
+            tuple(fuel_filters) if fuel_filters else None,
+
+        )
+
+
+
+        if use_cache:
+
+            cached_result = self.cache.get(cache_key)
+
+            if cached_result is not None:
+
+                self._cache_hits += 1
+
+                return cached_result
+
+
+
+        self._query_count += 1
+
+
+
+        if resolution == "5min":
+
+            gen_table = "generation_5min"
+
+            price_table = "prices_5min"
+
+            hours_factor = 5.0 / 60.0
+
+        else:
+
+            gen_table = "generation_30min"
+
+            price_table = "prices_30min"
+
+            hours_factor = 0.5
+
+
+
+        sq = chr(39)
+
+        start_str = start_date.strftime("%Y-%m-%d %H:%M:%S")
+
+        end_str = end_date.strftime("%Y-%m-%d %H:%M:%S")
+
+        where_parts = [
+
+            f"g.settlementdate >= {sq}{start_str}{sq}",
+
+            f"g.settlementdate <= {sq}{end_str}{sq}",
+
+        ]
+
+        if region_filters:
+
+            regions_str = ", ".join(f"{sq}{r}{sq}" for r in region_filters)
+
+            where_parts.append(f"d.region IN ({regions_str})")
+
+        if fuel_filters:
+
+            fuels_str = ", ".join(f"{sq}{fu}{sq}" for fu in fuel_filters)
+
+            where_parts.append(f"d.fuel IN ({fuels_str})")
+
+
+
+        where_clause = " AND ".join(where_parts)
+
+
+
+        query = f"""
+
+            SELECT
+
+                d.fuel as fuel_type,
+
+                d.region as region,
+
+                g.duid,
+
+                FIRST(d."site name") as station_name,
+
+                FIRST(d.owner) as owner,
+
+                FIRST(d.capacity_mw) as nameplate_capacity,
+
+                SUM(g.scadavalue) as total_scadavalue,
+
+                SUM(g.scadavalue * p.rrp * {hours_factor}) as total_revenue,
+
+                COUNT(*) as record_count,
+
+                MIN(g.settlementdate) as start_date,
+
+                MAX(g.settlementdate) as end_date
+
+            FROM {gen_table} g
+
+            LEFT JOIN duid_mapping d ON g.duid = d.duid
+
+            LEFT JOIN {price_table} p
+
+                ON g.settlementdate = p.settlementdate
+
+                AND d.region = p.regionid
+
+            WHERE {where_clause}
+
+            GROUP BY d.fuel, d.region, g.duid
+
+        """
+
+
+
+        with perf_logger.timer("duckdb_aggregated_query", threshold=0.5):
+
+            logger.info(f"Executing aggregated query ({resolution}): {len(where_parts)} filters")
+
+            result = self.conn.execute(query).df()
+
+            logger.info(f"Aggregated query returned {len(result)} DUID-level rows")
+
+
+
+        if not result.empty:
+
+            result["start_date"] = pd.to_datetime(result["start_date"])
+
+            result["end_date"] = pd.to_datetime(result["end_date"])
+
+            for col in ["total_scadavalue", "total_revenue", "nameplate_capacity"]:
+
+                if col in result.columns:
+
+                    result[col] = pd.to_numeric(result[col], errors="coerce")
+
+
+
+        if use_cache and not result.empty:
+
+            self.cache.put(cache_key, result)
+
+
+
+        return result
+
+
     def query_with_progress(
         self,
         query: str,

@@ -260,11 +260,18 @@ class PriceAnalysisUI(param.Parameterized):
     def _get_table_title(self) -> str:
         """Generate dynamic table title with date information"""
         try:
-            if self.data_loaded and hasattr(self.motor, 'integrated_data') and self.motor.integrated_data is not None and len(self.motor.integrated_data) > 0:
+            # Try motor query dates first (set by SQL path), then integrated_data
+            start_date = end_date = days = None
+            if hasattr(self.motor, 'query_start_date') and self.motor.query_start_date:
+                start_date = self.motor.query_start_date.strftime('%Y-%m-%d')
+                end_date = self.motor.query_end_date.strftime('%Y-%m-%d')
+                days = (self.motor.query_end_date - self.motor.query_start_date).days
+            elif self.data_loaded and hasattr(self.motor, 'integrated_data') and self.motor.integrated_data is not None and len(self.motor.integrated_data) > 0:
                 start_date = self.motor.integrated_data['settlementdate'].min().strftime('%Y-%m-%d')
                 end_date = self.motor.integrated_data['settlementdate'].max().strftime('%Y-%m-%d')
                 days = (self.motor.integrated_data['settlementdate'].max() - self.motor.integrated_data['settlementdate'].min()).days
-                
+
+            if start_date:
                 if self.active_date_preset == 7:
                     return f"## Aggregated Results - Last 7 Days ({start_date} to {end_date})"
                 elif self.active_date_preset == 30:
@@ -446,127 +453,95 @@ class PriceAnalysisUI(param.Parameterized):
             self.uncheck_all_columns_checkbox = pn.pane.Markdown("")
     
     def _on_update_analysis(self, event):
-        """Handle unified update analysis button click - combines date filtering and grouping"""
+        """Handle update analysis button click - uses SQL aggregation"""
         try:
-            # Show loading indicator immediately
-            self._show_loading("Loading and integrating data...")
-            
-            # Step 1: Apply date filtering first (if date controls exist)
+            self._show_loading("Querying data...")
+
+            # Get date range
+            start_date_str = None
+            end_date_str = None
             if hasattr(self, 'start_date_picker') and hasattr(self.start_date_picker, 'value'):
                 start_date_str = self.start_date_picker.value.strftime('%Y-%m-%d') if self.start_date_picker.value else None
                 end_date_str = self.end_date_picker.value.strftime('%Y-%m-%d') if self.end_date_picker.value else None
-                
-                logger.info(f"Applying date filter: {start_date_str} to {end_date_str}")
-                
-                # IMPORTANT: Update resolution based on current time_range BEFORE integrating data
                 use_30min = (self.time_range == 'All')
-                logger.info(f"Updating motor resolution to {'30min' if use_30min else '5min'} based on time_range: {self.time_range}")
-                self.motor.load_data(use_30min_data=use_30min)
-                
-                # Update loading message for data integration phase
-                self._show_loading("Integrating data (this may take 30-60 seconds for large date ranges)...")
-                
-                # Load data with date filter
-                if self.motor.integrate_data(start_date_str, end_date_str):
-                    self.data_loaded = True
-                    logger.info("Date filter applied successfully")
-                else:
-                    logger.error("Failed to integrate data with date filter")
-                    # Show error and hide loading
-                    error_msg = pn.pane.Markdown("**Error:** Failed to integrate data. Please check your date range.")
-                    self.tabulator_container.clear()
-                    self.tabulator_container.append(error_msg)
-                    self._hide_loading()
-                    return
-            
-            # Step 2: Apply grouping and column selections
-            # Check if widgets are properly initialized
+                self.motor.resolution = '30min' if use_30min else '5min'
+
+            # Get grouping and filter selections
             if not hasattr(self.category_selector, 'value') or not hasattr(self.column_checkboxes, 'value'):
                 logger.warning("Grouping controls not properly initialized")
+                self._hide_loading()
                 return
-            
-            # Get selected grouping categories
+
             selected_categories = self.category_selector.value if hasattr(self.category_selector, 'value') else ['Fuel']
-            
-            # Get filter selections
             selected_regions = self.region_filters.value if hasattr(self.region_filters, 'value') else []
             selected_fuels = self.fuel_filters.value if hasattr(self.fuel_filters, 'value') else []
-            
-            logger.info(f"Selected categories: {selected_categories}")
-            logger.info(f"Region filters: {selected_regions}")
-            logger.info(f"Fuel filters: {selected_fuels}")
-            
-            # Use selected categories as the grouping hierarchy
-            self.selected_grouping = selected_categories if selected_categories else ['Fuel']  # Default fallback
-            
-            # Store filter selections for data filtering
+
+            # Map UI names to DB columns
+            column_name_mapping = {'Region': 'region', 'Fuel': 'fuel_type', 'duid': 'duid'}
+            hierarchy_columns = [column_name_mapping.get(c, c) for c in (selected_categories or ['Fuel'])]
+
+            self.selected_grouping = selected_categories if selected_categories else ['Fuel']
             self.selected_region_filters = selected_regions
             self.selected_fuel_filters = selected_fuels
+
             if hasattr(self.column_checkboxes, 'value'):
-                # Extract column names from tuples if needed
                 raw_selection = self.column_checkboxes.value
                 if raw_selection:
                     if isinstance(raw_selection[0], tuple):
-                        # If selection contains tuples, extract just the column names (first element)
                         self.selected_columns = [item[0] if isinstance(item, tuple) else item for item in raw_selection]
                     else:
                         self.selected_columns = raw_selection
                 else:
-                    # If nothing selected, use default display names
                     self.selected_columns = ['Gen (GWh)', 'Rev ($M)', 'Price ($/MWh)']
             else:
-                self.selected_columns = ['Gen (GWh)', 'Rev ($M)', 'Price ($/MWh)']  # Default fallback
-            
-            logger.info(f"Applied unified update - grouping: {self.selected_grouping}, columns: {self.selected_columns}")
-            
-            # Step 3: Rebuild the table with all selections
-            self._calculate_and_update_table()
-            
-            # Step 4: Update status with current data state and mark as custom if dates were manually changed
-            if len(self.motor.integrated_data) > 0:
-                filtered_start = self.motor.integrated_data['settlementdate'].min()
-                filtered_end = self.motor.integrated_data['settlementdate'].max()
-                filtered_days = (filtered_end - filtered_start).days
-                status_msg = f"✅ Analysis updated | Period: {filtered_start.strftime('%Y-%m-%d')} to {filtered_end.strftime('%Y-%m-%d')} ({filtered_days} days)"
-                status_msg += f" | Records: {len(self.motor.integrated_data):,}"
-                
-                # Check if date range was manually changed (not matching any preset)
-                if hasattr(self, 'start_date_picker') and hasattr(self.start_date_picker, 'value'):
-                    current_start = self.start_date_picker.value
-                    current_end = self.end_date_picker.value
-                    
-                    # Check if this matches any preset pattern
-                    available_start, available_end = self.motor.get_available_date_range()
-                    if available_start and available_end:
-                        end_dt = datetime.strptime(available_end, '%Y-%m-%d').date()
-                        
-                        # Check against preset patterns
-                        preset_7d_start = end_dt - timedelta(days=6)  # 7 days including today
-                        preset_30d_start = end_dt - timedelta(days=29)  # 30 days including today
-                        all_data_start = datetime.strptime(available_start, '%Y-%m-%d').date()
-                        
-                        if not ((current_start == preset_7d_start and current_end == end_dt) or
-                                (current_start == preset_30d_start and current_end == end_dt) or
-                                (current_start == all_data_start and current_end == end_dt)):
-                            # This is a custom date range
-                            self.active_date_preset = 'custom'
-                            # Update radio button to reflect custom selection
-                            self.time_range = 'All'  # Default to All when custom range is used
-                
-            else:
-                status_msg = "⚠️ No data found for selected filters"
-            
+                self.selected_columns = ['Gen (GWh)', 'Rev ($M)', 'Price ($/MWh)']
+
+            logger.info(f"SQL update - grouping: {hierarchy_columns}, cols: {self.selected_columns}")
+
+            # Use SQL-aggregated methods (no raw data load needed)
+            aggregated = self.motor.calculate_aggregated_prices_sql(
+                hierarchy_columns, start_date_str, end_date_str,
+                region_filters=selected_regions, fuel_filters=selected_fuels,
+            )
+
+            if aggregated.empty:
+                self.tabulator_container.clear()
+                self.tabulator_container.append(pn.pane.Markdown("**No data found for selected filters**"))
+                self._hide_loading()
+                self.status_text.object = "**Status:** No data found"
+                return
+
+            hierarchical = self.motor.create_hierarchical_data_sql(
+                hierarchy_columns, self.selected_columns,
+                start_date_str, end_date_str,
+                region_filters=selected_regions, fuel_filters=selected_fuels,
+            )
+
+            # Build table
+            self._build_table_from_data(hierarchical, hierarchy_columns)
+
+            # Update title
+            if hasattr(self, "table_title") and self.table_title is not None:
+                self.table_title.object = self._get_table_title()
+
+            # Update status
+            total_records = int(aggregated['record_count'].sum())
+            s = aggregated['start_date'].min().strftime('%Y-%m-%d')
+            e = aggregated['end_date'].max().strftime('%Y-%m-%d')
+            days = (aggregated['end_date'].max() - aggregated['start_date'].min()).days
+            status_msg = f"Updated | {s} to {e} ({days} days) | {total_records:,} records"
             self.status_text.object = f"**Status:** {status_msg}"
-            
-        except Exception as e:
-            logger.error(f"Error in unified update analysis: {e}")
-            # Show error and hide loading
-            error_msg = pn.pane.Markdown(f"**Error during update:** {str(e)}")
+
+        except Exception as ex:
+            logger.error(f"Error in update analysis: {ex}")
+            import traceback
+            logger.error(traceback.format_exc())
+            error_msg = pn.pane.Markdown(f"**Error during update:** {str(ex)}")
             if self.tabulator_container:
                 self.tabulator_container.clear()
                 self.tabulator_container.append(error_msg)
             self._hide_loading()
-    
+
     def _on_uncheck_all_regions_change(self, event):
         """Handle uncheck all regions checkbox change"""
         try:
@@ -665,6 +640,37 @@ class PriceAnalysisUI(param.Parameterized):
             status_msg += f" | Records: {len(self.motor.integrated_data):,}"
             self.status_text.object = f"**Status:** {status_msg}"
     
+    def _build_table_from_data(self, hierarchical_data, hierarchy_columns):
+        """Build the Tabulator table from pre-computed hierarchical data."""
+        if hierarchical_data.empty:
+            self.tabulator_container.clear()
+            self.tabulator_container.append(pn.pane.Markdown("**No data available**"))
+            self._hide_loading()
+            return
+
+        groupby_cols = [col for col in hierarchy_columns if col != 'duid']
+        
+        self.tabulator_table = pn.widgets.Tabulator(
+            value=hierarchical_data,
+            groupby=groupby_cols,
+            pagination=None,
+            sizing_mode='stretch_width',
+            height=800,
+            show_index=False,
+            sortable=True,
+            selectable=1,
+            theme='simple',
+        )
+
+        if self.tabulator_container is None:
+            self.tabulator_container = pn.Column(self.tabulator_table, sizing_mode='stretch_width')
+        else:
+            self.tabulator_container.clear()
+            self.tabulator_container.append(self.tabulator_table)
+
+        self._hide_loading()
+        logger.info(f"Table built: {len(hierarchical_data)} rows, groupby={groupby_cols}")
+
     def _show_loading(self, message: str = "Loading data..."):
         """Show loading indicator in the tabulator container"""
         if self.tabulator_container is not None:
@@ -1156,7 +1162,7 @@ class PriceAnalysisUI(param.Parameterized):
         return columns
     
     def create_layout(self) -> pn.layout.Tabs:
-        """Create the complete UI layout — horizontal control bar at top, full-width content below"""
+        """Create the complete UI layout"""
 
         if not self.data_loaded:
             return pn.Column(
@@ -1166,92 +1172,41 @@ class PriceAnalysisUI(param.Parameterized):
                 sizing_mode='stretch_width'
             )
 
-        # --- Shared label style for section headings inside the control bar ---
-        def _label(text):
-            return pn.pane.HTML(
-                f"<span style='font-weight:600;font-size:12px;color:{FLEXOKI_BASE};white-space:nowrap;'>{text}</span>",
-                margin=(6, 6, 0, 0),
-            )
-
-        # ── Row 1: Update button  |  Region filters  |  Fuel filters ─────────
         has_date_controls = hasattr(self, 'start_date_picker') and hasattr(self.start_date_picker, 'value')
         has_filter_controls = hasattr(self.category_selector, 'value')
 
-        row1_items = [self.update_analysis_button, pn.Spacer(width=20)]
-
-        if has_filter_controls:
-            row1_items += [
-                _label("Region:"),
-                self.uncheck_all_regions_checkbox,
-                self.region_filters,
-                pn.Spacer(width=16),
-                _label("Fuel:"),
-                self.uncheck_all_fuels_checkbox,
-                self.fuel_filters,
-            ]
-
+        # Row 1: Button | Group by | Presets | Status
         row1 = pn.Row(
-            *row1_items,
+            self.update_analysis_button,
+            pn.pane.HTML('<b>Group by:</b>', width=60, margin=(8,4,0,10)),
+            self.category_selector,
+            *([
+                pn.pane.HTML('<b>Preset:</b>', width=45, margin=(8,4,0,10)),
+                self.time_range_widget,
+            ] if has_date_controls else []),
+            self.status_text,
             sizing_mode='stretch_width',
-            margin=(0, 0, 4, 0),
-            styles={'background': FLEXOKI_PAPER, 'border-bottom': f'1px solid {FLEXOKI_BASE}22'},
-        )
+            margin=(0, 0, 2, 0),
+        ) if has_filter_controls else pn.Row(self.update_analysis_button, self.status_text)
 
-        # ── Row 2: Date pickers + presets  |  Column checkboxes ───────────────
+        # Row 2: Date | Region
         row2_items = []
         if has_date_controls:
-            row2_items += [
-                _label("Date:"),
-                self.start_date_picker,
-                self.end_date_picker,
-                pn.Spacer(width=10),
-                self.time_range_widget,
-                pn.Spacer(width=20),
-            ]
+            row2_items += [pn.pane.HTML('<b>Date:</b>', width=35, margin=(8,4,0,0)), self.start_date_picker, self.end_date_picker]
+        if has_filter_controls:
+            row2_items += [pn.pane.HTML('<b>Region:</b>', width=50, margin=(8,4,0,10)), self.uncheck_all_regions_checkbox, self.region_filters]
+        row2 = pn.Row(*row2_items, margin=(0, 0, 2, 0))
 
-        if has_filter_controls and hasattr(self.column_checkboxes, 'value'):
-            row2_items += [
-                _label("Columns:"),
-                self.uncheck_all_columns_checkbox,
-                self.column_checkboxes,
-            ]
-        elif has_filter_controls:
-            row2_items += [
-                _label("Columns:"),
-                self.column_checkboxes,  # Error fallback
-            ]
-
-        row2 = pn.Row(
-            *row2_items,
-            sizing_mode='stretch_width',
-            margin=(0, 0, 4, 0),
-            styles={'background': FLEXOKI_PAPER},
-        )
-
-        # ── Row 3: Category selector  |  Status text ─────────────────────────
+        # Row 3: Fuel | Columns
         row3_items = []
         if has_filter_controls:
-            row3_items += [
-                _label("Group by:"),
-                self.category_selector,
-                pn.Spacer(width=30),
-            ]
-        row3_items.append(self.status_text)
+            row3_items += [pn.pane.HTML('<b>Fuel:</b>', width=35, margin=(8,4,0,0)), self.uncheck_all_fuels_checkbox, self.fuel_filters]
+        if has_filter_controls and hasattr(self.column_checkboxes, 'value'):
+            row3_items += [pn.pane.HTML('<b>Columns:</b>', width=55, margin=(8,4,0,10)), self.uncheck_all_columns_checkbox, self.column_checkboxes]
+        row3 = pn.Row(*row3_items, margin=(0, 0, 4, 0))
 
-        row3 = pn.Row(
-            *row3_items,
-            sizing_mode='stretch_width',
-            margin=(0, 0, 8, 0),
-        )
+        controls_bar = pn.Column(row1, row2, row3, margin=(0, 0, 8, 0))
 
-        # ── Controls bar (all three rows) ─────────────────────────────────────
-        controls_bar = pn.Column(
-            row1, row2, row3,
-            sizing_mode='stretch_width',
-            margin=(0, 0, 10, 0),
-        )
-
-        # ── Content: table title + table + detail ─────────────────────────────
         table_title_pane = (
             self.table_title
             if hasattr(self, 'table_title') and self.table_title is not None
@@ -1266,15 +1221,12 @@ class PriceAnalysisUI(param.Parameterized):
             sizing_mode='stretch_width',
         )
 
-        # ── Assemble ──────────────────────────────────────────────────────────
-        main_content = pn.Column(
+        return pn.Column(
             "# Average Price Analysis",
             controls_bar,
             content_area,
             sizing_mode='stretch_width',
         )
-
-        return main_content
 
 # Factory function for easy integration
 def create_price_analysis_tab() -> pn.layout.Column:

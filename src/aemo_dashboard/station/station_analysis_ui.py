@@ -385,15 +385,20 @@ class StationAnalysisUI(param.Parameterized):
             # Bind station selection to reactive parameter
             self.station_selector.param.watch(self._on_station_select, 'value')
             
-            # Search input for manual search
-            self.search_input = pn.widgets.TextInput(
+            # Autocomplete search - type to filter by station name or DUID
+            self.search_input = pn.widgets.AutocompleteInput(
                 name="",
-                placeholder="Search by Name/DUID...",
+                options=station_options[1:],  # exclude placeholder
+                placeholder="Type to search stations...",
+                case_sensitive=False,
+                search_strategy='includes',
+                min_characters=1,
+                restrict=True,
                 width=310
             )
             
-            # Bind search input to reactive parameter  
-            self.search_input.param.watch(self._on_search_input, 'value')
+            # Bind autocomplete selection to load the station
+            self.search_input.param.watch(self._on_autocomplete_select, 'value')
             
             # Date controls
             end_date = datetime.now().date()
@@ -537,12 +542,26 @@ class StationAnalysisUI(param.Parameterized):
         except Exception as e:
             logger.error(f"Error handling station selection: {e}")
     
+    def _on_autocomplete_select(self, event):
+        """Handle autocomplete selection — find matching station and load it"""
+        try:
+            selected = event.new
+            if not selected or not selected.strip():
+                return
+            # Find in the Select options (they share the same display names)
+            if selected in self.station_selector.options:
+                self.station_selector.value = selected  # triggers _on_station_select
+            else:
+                # Fallback: fuzzy search
+                self.search_query = selected.strip()
+        except Exception as e:
+            logger.error(f"Error handling autocomplete selection: {e}")
+
     def _on_search_input(self, event):
-        """Handle manual search input"""
+        """Handle manual search input (legacy)"""
         try:
             query = event.new
             if query and len(query.strip()) >= 2:
-                # Trigger search after short delay (debounce)
                 self.search_query = query.strip()
         except Exception as e:
             logger.error(f"Error handling search input: {e}")
@@ -691,6 +710,11 @@ class StationAnalysisUI(param.Parameterized):
                 self.station_selector.options = station_options
                 self.station_selector.value = 'Select a station...'
             
+            # Update autocomplete options too
+            if hasattr(self, 'search_input') and hasattr(self.search_input, 'options'):
+                self.search_input.options = station_options[1:]  # exclude placeholder
+                self.search_input.value = ''
+            
             logger.info(f"Refreshed station options for {self.analysis_mode} mode: {len(station_options)-1} options")
             
         except Exception as e:
@@ -776,13 +800,10 @@ class StationAnalysisUI(param.Parameterized):
                     
                     logger.info(f"Updating charts section for {display_title}")
                     
-                    # Create simple tabs without too many levels
-                    # For Time Series tab, put chart and stats side by side with better proportions
-                    chart_wrapper = pn.Column(time_series_charts, sizing_mode='stretch_width')
-                    time_series_content = pn.Row(
-                        chart_wrapper,  # Chart takes remaining space
-                        pn.Spacer(width=15),  # Small gap
-                        summary_stats,  # Fixed width table
+                    # Table first (key data), chart underneath, both full-width
+                    time_series_content = pn.Column(
+                        summary_stats,
+                        time_series_charts,
                         sizing_mode='stretch_width'
                     )
                     
@@ -1077,12 +1098,12 @@ class StationAnalysisUI(param.Parameterized):
             # Create tabulator widget without index column
             summary_table = pn.widgets.Tabulator(
                 summary_df,
-                pagination='remote',
-                page_size=10,
-                width=250,  # Reduced width to give more space to chart
-                height=280,  # Increased height to show all 7 rows without scrolling
-                theme='simple',  # Light theme
-                show_index=False  # Remove index column
+                pagination=None,
+                width=400,
+                height=len(summary_df) * 30 + 40,
+                theme='simple',
+                show_index=False,
+                text_align={'Value': 'right'},
             )
             
             # Check if we need to add a footnote for annualized capacity utilization
@@ -1101,10 +1122,9 @@ class StationAnalysisUI(param.Parameterized):
                         "<div style='font-size: 10px; color: #888; margin-top: 5px;'>"
                         "* Annualized for comparison"
                         "</div>",
-                        width=250
+                        width=320
                     ),
-                    sizing_mode='fixed',
-                    width=250
+                    width=320
                 )
             else:
                 return summary_table
