@@ -3666,6 +3666,7 @@ class EnergyDashboard(param.Parameterized):
             tabs = pn.Tabs(
                 ("Today", nem_dash_tab),  # Load immediately
                 ("Generation mix", pn.pane.HTML(loading_html)),  # Lazy
+                ("Evening peak", pn.pane.HTML(loading_html)),  # Lazy - PCP comparison
                 ("Prices", pn.pane.HTML(loading_html)),  # Lazy
                 ("Pivot table", pn.pane.HTML(loading_html)),  # Lazy
                 ("Station Analysis", pn.pane.HTML(loading_html)),  # Lazy
@@ -3689,15 +3690,16 @@ class EnergyDashboard(param.Parameterized):
             # Store tab creation functions (no need for Today since it's loaded)
             self._tab_creators = {
                 1: self._create_generation_tab_lazy,
-                2: self._create_prices_tab,
-                3: self._create_price_analysis_tab,
-                4: self._create_station_analysis_tab,
-                5: self._create_trends_tab,
-                6: self._create_curtailment_tab,
-                7: self._create_pasa_tab,  # PASA outage monitor
-                8: self._create_batteries_tab,
-                9: self._create_gas_tab,
-                10: self._create_futures_tab
+                2: self._create_evening_peak_tab,  # Evening peak PCP comparison
+                3: self._create_prices_tab,
+                4: self._create_price_analysis_tab,
+                5: self._create_station_analysis_tab,
+                6: self._create_trends_tab,
+                7: self._create_curtailment_tab,
+                8: self._create_pasa_tab,  # PASA outage monitor
+                9: self._create_batteries_tab,
+                10: self._create_gas_tab,
+                11: self._create_futures_tab
             }
             
             # Watch for tab changes
@@ -4020,6 +4022,22 @@ class EnergyDashboard(param.Parameterized):
             logger.error(f"Error creating futures tab: {e}")
             return pn.Column(
                 pn.pane.Markdown("# Electricity Futures"),
+                pn.pane.Markdown(f"**Error loading tab:** {e}"),
+                sizing_mode="stretch_width"
+            )
+
+    def _create_evening_peak_tab(self):
+        """Create evening peak fuel-mix + price comparison tab"""
+        try:
+            logger.info("Creating evening peak tab...")
+            from aemo_dashboard.evening_peak import create_evening_peak_tab
+            evening_peak_tab = create_evening_peak_tab()
+            logger.info("Evening peak tab created successfully")
+            return evening_peak_tab
+        except Exception as e:
+            logger.error(f"Error creating evening peak tab: {e}")
+            return pn.Column(
+                pn.pane.Markdown("# Evening Peak Analysis"),
                 pn.pane.Markdown(f"**Error loading tab:** {e}"),
                 sizing_mode="stretch_width"
             )
