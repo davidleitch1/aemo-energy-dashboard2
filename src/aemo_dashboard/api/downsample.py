@@ -84,3 +84,57 @@ def lttb(
     out_t.append(float(timestamps[-1]))
     out_v.append(float(values[-1]))
     return out_t, out_v
+
+
+import numpy as np
+
+
+def loess(x: Sequence[float], y: Sequence[float], frac: float = 0.05) -> list[float]:
+    """Locally-weighted regression smoother (degree-1, tricube weights).
+
+    Returns a list of smoothed y-values at the same x positions. `x` must be
+    monotonic non-decreasing (we exploit this for an O(n*r) sliding window
+    rather than O(n^2)).
+
+    `frac` is the fraction of points used in each local fit; 0.05 ≈ "1/20th
+    of the data" which feels like a few cycles' average for AEMO spot prices.
+    """
+    n = len(x)
+    if n != len(y):
+        raise ValueError("x and y length mismatch")
+    if n < 3:
+        return list(map(float, y))
+    r = max(3, int(round(frac * n)))
+    if r >= n:
+        r = n
+
+    xa = np.asarray(x, dtype=float)
+    ya = np.asarray(y, dtype=float)
+    out = np.empty(n, dtype=float)
+
+    for i in range(n):
+        # Symmetric window of size r centred on i, clamped to [0, n).
+        half = r // 2
+        lo = max(0, i - half)
+        hi = min(n, lo + r)
+        lo = max(0, hi - r)
+        xs = xa[lo:hi]
+        ys = ya[lo:hi]
+        d = np.abs(xs - xa[i])
+        h = max(d.max(), 1e-12)
+        w = (1.0 - (d / h) ** 3) ** 3
+        sw = w.sum()
+        if sw < 1e-12:
+            out[i] = ya[i]
+            continue
+        wx = (w * xs).sum() / sw
+        wy = (w * ys).sum() / sw
+        b_num = (w * (xs - wx) * (ys - wy)).sum()
+        b_den = (w * (xs - wx) ** 2).sum()
+        if abs(b_den) < 1e-12:
+            out[i] = wy
+        else:
+            b = b_num / b_den
+            out[i] = wy - b * wx + b * xa[i]
+
+    return out.tolist()

@@ -14,7 +14,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Query
 
 from ..db import get_connection, nem_naive_to_utc, utc_to_nem_naive
-from ..downsample import lttb
+from ..downsample import loess, lttb
 
 router = APIRouter()
 
@@ -52,8 +52,12 @@ async def spot_price(
     from_: Optional[datetime] = Query(None, alias="from"),
     to: Optional[datetime] = Query(None),
     resolution: str = Query("auto"),
+    smoothing: Optional[str] = Query(None),
 ) -> dict:
     region_list = _resolve_regions(region, regions)
+    smoothing = smoothing.lower().strip() if smoothing else None
+    if smoothing not in (None, "loess"):
+        raise HTTPException(400, detail={"code": "INVALID_SMOOTHING", "message": f"unknown smoothing: {smoothing}"})
 
     now_utc = datetime.now(timezone.utc)
     to_utc = to.astimezone(timezone.utc) if to and to.tzinfo else (
@@ -92,33 +96,38 @@ async def spot_price(
 
     data: list[dict] = []
     downsampled = False
+    smoothed_meta = False
+    # Pick a LOESS bandwidth: 0.05 of the visible series for everything
+    # except All (>= ~1 yr lookback), where 0.08 widens to a few months.
+    span_seconds = (to_utc - from_utc).total_seconds()
+    loess_frac = 0.08 if span_seconds > 366 * 86400 else 0.05
+
     for regid in region_list:
         series = by_region.get(regid, [])
         if not series:
             continue
         if len(series) > MAX_POINTS:
-            # Use float-index as the LTTB x-axis (timestamps are monotonic
-            # so indices are equivalent for triangle-area selection); then
-            # map chosen indices back to the original datetimes to avoid
-            # any tz round-trip.
             ts_idx = [float(i) for i in range(len(series))]
             vals = [s[1] for s in series]
             idx_out, v_out = lttb(ts_idx, vals, MAX_POINTS)
             downsampled = True
-            for ix, v in zip(idx_out, v_out):
-                ts = series[int(ix)][0]
-                data.append({
-                    "timestamp": _utc_iso(ts),
-                    "region": regid,
-                    "price": v,
-                })
+            ts_v_pairs = [(series[int(ix)][0], v) for ix, v in zip(idx_out, v_out)]
         else:
-            for ts, v in series:
-                data.append({
-                    "timestamp": _utc_iso(ts),
-                    "region": regid,
-                    "price": v,
-                })
+            ts_v_pairs = list(series)
+
+        if smoothing == "loess" and len(ts_v_pairs) >= 5:
+            xs = [t.timestamp() for t, _ in ts_v_pairs]
+            ys = [v for _, v in ts_v_pairs]
+            ys_smoothed = loess(xs, ys, frac=loess_frac)
+            ts_v_pairs = [(t, sv) for (t, _), sv in zip(ts_v_pairs, ys_smoothed)]
+            smoothed_meta = True
+
+        for ts, v in ts_v_pairs:
+            data.append({
+                "timestamp": _utc_iso(ts),
+                "region": regid,
+                "price": v,
+            })
 
     return {
         "data": data,
@@ -128,6 +137,7 @@ async def spot_price(
             "resolution": "5min",
             "regions": region_list,
             "downsampled": downsampled,
+            "smoothed": smoothed_meta,
             "source_rows": source_rows,
             "returned_rows": len(data),
             "as_of": datetime.now(timezone.utc).isoformat(),

@@ -73,3 +73,28 @@ def test_spot_meta_regions_field_present(client, auth_headers):
     body = resp.json()
     assert 'regions' in body['meta']
     assert body['meta']['regions'] == ['NSW1']
+
+
+def test_spot_smoothing_loess_returns_smoothed_meta(client, auth_headers):
+    resp = client.get(
+        '/v1/prices/spot?region=NSW1&smoothing=loess',
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    if body['data']:
+        assert body['meta'].get('smoothed') is True
+
+
+def test_spot_smoothing_unknown_returns_400(client, auth_headers):
+    resp = client.get(
+        '/v1/prices/spot?region=NSW1&smoothing=xyz',
+        headers=auth_headers,
+    )
+    assert resp.status_code == 400
+
+
+def test_spot_smoothing_default_is_unsmoothed(client, auth_headers):
+    resp = client.get('/v1/prices/spot?region=NSW1', headers=auth_headers)
+    body = resp.json()
+    assert body['meta'].get('smoothed', False) is False

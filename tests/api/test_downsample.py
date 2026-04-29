@@ -67,3 +67,35 @@ def test_target_two_returns_endpoints_only():
 def test_length_mismatch_raises():
     with pytest.raises(ValueError):
         lttb([1.0, 2.0, 3.0], [1.0, 2.0], 2)
+
+
+def test_loess_passthrough_when_n_lt_3():
+    from aemo_dashboard.api.downsample import loess
+    out = loess([1.0, 2.0], [1.0, 2.0], 0.5)
+    assert out == [1.0, 2.0]
+
+
+def test_loess_smooths_alternating_noise():
+    """Sin wave plus alternating +/- spikes should come back closer to sin."""
+    import math
+    from aemo_dashboard.api.downsample import loess
+    xs = [float(i) for i in range(200)]
+    ys = [math.sin(i / 10.0) + 0.5 * ((-1) ** i) for i in range(200)]
+    out = loess(xs, ys, frac=0.1)
+    # Variance of smoothed - sin should be less than variance of raw - sin.
+    raw_resid = sum((y - math.sin(i / 10.0)) ** 2 for i, y in enumerate(ys))
+    sm_resid  = sum((s - math.sin(i / 10.0)) ** 2 for i, s in enumerate(out))
+    assert sm_resid < raw_resid * 0.3, 'LOESS should reduce noise variance'
+
+
+def test_loess_preserves_length():
+    from aemo_dashboard.api.downsample import loess
+    out = loess([float(i) for i in range(50)], [float(i) for i in range(50)], 0.1)
+    assert len(out) == 50
+
+
+def test_loess_monotonic_input_produces_monotonic_output():
+    from aemo_dashboard.api.downsample import loess
+    out = loess([float(i) for i in range(50)], [float(i) for i in range(50)], 0.2)
+    for prev, cur in zip(out, out[1:]):
+        assert cur >= prev - 1e-6
