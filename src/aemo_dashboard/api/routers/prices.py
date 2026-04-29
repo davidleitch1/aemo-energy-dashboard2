@@ -191,13 +191,12 @@ async def time_of_day(
         },
     }
 
-
-@router.get('/prices/by-fuel')
+@router.get("/prices/by-fuel")
 async def by_fuel(
     region: Optional[str] = Query(None, min_length=2, max_length=8),
     regions: Optional[str] = Query(None),
     days: int = Query(7, ge=1, le=365),
-    from_: Optional[datetime] = Query(None, alias='from'),
+    from_: Optional[datetime] = Query(None, alias="from"),
     to: Optional[datetime] = Query(None),
 ) -> dict:
     region_list = _resolve_regions(region, regions)
@@ -212,67 +211,119 @@ async def by_fuel(
     from_nem = utc_to_nem_naive(from_utc)
     to_nem = utc_to_nem_naive(to_utc)
 
-    placeholders = ','.join(['?'] * len(region_list))
-    sql = f'''
-        WITH gen AS (
-            SELECT settlementdate, fuel_type, region,
-                   GREATEST(total_generation_mw, 0) AS gen_mw
-            FROM generation_by_fuel_5min
-            WHERE region IN ({placeholders})
-              AND settlementdate >= ? AND settlementdate <= ?
-        ),
-        prices AS (
-            SELECT settlementdate, regionid, rrp
-            FROM prices5
-            WHERE regionid IN ({placeholders})
-              AND settlementdate >= ? AND settlementdate <= ?
-        ),
-        joined AS (
-            SELECT g.fuel_type, g.gen_mw, p.rrp
-            FROM gen g
-            JOIN prices p
+    placeholders = ",".join(["?"] * len(region_list))
+
+    # Utility-scale fuels: drop Biomass; merge CCGT + OCGT + Gas other -> "Gas".
+    # Pre-aggregate per (settlementdate, fuel) so multi-region picks up the
+    # NEM-aggregate semantics (sum across regions, then average over time).
+    util_sql = f"""
+        WITH joined AS (
+            SELECT g.settlementdate, g.region,
+                   CASE WHEN g.fuel_type IN ('CCGT','OCGT','Gas other') THEN 'Gas'
+                        ELSE g.fuel_type END AS fuel,
+                   GREATEST(g.total_generation_mw, 0) AS gen_mw,
+                   p.rrp
+            FROM generation_by_fuel_5min g
+            JOIN prices5 p
               ON g.settlementdate = p.settlementdate
              AND g.region = p.regionid
-            WHERE g.gen_mw > 0
+            WHERE g.region IN ({placeholders})
+              AND g.settlementdate >= ? AND g.settlementdate <= ?
+              AND g.fuel_type != 'Biomass'
+              AND GREATEST(g.total_generation_mw, 0) > 0
+        ),
+        per_period_fuel AS (
+            SELECT settlementdate, fuel,
+                   SUM(gen_mw) AS total_mw,
+                   SUM(gen_mw * rrp) / NULLIF(SUM(gen_mw), 0) AS period_vwap
+            FROM joined
+            GROUP BY 1, 2
         )
-        SELECT fuel_type AS fuel,
-               SUM(gen_mw) / 12.0 AS volume_mwh,
-               SUM(gen_mw * rrp) / NULLIF(SUM(gen_mw), 0) AS vwap,
-               AVG(gen_mw) AS avg_mw
-        FROM joined
-        GROUP BY fuel_type
-        HAVING SUM(gen_mw) > 0
+        SELECT fuel,
+               SUM(total_mw) / 12.0 AS volume_mwh,
+               SUM(total_mw * period_vwap) / NULLIF(SUM(total_mw), 0) AS vwap,
+               AVG(total_mw) AS avg_mw
+        FROM per_period_fuel
+        GROUP BY fuel
         ORDER BY volume_mwh DESC
-    '''
-    params = list(region_list) + [from_nem, to_nem] + list(region_list) + [from_nem, to_nem]
+    """
+    util_params = list(region_list) + [from_nem, to_nem]
+
+    # Rooftop: rooftop30 joined to prices5 at the exact 30-min boundary
+    # timestamp. End-of-window price; close enough for VWAP averaging.
+    roof_sql = f"""
+        WITH joined AS (
+            SELECT rs.settlementdate, rs.regionid AS region,
+                   rs.power AS gen_mw, p.rrp
+            FROM rooftop30 rs
+            JOIN prices5 p
+              ON rs.settlementdate = p.settlementdate
+             AND rs.regionid = p.regionid
+            WHERE rs.regionid IN ({placeholders})
+              AND rs.settlementdate >= ? AND rs.settlementdate <= ?
+              AND rs.power > 0
+        ),
+        per_period AS (
+            SELECT settlementdate,
+                   SUM(gen_mw) AS total_mw,
+                   SUM(gen_mw * rrp) / NULLIF(SUM(gen_mw), 0) AS period_vwap
+            FROM joined
+            GROUP BY 1
+        )
+        SELECT SUM(total_mw) / 2.0 AS volume_mwh,
+               SUM(total_mw * period_vwap) / NULLIF(SUM(total_mw), 0) AS vwap,
+               AVG(total_mw) AS avg_mw
+        FROM per_period
+    """
+    roof_params = list(region_list) + [from_nem, to_nem]
 
     conn = get_connection()
     try:
-        rows = conn.execute(sql, params).fetchall()
+        util_rows = conn.execute(util_sql, util_params).fetchall()
+        roof_row = conn.execute(roof_sql, roof_params).fetchone()
     finally:
         conn.close()
 
-    total_volume = sum(float(r[1]) for r in rows) if rows else 0.0
+    raw = [
+        {
+            "fuel": fuel,
+            "volume_mwh": float(vol or 0.0),
+            "vwap": float(vwap or 0.0),
+            "avg_mw": float(avg or 0.0),
+        }
+        for fuel, vol, vwap, avg in util_rows
+    ]
+
+    if roof_row and roof_row[0] is not None and float(roof_row[0]) > 0:
+        raw.append({
+            "fuel": "Rooftop",
+            "volume_mwh": float(roof_row[0]),
+            "vwap": float(roof_row[1] or 0.0),
+            "avg_mw": float(roof_row[2] or 0.0),
+        })
+
+    raw.sort(key=lambda r: -r["volume_mwh"])
+    total_volume = sum(r["volume_mwh"] for r in raw)
 
     data = []
-    for fuel, volume_mwh, vwap, avg_mw in rows:
-        share = (float(volume_mwh) / total_volume * 100.0) if total_volume > 0 else 0.0
+    for r in raw:
+        share = (r["volume_mwh"] / total_volume * 100.0) if total_volume > 0 else 0.0
         data.append({
-            'fuel': fuel,
-            'volume_mwh': round(float(volume_mwh), 1),
-            'share_pct': round(share, 2),
-            'vwap': round(float(vwap or 0.0), 2),
-            'avg_mw': round(float(avg_mw or 0.0), 1),
+            "fuel": r["fuel"],
+            "volume_mwh": round(r["volume_mwh"], 1),
+            "share_pct": round(share, 2),
+            "vwap": round(r["vwap"], 2),
+            "avg_mw": round(r["avg_mw"], 1),
         })
 
     return {
-        'data': data,
-        'meta': {
-            'regions': region_list,
-            'lookback_days': days,
-            'total_volume_mwh': round(total_volume, 1),
-            'from': from_utc.isoformat().replace('+00:00', 'Z'),
-            'to': to_utc.isoformat().replace('+00:00', 'Z'),
-            'as_of': datetime.now(timezone.utc).isoformat(),
+        "data": data,
+        "meta": {
+            "regions": region_list,
+            "lookback_days": days,
+            "total_volume_mwh": round(total_volume, 1),
+            "from": from_utc.isoformat().replace("+00:00", "Z"),
+            "to": to_utc.isoformat().replace("+00:00", "Z"),
+            "as_of": datetime.now(timezone.utc).isoformat(),
         },
     }
