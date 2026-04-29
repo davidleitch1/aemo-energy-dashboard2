@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 
 from .auth import bearer_token_middleware
-from .routers import gauges, meta, prices
+from .routers import gauges, meta, outages, prices
 
 
 def create_app() -> FastAPI:
@@ -35,6 +35,7 @@ def create_app() -> FastAPI:
     app.include_router(meta.router, prefix="/v1")
     app.include_router(prices.router, prefix="/v1")
     app.include_router(gauges.router, prefix="/v1")
+    app.include_router(outages.router, prefix="/v1")
 
     return app
 
