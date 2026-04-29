@@ -20,6 +20,25 @@ router = APIRouter()
 
 VALID_REGIONS = {"NSW1", "QLD1", "SA1", "TAS1", "VIC1"}
 MAX_POINTS = 1500  # per region
+THIRTY_DAYS_S = 30 * 86400
+
+
+def _pick_price_table(span_seconds: float) -> tuple[str, str]:
+    """Choose prices5 vs prices30 based on the requested window.
+
+    Convention: > 30 days uses 30-min data. The chart is downsampled to
+    the same 1500 points per series either way, so visual quality is
+    identical and the SQL is ~6x cheaper on prices30.
+    """
+    if span_seconds > THIRTY_DAYS_S:
+        return ("prices30", "30min")
+    return ("prices5", "5min")
+
+
+def _pick_gen_table(span_seconds: float) -> tuple[str, str]:
+    if span_seconds > THIRTY_DAYS_S:
+        return ("generation_by_fuel_30min", "30min")
+    return ("generation_by_fuel_5min", "5min")
 
 
 def _utc_iso(dt: datetime) -> str:
@@ -60,12 +79,28 @@ async def spot_price(
         raise HTTPException(400, detail={"code": "INVALID_SMOOTHING", "message": f"unknown smoothing: {smoothing}"})
 
     now_utc = datetime.now(timezone.utc)
-    to_utc = to.astimezone(timezone.utc) if to and to.tzinfo else (
-        to.replace(tzinfo=timezone.utc) if to else now_utc
-    )
-    from_utc = from_.astimezone(timezone.utc) if from_ and from_.tzinfo else (
-        from_.replace(tzinfo=timezone.utc) if from_ else (to_utc - timedelta(hours=24))
-    )
+
+    if from_ is None and to is None:
+        # Both omitted -> "All data". Use prices30's deepest history.
+        conn0 = get_connection()
+        try:
+            min_dt, max_dt = conn0.execute(
+                "SELECT MIN(settlementdate), MAX(settlementdate) FROM prices30"
+            ).fetchone()
+        finally:
+            conn0.close()
+        from_utc = nem_naive_to_utc(min_dt) if min_dt else now_utc - timedelta(hours=24)
+        to_utc = nem_naive_to_utc(max_dt) if max_dt else now_utc
+    else:
+        to_utc = to.astimezone(timezone.utc) if to and to.tzinfo else (
+            to.replace(tzinfo=timezone.utc) if to else now_utc
+        )
+        from_utc = from_.astimezone(timezone.utc) if from_ and from_.tzinfo else (
+            from_.replace(tzinfo=timezone.utc) if from_ else (to_utc - timedelta(hours=24))
+        )
+
+    span_seconds = (to_utc - from_utc).total_seconds()
+    src_table, res_label = _pick_price_table(span_seconds)
 
     from_nem = utc_to_nem_naive(from_utc)
     to_nem = utc_to_nem_naive(to_utc)
@@ -73,7 +108,7 @@ async def spot_price(
     placeholders = ",".join(["?"] * len(region_list))
     sql = f"""
         SELECT settlementdate, regionid, rrp
-        FROM prices5
+        FROM {src_table}
         WHERE regionid IN ({placeholders})
           AND settlementdate >= ?
           AND settlementdate <= ?
@@ -134,7 +169,7 @@ async def spot_price(
         "meta": {
             "from": from_utc.isoformat().replace("+00:00", "Z"),
             "to": to_utc.isoformat().replace("+00:00", "Z"),
-            "resolution": "5min",
+            "resolution": res_label,
             "regions": region_list,
             "downsampled": downsampled,
             "smoothed": smoothed_meta,
@@ -164,13 +199,15 @@ async def time_of_day(
     )
     from_nem = utc_to_nem_naive(from_utc)
     to_nem = utc_to_nem_naive(to_utc)
+    span_seconds = (to_utc - from_utc).total_seconds()
+    tod_src, _ = _pick_price_table(span_seconds)
 
     placeholders = ','.join(['?'] * len(region_list))
     sql = f'''
         SELECT regionid,
                EXTRACT(HOUR FROM settlementdate)::INT AS hour,
                AVG(rrp) AS avg_price
-        FROM prices5
+        FROM {tod_src}
         WHERE regionid IN ({placeholders})
           AND settlementdate >= ?
           AND settlementdate <= ?
@@ -220,6 +257,9 @@ async def by_fuel(
     )
     from_nem = utc_to_nem_naive(from_utc)
     to_nem = utc_to_nem_naive(to_utc)
+    span_seconds = (to_utc - from_utc).total_seconds()
+    bf_price, _ = _pick_price_table(span_seconds)
+    bf_gen, _ = _pick_gen_table(span_seconds)
 
     placeholders = ",".join(["?"] * len(region_list))
 
@@ -233,8 +273,8 @@ async def by_fuel(
                         ELSE g.fuel_type END AS fuel,
                    GREATEST(g.total_generation_mw, 0) AS gen_mw,
                    p.rrp
-            FROM generation_by_fuel_5min g
-            JOIN prices5 p
+            FROM {bf_gen} g
+            JOIN {bf_price} p
               ON g.settlementdate = p.settlementdate
              AND g.region = p.regionid
             WHERE g.region IN ({placeholders})
@@ -359,6 +399,9 @@ async def prices_stats(
     from_nem = utc_to_nem_naive(from_utc)
     to_nem = utc_to_nem_naive(to_utc)
 
+    span_seconds = (to_utc - from_utc).total_seconds()
+    src_table, _ = _pick_price_table(span_seconds)
+
     placeholders = ",".join(["?"] * len(region_list))
     sql = f"""
         SELECT regionid,
@@ -369,7 +412,7 @@ async def prices_stats(
                MIN(rrp) AS min_p,
                MAX(rrp) AS max_p,
                COUNT(*) AS n
-        FROM prices5
+        FROM {src_table}
         WHERE regionid IN ({placeholders})
           AND settlementdate >= ? AND settlementdate <= ?
         GROUP BY regionid
