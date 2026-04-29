@@ -190,3 +190,89 @@ async def time_of_day(
             'as_of': datetime.now(timezone.utc).isoformat(),
         },
     }
+
+
+@router.get('/prices/by-fuel')
+async def by_fuel(
+    region: Optional[str] = Query(None, min_length=2, max_length=8),
+    regions: Optional[str] = Query(None),
+    days: int = Query(7, ge=1, le=365),
+    from_: Optional[datetime] = Query(None, alias='from'),
+    to: Optional[datetime] = Query(None),
+) -> dict:
+    region_list = _resolve_regions(region, regions)
+
+    now_utc = datetime.now(timezone.utc)
+    to_utc = to.astimezone(timezone.utc) if to and to.tzinfo else (
+        to.replace(tzinfo=timezone.utc) if to else now_utc
+    )
+    from_utc = from_.astimezone(timezone.utc) if from_ and from_.tzinfo else (
+        from_.replace(tzinfo=timezone.utc) if from_ else (to_utc - timedelta(days=days))
+    )
+    from_nem = utc_to_nem_naive(from_utc)
+    to_nem = utc_to_nem_naive(to_utc)
+
+    placeholders = ','.join(['?'] * len(region_list))
+    sql = f'''
+        WITH gen AS (
+            SELECT settlementdate, fuel_type, region,
+                   GREATEST(total_generation_mw, 0) AS gen_mw
+            FROM generation_by_fuel_5min
+            WHERE region IN ({placeholders})
+              AND settlementdate >= ? AND settlementdate <= ?
+        ),
+        prices AS (
+            SELECT settlementdate, regionid, rrp
+            FROM prices5
+            WHERE regionid IN ({placeholders})
+              AND settlementdate >= ? AND settlementdate <= ?
+        ),
+        joined AS (
+            SELECT g.fuel_type, g.gen_mw, p.rrp
+            FROM gen g
+            JOIN prices p
+              ON g.settlementdate = p.settlementdate
+             AND g.region = p.regionid
+            WHERE g.gen_mw > 0
+        )
+        SELECT fuel_type AS fuel,
+               SUM(gen_mw) / 12.0 AS volume_mwh,
+               SUM(gen_mw * rrp) / NULLIF(SUM(gen_mw), 0) AS vwap,
+               AVG(gen_mw) AS avg_mw
+        FROM joined
+        GROUP BY fuel_type
+        HAVING SUM(gen_mw) > 0
+        ORDER BY volume_mwh DESC
+    '''
+    params = list(region_list) + [from_nem, to_nem] + list(region_list) + [from_nem, to_nem]
+
+    conn = get_connection()
+    try:
+        rows = conn.execute(sql, params).fetchall()
+    finally:
+        conn.close()
+
+    total_volume = sum(float(r[1]) for r in rows) if rows else 0.0
+
+    data = []
+    for fuel, volume_mwh, vwap, avg_mw in rows:
+        share = (float(volume_mwh) / total_volume * 100.0) if total_volume > 0 else 0.0
+        data.append({
+            'fuel': fuel,
+            'volume_mwh': round(float(volume_mwh), 1),
+            'share_pct': round(share, 2),
+            'vwap': round(float(vwap or 0.0), 2),
+            'avg_mw': round(float(avg_mw or 0.0), 1),
+        })
+
+    return {
+        'data': data,
+        'meta': {
+            'regions': region_list,
+            'lookback_days': days,
+            'total_volume_mwh': round(total_volume, 1),
+            'from': from_utc.isoformat().replace('+00:00', 'Z'),
+            'to': to_utc.isoformat().replace('+00:00', 'Z'),
+            'as_of': datetime.now(timezone.utc).isoformat(),
+        },
+    }
