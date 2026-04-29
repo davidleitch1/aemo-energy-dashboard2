@@ -6,11 +6,15 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
 
-from ..db import get_connection
+from ..db import get_connection, nem_naive_to_utc, utc_to_nem_naive
 
 router = APIRouter()
 
 VALID_REGIONS = {"NSW1", "QLD1", "SA1", "TAS1", "VIC1"}
+
+
+def _utc_iso(dt: datetime) -> str:
+    return nem_naive_to_utc(dt).isoformat().replace("+00:00", "Z")
 
 
 @router.get("/prices/spot")
@@ -27,39 +31,45 @@ async def spot_price(
             detail={"code": "INVALID_REGION", "message": f"Unknown region: {region}"},
         )
 
-    now_naive = datetime.now(timezone.utc).replace(tzinfo=None)
-    if to is None:
-        to = now_naive
-    else:
-        to = to.replace(tzinfo=None) if to.tzinfo else to
-    if from_ is None:
-        from_ = to - timedelta(hours=24)
-    else:
-        from_ = from_.replace(tzinfo=None) if from_.tzinfo else from_
+    # Default window: last 24h ending NOW (real time, in UTC).
+    now_utc = datetime.now(timezone.utc)
+    to_utc = to.astimezone(timezone.utc) if to and to.tzinfo else (
+        to.replace(tzinfo=timezone.utc) if to else now_utc
+    )
+    from_utc = from_.astimezone(timezone.utc) if from_ and from_.tzinfo else (
+        from_.replace(tzinfo=timezone.utc) if from_ else (to_utc - timedelta(hours=24))
+    )
+
+    # DuckDB rows are NEM-naive; convert query params to NEM-naive too.
+    from_nem = utc_to_nem_naive(from_utc)
+    to_nem = utc_to_nem_naive(to_utc)
 
     conn = get_connection()
-    rows = conn.execute(
-        """
-        SELECT settlementdate, regionid, rrp
-        FROM prices5
-        WHERE regionid = ?
-          AND settlementdate >= ?
-          AND settlementdate <= ?
-        ORDER BY settlementdate
-        """,
-        [region, from_, to],
-    ).fetchall()
+    try:
+        rows = conn.execute(
+            """
+            SELECT settlementdate, regionid, rrp
+            FROM prices5
+            WHERE regionid = ?
+              AND settlementdate >= ?
+              AND settlementdate <= ?
+            ORDER BY settlementdate
+            """,
+            [region, from_nem, to_nem],
+        ).fetchall()
+    finally:
+        conn.close()
 
     data = [
-        {"timestamp": r[0].isoformat() + "Z", "region": r[1], "price": r[2]}
+        {"timestamp": _utc_iso(r[0]), "region": r[1], "price": r[2]}
         for r in rows
     ]
 
     return {
         "data": data,
         "meta": {
-            "from": from_.isoformat() + "Z",
-            "to": to.isoformat() + "Z",
+            "from": from_utc.isoformat().replace("+00:00", "Z"),
+            "to": to_utc.isoformat().replace("+00:00", "Z"),
             "resolution": "5min",
             "downsampled": False,
             "source_rows": len(data),
