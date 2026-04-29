@@ -133,3 +133,60 @@ async def spot_price(
             "as_of": datetime.now(timezone.utc).isoformat(),
         },
     }
+
+
+@router.get('/prices/time-of-day')
+async def time_of_day(
+    region: Optional[str] = Query(None, min_length=2, max_length=8),
+    regions: Optional[str] = Query(None),
+    days: int = Query(7, ge=1, le=365),
+    from_: Optional[datetime] = Query(None, alias='from'),
+    to: Optional[datetime] = Query(None),
+) -> dict:
+    region_list = _resolve_regions(region, regions)
+
+    now_utc = datetime.now(timezone.utc)
+    to_utc = to.astimezone(timezone.utc) if to and to.tzinfo else (
+        to.replace(tzinfo=timezone.utc) if to else now_utc
+    )
+    from_utc = from_.astimezone(timezone.utc) if from_ and from_.tzinfo else (
+        from_.replace(tzinfo=timezone.utc) if from_ else (to_utc - timedelta(days=days))
+    )
+    from_nem = utc_to_nem_naive(from_utc)
+    to_nem = utc_to_nem_naive(to_utc)
+
+    placeholders = ','.join(['?'] * len(region_list))
+    sql = f'''
+        SELECT regionid,
+               EXTRACT(HOUR FROM settlementdate)::INT AS hour,
+               AVG(rrp) AS avg_price
+        FROM prices5
+        WHERE regionid IN ({placeholders})
+          AND settlementdate >= ?
+          AND settlementdate <= ?
+        GROUP BY regionid, hour
+        ORDER BY regionid, hour
+    '''
+    params = list(region_list) + [from_nem, to_nem]
+
+    conn = get_connection()
+    try:
+        rows = conn.execute(sql, params).fetchall()
+    finally:
+        conn.close()
+
+    data = [
+        {'region': r[0], 'hour': int(r[1]), 'avg_price': float(r[2])}
+        for r in rows
+    ]
+
+    return {
+        'data': data,
+        'meta': {
+            'regions': region_list,
+            'lookback_days': days,
+            'from': from_utc.isoformat().replace('+00:00', 'Z'),
+            'to': to_utc.isoformat().replace('+00:00', 'Z'),
+            'as_of': datetime.now(timezone.utc).isoformat(),
+        },
+    }
