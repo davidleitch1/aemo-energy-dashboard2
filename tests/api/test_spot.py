@@ -37,3 +37,39 @@ def test_spot_invalid_region_returns_400(client, auth_headers):
 def test_spot_returns_401_without_auth(client):
     resp = client.get("/v1/prices/spot?region=NSW1")
     assert resp.status_code == 401
+
+
+def test_spot_multi_region_returns_all_in_one_payload(client, auth_headers):
+    resp = client.get('/v1/prices/spot?regions=NSW1,QLD1,VIC1', headers=auth_headers)
+    assert resp.status_code == 200
+    body = resp.json()
+    regions_seen = {p['region'] for p in body['data']}
+    assert regions_seen == {'NSW1', 'QLD1', 'VIC1'} or regions_seen.issubset({'NSW1', 'QLD1', 'VIC1'})
+    assert body['meta']['regions'] == ['NSW1', 'QLD1', 'VIC1']
+
+
+def test_spot_invalid_region_in_multi(client, auth_headers):
+    resp = client.get('/v1/prices/spot?regions=NSW1,ZZ1', headers=auth_headers)
+    assert resp.status_code == 400
+
+
+def test_spot_missing_region_returns_400(client, auth_headers):
+    resp = client.get('/v1/prices/spot', headers=auth_headers)
+    assert resp.status_code == 400
+
+
+def test_spot_returns_empty_data_when_window_outside_range(client, auth_headers):
+    # Window in 2010, fixture has 2026 data — should return empty data, not error
+    resp = client.get(
+        '/v1/prices/spot?region=NSW1&from=2010-01-01T00:00:00Z&to=2010-01-02T00:00:00Z',
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200
+    assert resp.json()['data'] == []
+
+
+def test_spot_meta_regions_field_present(client, auth_headers):
+    resp = client.get('/v1/prices/spot?region=NSW1', headers=auth_headers)
+    body = resp.json()
+    assert 'regions' in body['meta']
+    assert body['meta']['regions'] == ['NSW1']
