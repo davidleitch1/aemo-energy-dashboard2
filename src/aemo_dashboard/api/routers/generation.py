@@ -270,6 +270,12 @@ async def generation_time_of_day(
     Always sourced from the 30-min pre-aggregates: hour-of-day means destroy
     sub-30-min information regardless, and rooftop is 30-min native, so the
     finer 5-min table buys nothing here at 6× the scan cost.
+
+    Bidirectional fuels (Battery, Transmission) use SPLIT-BEFORE-AVERAGE: each
+    per-timestamp sample is split into its positive and negative parts, then
+    each half is averaged separately. This preserves bidirectional behaviour
+    that average-then-split erases — e.g., NSW exports during ~15-25%% of
+    midday intervals even though net hourly average is positive.
     """
     region_list = _resolve_regions(region, regions)
     is_single_region = (len(region_list) == 1)
@@ -286,8 +292,8 @@ async def generation_time_of_day(
 
     placeholders = ",".join(["?"] * len(region_list))
 
-    # Utility-scale: drop Biomass; merge CCGT/OCGT/Gas other -> Gas. Sum
-    # across regions per (settlementdate, fuel), then average per hour.
+    # Utility-scale: split-before-average for batteries; pos_mw is a no-op
+    # GREATEST for non-battery fuels (always >= 0).
     util_sql = f"""
         WITH labeled AS (
             SELECT settlementdate,
@@ -306,7 +312,8 @@ async def generation_time_of_day(
         )
         SELECT EXTRACT(HOUR FROM settlementdate)::INT AS hour,
                fuel,
-               AVG(mw) AS mw
+               AVG(GREATEST(mw, 0)) AS pos_mw,
+               AVG(LEAST(mw, 0))    AS neg_mw
         FROM per_period
         GROUP BY 1, 2
         ORDER BY 1, 2
@@ -345,6 +352,8 @@ async def generation_time_of_day(
                 f"CASE WHEN interconnectorid IN ({from_placeholders}) THEN -meteredmwflow ELSE meteredmwflow END"
                 if from_list else "meteredmwflow"
             )
+            # Split-before-average so bidirectional flows survive the
+            # hour-of-day reduction.
             trans_sql = f"""
                 WITH per_period AS (
                     SELECT settlementdate,
@@ -355,7 +364,8 @@ async def generation_time_of_day(
                     GROUP BY 1
                 )
                 SELECT EXTRACT(HOUR FROM settlementdate)::INT AS hour,
-                       AVG(net_mw) AS mw
+                       AVG(GREATEST(net_mw, 0)) AS pos_mw,
+                       AVG(LEAST(net_mw, 0))    AS neg_mw
                 FROM per_period
                 GROUP BY 1
                 ORDER BY 1
@@ -377,18 +387,18 @@ async def generation_time_of_day(
     seen: set[str] = set()
     data: list[dict] = []
 
-    for hour, fuel, mw in util:
-        if mw is None:
-            continue
-        m = float(mw)
+    for hour, fuel, pos_mw, neg_mw in util:
+        p = float(pos_mw) if pos_mw is not None else 0.0
+        n = float(neg_mw) if neg_mw is not None else 0.0
         if fuel == "Battery Storage":
-            data.append({"hour": int(hour), "fuel": "Battery Storage",  "mw": round(max(m, 0.0), 1)})
-            data.append({"hour": int(hour), "fuel": "Battery Charging", "mw": round(min(m, 0.0), 1)})
+            # Always emit both halves so the AreaMark stays continuous.
+            data.append({"hour": int(hour), "fuel": "Battery Storage",  "mw": round(p, 1)})
+            data.append({"hour": int(hour), "fuel": "Battery Charging", "mw": round(n, 1)})
             seen.add("Battery Storage")
             seen.add("Battery Charging")
         else:
-            if abs(m) > 0.01:
-                data.append({"hour": int(hour), "fuel": fuel, "mw": round(max(m, 0.0), 1)})
+            if p > 0.01:
+                data.append({"hour": int(hour), "fuel": fuel, "mw": round(p, 1)})
                 seen.add(fuel)
 
     for hour, fuel, mw in roof:
@@ -399,12 +409,11 @@ async def generation_time_of_day(
             data.append({"hour": int(hour), "fuel": fuel, "mw": round(m, 1)})
             seen.add(fuel)
 
-    for hour, mw in trans_rows:
-        if mw is None:
-            continue
-        m = float(mw)
-        data.append({"hour": int(hour), "fuel": "Transmission Imports", "mw": round(max(m, 0.0), 1)})
-        data.append({"hour": int(hour), "fuel": "Transmission Exports", "mw": round(min(m, 0.0), 1)})
+    for hour, pos_mw, neg_mw in trans_rows:
+        p = float(pos_mw) if pos_mw is not None else 0.0
+        n = float(neg_mw) if neg_mw is not None else 0.0
+        data.append({"hour": int(hour), "fuel": "Transmission Imports", "mw": round(p, 1)})
+        data.append({"hour": int(hour), "fuel": "Transmission Exports", "mw": round(n, 1)})
         seen.add("Transmission Imports")
         seen.add("Transmission Exports")
 
