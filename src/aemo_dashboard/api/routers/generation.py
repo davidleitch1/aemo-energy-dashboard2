@@ -21,12 +21,17 @@ router = APIRouter()
 
 VALID_REGIONS = {"NSW1", "QLD1", "SA1", "TAS1", "VIC1"}
 
-# Stack order, bottom -> top above zero. Negative bands stack from
-# zero downward (Swift Charts handles this automatically).
+# Iteration order for client charts. Swift Charts stacks AreaMarks in
+# encounter order: the first negative-grouped mark sits closest to zero,
+# the next stacks further out; same for positive marks. Transmission
+# Exports first -> closest to zero negative band; Battery Charging next
+# -> deepest negative; Transmission Imports next -> just above zero.
 FUEL_ORDER = [
+    "Transmission Exports",
+    "Battery Charging",
+    "Transmission Imports",
     "Coal", "Gas", "Water", "Wind", "Solar", "Rooftop",
-    "Battery Storage", "Transmission Imports",
-    "Battery Charging", "Transmission Exports",
+    "Battery Storage",
 ]
 
 # From dashboard's calculate_regional_transmission_flows: per-region map of
