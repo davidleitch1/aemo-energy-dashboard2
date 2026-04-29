@@ -31,7 +31,7 @@ def _pick_price_table(span_seconds: float) -> tuple[str, str]:
     identical and the SQL is ~6x cheaper on prices30.
     """
     if span_seconds > THIRTY_DAYS_S:
-        return ("prices30", "30min")
+        return ("prices_30min", "30min")
     return ("prices5", "5min")
 
 
@@ -85,7 +85,7 @@ async def spot_price(
         conn0 = get_connection()
         try:
             min_dt, max_dt = conn0.execute(
-                "SELECT MIN(settlementdate), MAX(settlementdate) FROM prices30"
+                "SELECT MIN(settlementdate), MAX(settlementdate) FROM prices_30min"
             ).fetchone()
         finally:
             conn0.close()
@@ -106,14 +106,29 @@ async def spot_price(
     to_nem = utc_to_nem_naive(to_utc)
 
     placeholders = ",".join(["?"] * len(region_list))
-    sql = f"""
-        SELECT settlementdate, regionid, rrp
-        FROM {src_table}
-        WHERE regionid IN ({placeholders})
-          AND settlementdate >= ?
-          AND settlementdate <= ?
-        ORDER BY regionid, settlementdate
-    """
+    if src_table == "prices_30min" or src_table == "prices30":
+        # Both "30-min" tables hold a mix of 5-min and 30-min rows for 2022+;
+        # force uniform 30-min cadence so LTTB sees evenly-spaced input.
+        sql = f"""
+            SELECT time_bucket(INTERVAL '30 minutes', settlementdate) AS settlementdate,
+                   regionid,
+                   AVG(rrp) AS rrp
+            FROM {src_table}
+            WHERE regionid IN ({placeholders})
+              AND settlementdate >= ?
+              AND settlementdate <= ?
+            GROUP BY 1, regionid
+            ORDER BY regionid, 1
+        """
+    else:
+        sql = f"""
+            SELECT settlementdate, regionid, rrp
+            FROM {src_table}
+            WHERE regionid IN ({placeholders})
+              AND settlementdate >= ?
+              AND settlementdate <= ?
+            ORDER BY regionid, settlementdate
+        """
     params = list(region_list) + [from_nem, to_nem]
 
     conn = get_connection()
@@ -141,21 +156,42 @@ async def spot_price(
         series = by_region.get(regid, [])
         if not series:
             continue
-        if len(series) > MAX_POINTS:
-            ts_idx = [float(i) for i in range(len(series))]
-            vals = [s[1] for s in series]
-            idx_out, v_out = lttb(ts_idx, vals, MAX_POINTS)
-            downsampled = True
-            ts_v_pairs = [(series[int(ix)][0], v) for ix, v in zip(idx_out, v_out)]
-        else:
-            ts_v_pairs = list(series)
 
-        if smoothing == "loess" and len(ts_v_pairs) >= 5:
-            xs = [t.timestamp() for t, _ in ts_v_pairs]
-            ys = [v for _, v in ts_v_pairs]
-            ys_smoothed = loess(xs, ys, frac=loess_frac)
-            ts_v_pairs = [(t, sv) for (t, _), sv in zip(ts_v_pairs, ys_smoothed)]
-            smoothed_meta = True
+        if smoothing == "loess":
+            # Smoothing path: use mean-binning (not LTTB) so price spikes are
+            # averaged into their bucket rather than preserved as max-triangle
+            # outliers. Then LOESS for trend on top of the bucket means.
+            if len(series) > MAX_POINTS:
+                bin_size = max(1, len(series) // MAX_POINTS)
+                binned: list[tuple[datetime, float]] = []
+                for start in range(0, len(series), bin_size):
+                    chunk = series[start:start + bin_size]
+                    if not chunk:
+                        continue
+                    mid_ts = chunk[len(chunk) // 2][0]
+                    mean_v = sum(s[1] for s in chunk) / len(chunk)
+                    binned.append((mid_ts, mean_v))
+                ts_v_pairs = binned
+                downsampled = True
+            else:
+                ts_v_pairs = list(series)
+
+            if len(ts_v_pairs) >= 5:
+                xs = [float(i) for i in range(len(ts_v_pairs))]
+                ys = [v for _, v in ts_v_pairs]
+                ys_smoothed = loess(xs, ys, frac=loess_frac)
+                ts_v_pairs = [(t, sv) for (t, _), sv in zip(ts_v_pairs, ys_smoothed)]
+                smoothed_meta = True
+        else:
+            # Raw path: LTTB preserves spikes for the unsmoothed view.
+            if len(series) > MAX_POINTS:
+                ts_idx = [float(i) for i in range(len(series))]
+                vals = [s[1] for s in series]
+                idx_out, v_out = lttb(ts_idx, vals, MAX_POINTS)
+                downsampled = True
+                ts_v_pairs = [(series[int(ix)][0], v) for ix, v in zip(idx_out, v_out)]
+            else:
+                ts_v_pairs = list(series)
 
         for ts, v in ts_v_pairs:
             data.append({
