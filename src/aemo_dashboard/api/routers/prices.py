@@ -327,3 +327,77 @@ async def by_fuel(
             "as_of": datetime.now(timezone.utc).isoformat(),
         },
     }
+
+
+@router.get("/prices/stats")
+async def prices_stats(
+    region: Optional[str] = Query(None, min_length=2, max_length=8),
+    regions: Optional[str] = Query(None),
+    days: int = Query(7, ge=1, le=365),
+    from_: Optional[datetime] = Query(None, alias="from"),
+    to: Optional[datetime] = Query(None),
+) -> dict:
+    region_list = _resolve_regions(region, regions)
+
+    now_utc = datetime.now(timezone.utc)
+    to_utc = to.astimezone(timezone.utc) if to and to.tzinfo else (
+        to.replace(tzinfo=timezone.utc) if to else now_utc
+    )
+    from_utc = from_.astimezone(timezone.utc) if from_ and from_.tzinfo else (
+        from_.replace(tzinfo=timezone.utc) if from_ else (to_utc - timedelta(days=days))
+    )
+    from_nem = utc_to_nem_naive(from_utc)
+    to_nem = utc_to_nem_naive(to_utc)
+
+    placeholders = ",".join(["?"] * len(region_list))
+    sql = f"""
+        SELECT regionid,
+               AVG(rrp) AS mean,
+               MEDIAN(rrp) AS median,
+               QUANTILE_CONT(rrp, 0.10) AS p10,
+               QUANTILE_CONT(rrp, 0.90) AS p90,
+               MIN(rrp) AS min_p,
+               MAX(rrp) AS max_p,
+               COUNT(*) AS n
+        FROM prices5
+        WHERE regionid IN ({placeholders})
+          AND settlementdate >= ? AND settlementdate <= ?
+        GROUP BY regionid
+        ORDER BY regionid
+    """
+    params = list(region_list) + [from_nem, to_nem]
+
+    conn = get_connection()
+    try:
+        rows = conn.execute(sql, params).fetchall()
+    finally:
+        conn.close()
+
+    data = []
+    # Preserve the request order so the iOS chart-card list lines up with chip order.
+    by_region = {r[0]: r for r in rows}
+    for code in region_list:
+        r = by_region.get(code)
+        if r is None:
+            continue
+        data.append({
+            "region": r[0],
+            "mean":   round(float(r[1]), 2),
+            "median": round(float(r[2]), 2),
+            "p10":    round(float(r[3]), 2),
+            "p90":    round(float(r[4]), 2),
+            "min":    round(float(r[5]), 2),
+            "max":    round(float(r[6]), 2),
+            "sample_count": int(r[7]),
+        })
+
+    return {
+        "data": data,
+        "meta": {
+            "regions": region_list,
+            "lookback_days": days,
+            "from": from_utc.isoformat().replace("+00:00", "Z"),
+            "to": to_utc.isoformat().replace("+00:00", "Z"),
+            "as_of": datetime.now(timezone.utc).isoformat(),
+        },
+    }
