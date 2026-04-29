@@ -255,3 +255,173 @@ async def generation_mix(
             "as_of": datetime.now(timezone.utc).isoformat(),
         },
     }
+
+
+@router.get("/generation/time-of-day")
+async def generation_time_of_day(
+    region: Optional[str] = Query(None, min_length=2, max_length=8),
+    regions: Optional[str] = Query(None),
+    days: int = Query(7, ge=1, le=365),
+    from_: Optional[datetime] = Query(None, alias="from"),
+    to: Optional[datetime] = Query(None),
+) -> dict:
+    """Average generation by hour of day, summed across requested regions.
+
+    Always sourced from the 30-min pre-aggregates: hour-of-day means destroy
+    sub-30-min information regardless, and rooftop is 30-min native, so the
+    finer 5-min table buys nothing here at 6× the scan cost.
+    """
+    region_list = _resolve_regions(region, regions)
+    is_single_region = (len(region_list) == 1)
+
+    now_utc = datetime.now(timezone.utc)
+    to_utc = to.astimezone(timezone.utc) if to and to.tzinfo else (
+        to.replace(tzinfo=timezone.utc) if to else now_utc
+    )
+    from_utc = from_.astimezone(timezone.utc) if from_ and from_.tzinfo else (
+        from_.replace(tzinfo=timezone.utc) if from_ else (to_utc - timedelta(days=days))
+    )
+    from_nem = utc_to_nem_naive(from_utc)
+    to_nem = utc_to_nem_naive(to_utc)
+
+    placeholders = ",".join(["?"] * len(region_list))
+
+    # Utility-scale: drop Biomass; merge CCGT/OCGT/Gas other -> Gas. Sum
+    # across regions per (settlementdate, fuel), then average per hour.
+    util_sql = f"""
+        WITH labeled AS (
+            SELECT settlementdate,
+                   CASE WHEN fuel_type IN ('CCGT','OCGT','Gas other') THEN 'Gas'
+                        ELSE fuel_type END AS fuel,
+                   total_generation_mw AS gen_mw
+            FROM generation_by_fuel_30min
+            WHERE region IN ({placeholders})
+              AND settlementdate >= ? AND settlementdate <= ?
+              AND fuel_type != 'Biomass'
+        ),
+        per_period AS (
+            SELECT settlementdate, fuel, SUM(gen_mw) AS mw
+            FROM labeled
+            GROUP BY 1, 2
+        )
+        SELECT EXTRACT(HOUR FROM settlementdate)::INT AS hour,
+               fuel,
+               AVG(mw) AS mw
+        FROM per_period
+        GROUP BY 1, 2
+        ORDER BY 1, 2
+    """
+    util_params = list(region_list) + [from_nem, to_nem]
+
+    roof_sql = f"""
+        WITH per_period AS (
+            SELECT settlementdate, SUM(GREATEST(power, 0)) AS mw
+            FROM rooftop30
+            WHERE regionid IN ({placeholders})
+              AND settlementdate >= ? AND settlementdate <= ?
+            GROUP BY 1
+        )
+        SELECT EXTRACT(HOUR FROM settlementdate)::INT AS hour,
+               'Rooftop' AS fuel,
+               AVG(mw) AS mw
+        FROM per_period
+        GROUP BY 1
+        ORDER BY 1
+    """
+    roof_params = list(region_list) + [from_nem, to_nem]
+
+    trans_rows: list[tuple] = []
+    ic_map: dict[str, str] = {}
+    if is_single_region:
+        reg = region_list[0]
+        ic_map = INTERCONNECTOR_MAP.get(reg, {})
+        if ic_map:
+            ic_ids = list(ic_map.keys())
+            ic_placeholders = ",".join(["?"] * len(ic_ids))
+            from_set = {k for k, v in ic_map.items() if v == "from"}
+            from_list = list(from_set)
+            from_placeholders = ",".join(["?"] * len(from_list)) if from_list else "NULL"
+            sign_clause = (
+                f"CASE WHEN interconnectorid IN ({from_placeholders}) THEN -meteredmwflow ELSE meteredmwflow END"
+                if from_list else "meteredmwflow"
+            )
+            trans_sql = f"""
+                WITH per_period AS (
+                    SELECT settlementdate,
+                           SUM({sign_clause}) AS net_mw
+                    FROM transmission30
+                    WHERE interconnectorid IN ({ic_placeholders})
+                      AND settlementdate >= ? AND settlementdate <= ?
+                    GROUP BY 1
+                )
+                SELECT EXTRACT(HOUR FROM settlementdate)::INT AS hour,
+                       AVG(net_mw) AS mw
+                FROM per_period
+                GROUP BY 1
+                ORDER BY 1
+            """
+            trans_params = from_list + ic_ids + [from_nem, to_nem]
+
+    conn = get_connection()
+    try:
+        util = conn.execute(util_sql, util_params).fetchall()
+        roof = conn.execute(roof_sql, roof_params).fetchall()
+        if is_single_region and ic_map:
+            try:
+                trans_rows = conn.execute(trans_sql, trans_params).fetchall()
+            except Exception:
+                trans_rows = []
+    finally:
+        conn.close()
+
+    seen: set[str] = set()
+    data: list[dict] = []
+
+    for hour, fuel, mw in util:
+        if mw is None:
+            continue
+        m = float(mw)
+        if fuel == "Battery Storage":
+            data.append({"hour": int(hour), "fuel": "Battery Storage",  "mw": round(max(m, 0.0), 1)})
+            data.append({"hour": int(hour), "fuel": "Battery Charging", "mw": round(min(m, 0.0), 1)})
+            seen.add("Battery Storage")
+            seen.add("Battery Charging")
+        else:
+            if abs(m) > 0.01:
+                data.append({"hour": int(hour), "fuel": fuel, "mw": round(max(m, 0.0), 1)})
+                seen.add(fuel)
+
+    for hour, fuel, mw in roof:
+        if mw is None:
+            continue
+        m = float(mw)
+        if m > 0.01:
+            data.append({"hour": int(hour), "fuel": fuel, "mw": round(m, 1)})
+            seen.add(fuel)
+
+    for hour, mw in trans_rows:
+        if mw is None:
+            continue
+        m = float(mw)
+        data.append({"hour": int(hour), "fuel": "Transmission Imports", "mw": round(max(m, 0.0), 1)})
+        data.append({"hour": int(hour), "fuel": "Transmission Exports", "mw": round(min(m, 0.0), 1)})
+        seen.add("Transmission Imports")
+        seen.add("Transmission Exports")
+
+    fuel_rank = {f: i for i, f in enumerate(FUEL_ORDER)}
+    data.sort(key=lambda p: (p["hour"], fuel_rank.get(p["fuel"], 99)))
+
+    fuels_displayed = [f for f in FUEL_ORDER if f in seen]
+    fuels_displayed += sorted(seen - set(FUEL_ORDER))
+
+    return {
+        "data": data,
+        "meta": {
+            "regions": region_list,
+            "lookback_days": days,
+            "fuels": fuels_displayed,
+            "from": from_utc.isoformat().replace("+00:00", "Z"),
+            "to": to_utc.isoformat().replace("+00:00", "Z"),
+            "as_of": datetime.now(timezone.utc).isoformat(),
+        },
+    }
