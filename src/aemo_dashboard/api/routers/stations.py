@@ -299,7 +299,7 @@ async def stations_tod(
         end_excl = datetime.now()
         start = end_excl - timedelta(days=period_days)
         rows = _query_tod(conn, station, start, end_excl, meta)
-        period_avg_price = _query_period_avg_price(conn, meta['region'], start, end_excl)
+        period_vwap = _query_period_vwap(conn, meta, start, end_excl)
     finally:
         conn.close()
 
@@ -320,15 +320,25 @@ async def stations_tod(
             'period_days':   period_days,
             'from':          _utc_iso(start),
             'to':            _utc_iso(end_excl),
-            'avg_price':     None if period_avg_price is None else round(float(period_avg_price), 2),
+            # Volume-weighted average price the station actually earned
+            # (∑gen·price / ∑gen). Differs sharply from the regional time
+            # average for VRE — wind/solar generate when prices are typically
+            # lower (cannibalisation), so VWAP < region avg.
+            'avg_price':     None if period_vwap is None else round(float(period_vwap), 2),
             'as_of':         _now_iso(),
         },
     }
 
 
 def _query_tod(conn, station, start, end_excl, meta) -> list:
-    """List of (hour, avg_gen_mw, avg_price). Price is the spot price in the
-    station's region, averaged over each hour-of-day across the period.
+    """List of (hour, avg_gen_mw, vwap_price).
+
+    `avg_gen_mw` is the simple mean of station-total dispatch over all
+    samples falling on each hour-of-day. `vwap_price` is the
+    volume-weighted average price for THIS station at that hour-of-day —
+    ∑(gen·price) / ∑(gen) over the same samples — answering "what did this
+    station typically earn per MWh at this hour?". For VRE that's what
+    matters; the regional time-average price would mask cannibalisation.
     """
     sql_fast = '''
         WITH per_slot AS (
@@ -342,7 +352,7 @@ def _query_tod(conn, station, start, end_excl, meta) -> list:
         )
         SELECT EXTRACT(hour FROM settlementdate)::INTEGER AS hour,
                AVG(gen_mw) AS avg_gen_mw,
-               AVG(price)  AS avg_price
+               SUM(gen_mw * price) / NULLIF(SUM(CASE WHEN gen_mw > 0 THEN gen_mw ELSE 0 END), 0) AS vwap_price
         FROM per_slot
         GROUP BY 1
         ORDER BY 1
@@ -367,7 +377,7 @@ def _query_tod(conn, station, start, end_excl, meta) -> list:
         )
         SELECT EXTRACT(hour FROM settlementdate)::INTEGER AS hour,
                AVG(gen_mw) AS avg_gen_mw,
-               AVG(price)  AS avg_price
+               SUM(gen_mw * price) / NULLIF(SUM(CASE WHEN gen_mw > 0 THEN gen_mw ELSE 0 END), 0) AS vwap_price
         FROM per_slot
         GROUP BY 1
         ORDER BY 1
@@ -376,17 +386,46 @@ def _query_tod(conn, station, start, end_excl, meta) -> list:
     return conn.execute(sql_fb, params).fetchall()
 
 
-def _query_period_avg_price(conn, region: str, start, end_excl) -> Optional[float]:
-    """Time-weighted mean spot price for the station's region over the window."""
-    try:
-        row = conn.execute(
-            '''
-            SELECT AVG(rrp) FROM prices30
-            WHERE regionid = ?
+def _query_period_vwap(conn, meta: dict, start, end_excl) -> Optional[float]:
+    """Period-level volume-weighted average price ∑(gen·price)/∑(gen)."""
+    sql_fast = '''
+        WITH per_slot AS (
+            SELECT settlementdate,
+                   SUM(scadavalue) AS gen_mw,
+                   AVG(price)      AS price
+            FROM station_time_series_30min
+            WHERE station_name = ?
               AND settlementdate >= ? AND settlementdate < ?
-            ''',
-            [region, start, end_excl],
-        ).fetchone()
+            GROUP BY 1
+        )
+        SELECT SUM(gen_mw * price) / NULLIF(SUM(CASE WHEN gen_mw > 0 THEN gen_mw ELSE 0 END), 0)
+        FROM per_slot
+    '''
+    try:
+        row = conn.execute(sql_fast, [meta['station_name'], start, end_excl]).fetchone()
+        return row[0] if row else None
+    except duckdb.CatalogException:
+        pass
+
+    duid_ph = ','.join(['?'] * len(meta['duids']))
+    sql_fb = f'''
+        WITH per_slot AS (
+            SELECT s.settlementdate,
+                   SUM(s.scadavalue) AS gen_mw,
+                   AVG(p.rrp)        AS price
+            FROM scada30 s
+            LEFT JOIN prices30 p
+              ON s.settlementdate = p.settlementdate AND p.regionid = ?
+            WHERE s.duid IN ({duid_ph})
+              AND s.settlementdate >= ? AND s.settlementdate < ?
+            GROUP BY 1
+        )
+        SELECT SUM(gen_mw * price) / NULLIF(SUM(CASE WHEN gen_mw > 0 THEN gen_mw ELSE 0 END), 0)
+        FROM per_slot
+    '''
+    params: list = [meta['region']] + list(meta['duids']) + [start, end_excl]
+    try:
+        row = conn.execute(sql_fb, params).fetchone()
+        return row[0] if row else None
     except duckdb.CatalogException:
         return None
-    return row[0] if row else None
