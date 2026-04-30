@@ -49,3 +49,13 @@ def create_app() -> FastAPI:
 
 
 app = create_app()
+
+@app.on_event("startup")
+def _prewarm_caches() -> None:
+    """Pre-populate the gauges cache on each worker's startup so the
+    first user-facing request never pays the cold-DB scan cost."""
+    try:
+        from .routers.gauges import gauges_today
+        gauges_today()
+    except Exception:
+        pass  # Soft fail — cache will populate on first real call.

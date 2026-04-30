@@ -15,6 +15,7 @@ Definitions match the existing Panel dashboard's nem_dash_tab.py:
 """
 from __future__ import annotations
 
+import time
 from datetime import datetime, timezone
 
 from fastapi import APIRouter
@@ -22,6 +23,13 @@ from fastapi import APIRouter
 from ..db import get_connection, nem_naive_to_utc
 
 router = APIRouter()
+
+# In-process TTL cache: gauges_today does several full table scans
+# (all-time hour record + min/max), and the answer changes at most every
+# 30 minutes when a new settlement period lands. 30 s TTL collapses
+# concurrent traffic to a single DB read.
+_GAUGES_CACHE: dict = {"fetched_at": 0.0, "payload": None}
+_GAUGES_TTL_SEC = 60.0
 
 REGIONS_5 = ("NSW1", "QLD1", "VIC1", "SA1", "TAS1")
 MAINLAND = ("NSW1", "QLD1", "VIC1", "SA1")
@@ -220,7 +228,15 @@ def _load_battery(conn) -> dict:
 
 
 @router.get("/gauges/today")
-async def gauges_today() -> dict:
+def gauges_today() -> dict:
+    now = time.time()
+    cached = _GAUGES_CACHE["payload"]
+    if cached is not None and (now - _GAUGES_CACHE["fetched_at"]) < _GAUGES_TTL_SEC:
+        # Refresh  to current wall-clock so clients see liveness;
+        # the data block stays cached.
+        return {**cached, "meta": {"as_of": datetime.now(timezone.utc).isoformat(),
+                                    "cached": True}}
+
     conn = get_connection()
     try:
         demand = _load_demand(conn)
@@ -229,11 +245,14 @@ async def gauges_today() -> dict:
     finally:
         conn.close()
 
-    return {
+    payload = {
         "data": {
             "demand": demand,
             "renewable_share": renewable,
             "battery_soc": battery,
         },
-        "meta": {"as_of": datetime.now(timezone.utc).isoformat()},
+        "meta": {"as_of": datetime.now(timezone.utc).isoformat(), "cached": False},
     }
+    _GAUGES_CACHE["fetched_at"] = now
+    _GAUGES_CACHE["payload"]    = payload
+    return payload

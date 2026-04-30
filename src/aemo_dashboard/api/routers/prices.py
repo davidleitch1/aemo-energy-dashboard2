@@ -65,7 +65,7 @@ def _resolve_regions(region: Optional[str], regions: Optional[str]) -> list[str]
 
 
 @router.get("/prices/spot")
-async def spot_price(
+def spot_price(
     region: Optional[str] = Query(None, min_length=2, max_length=8),
     regions: Optional[str] = Query(None),
     from_: Optional[datetime] = Query(None, alias="from"),
@@ -217,7 +217,7 @@ async def spot_price(
 
 
 @router.get('/prices/time-of-day')
-async def time_of_day(
+def time_of_day(
     region: Optional[str] = Query(None, min_length=2, max_length=8),
     regions: Optional[str] = Query(None),
     days: int = Query(7, ge=1, le=365),
@@ -275,7 +275,7 @@ async def time_of_day(
     }
 
 @router.get("/prices/by-fuel")
-async def by_fuel(
+def by_fuel(
     region: Optional[str] = Query(None, min_length=2, max_length=8),
     regions: Optional[str] = Query(None),
     days: int = Query(7, ge=1, le=365),
@@ -416,7 +416,7 @@ async def by_fuel(
 
 
 @router.get("/prices/stats")
-async def prices_stats(
+def prices_stats(
     region: Optional[str] = Query(None, min_length=2, max_length=8),
     regions: Optional[str] = Query(None),
     days: int = Query(7, ge=1, le=365),

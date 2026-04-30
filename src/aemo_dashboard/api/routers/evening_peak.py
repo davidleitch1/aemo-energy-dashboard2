@@ -241,7 +241,7 @@ def _empty_window() -> dict:
 
 
 @router.get('/evening-peak')
-async def evening_peak(
+def evening_peak(
     region: str = Query('NEM'),
     period_days: int = Query(30, ge=7, le=365),
 ) -> dict:

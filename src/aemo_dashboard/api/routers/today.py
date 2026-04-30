@@ -38,7 +38,7 @@ def _utc_iso(dt: datetime) -> str:
 # ----------------------------------------------------------------------
 
 @router.get('/predispatch')
-async def predispatch(
+def predispatch(
     region: str = Query('NSW1'),
 ) -> dict:
     """Latest predispatch run for one region. Returns ~68 30-min slots
@@ -124,7 +124,7 @@ def _fetch_market_notices(limit: int) -> list[dict]:
 
 
 @router.get('/notices')
-async def notices(
+def notices(
     limit: int = Query(10, ge=1, le=20),
 ) -> dict:
     """Recent price-relevant AEMO market notices, last 48h.
