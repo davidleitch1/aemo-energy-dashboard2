@@ -80,24 +80,24 @@ def spot_price(
 
     now_utc = datetime.now(timezone.utc)
 
-    if from_ is None and to is None:
-        # Both omitted -> "All data". Use prices30's deepest history.
+    to_utc = to.astimezone(timezone.utc) if to and to.tzinfo else (
+        to.replace(tzinfo=timezone.utc) if to else now_utc
+    )
+
+    if from_ is None:
+        # "All data" — anchor from the earliest available timestamp. Clients
+        # commonly send only `to=now` for the All chip, so don't require both
+        # to be omitted.
         conn0 = get_connection()
         try:
-            min_dt, max_dt = conn0.execute(
-                "SELECT MIN(settlementdate), MAX(settlementdate) FROM prices_30min"
-            ).fetchone()
+            min_dt = conn0.execute(
+                "SELECT MIN(settlementdate) FROM prices_30min"
+            ).fetchone()[0]
         finally:
             conn0.close()
-        from_utc = nem_naive_to_utc(min_dt) if min_dt else now_utc - timedelta(hours=24)
-        to_utc = nem_naive_to_utc(max_dt) if max_dt else now_utc
+        from_utc = nem_naive_to_utc(min_dt) if min_dt else (to_utc - timedelta(hours=24))
     else:
-        to_utc = to.astimezone(timezone.utc) if to and to.tzinfo else (
-            to.replace(tzinfo=timezone.utc) if to else now_utc
-        )
-        from_utc = from_.astimezone(timezone.utc) if from_ and from_.tzinfo else (
-            from_.replace(tzinfo=timezone.utc) if from_ else (to_utc - timedelta(hours=24))
-        )
+        from_utc = from_.astimezone(timezone.utc) if from_.tzinfo else from_.replace(tzinfo=timezone.utc)
 
     span_seconds = (to_utc - from_utc).total_seconds()
     src_table, res_label = _pick_price_table(span_seconds)

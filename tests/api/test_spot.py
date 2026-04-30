@@ -75,6 +75,25 @@ def test_spot_meta_regions_field_present(client, auth_headers):
     assert body['meta']['regions'] == ['NSW1']
 
 
+def test_spot_to_only_with_no_from_returns_all_history(client, auth_headers):
+    """Regression: iOS 'All' chip sends to=now but no from. Server must
+    anchor from the earliest available timestamp, not default to 24h-back.
+    """
+    resp = client.get(
+        '/v1/prices/spot?region=NSW1&to=2026-04-29T20:00:00Z',
+        headers=auth_headers,
+    )
+    body = resp.json()
+    assert resp.status_code == 200
+    # 'from' in meta should reflect the earliest fixture timestamp, not to-24h.
+    no_from_meta = body['meta']['from']
+    # And the data span should be substantially larger than 24h.
+    bare_resp = client.get('/v1/prices/spot?region=NSW1', headers=auth_headers).json()
+    assert bare_resp['meta']['from'] == no_from_meta, (
+        f'to-only should match no-args: {no_from_meta} vs {bare_resp["meta"]["from"]}'
+    )
+
+
 def test_spot_smoothing_loess_returns_smoothed_meta(client, auth_headers):
     resp = client.get(
         '/v1/prices/spot?region=NSW1&smoothing=loess',
