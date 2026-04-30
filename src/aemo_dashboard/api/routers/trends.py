@@ -210,7 +210,8 @@ async def vre_by_fuel(
     df = pd.concat([util, roof], ignore_index=True)
 
     data: list[dict] = []
-    from_iso = start.isoformat()
+    # Tag naive `from` with UTC so iOS's strict ISO8601 decoder accepts it.
+    from_iso = start.replace(tzinfo=timezone.utc).isoformat()
     to_iso = _now_utc_iso()
     if not df.empty:
         for fuel in ("Rooftop", "Solar", "Wind"):
@@ -260,6 +261,9 @@ async def thermal_vs_renewables(
     util = _load_daily_utility(regions, fuel_filter, start)
     roof = _load_daily_rooftop(regions, start)
     df = pd.concat([util, roof], ignore_index=True)
+    # Tag naive `from` with UTC so iOS's strict ISO8601 decoder accepts it.
+    from_iso = start.replace(tzinfo=timezone.utc).isoformat()
+    to_iso = _now_utc_iso()
 
     # Categorise.
     renewable_set = {"Wind", "Solar", "Rooftop", "Water"}
@@ -273,8 +277,6 @@ async def thermal_vs_renewables(
         return None
 
     data: list[dict] = []
-    from_iso = start.isoformat()
-    to_iso = _now_utc_iso()
     if not df.empty:
         df["category"] = df["fuel"].map(categorise)
         df = df.dropna(subset=["category"])
