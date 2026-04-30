@@ -174,3 +174,103 @@ async def batteries_overview(
             'as_of':        _now_iso(),
         },
     }
+
+
+# ----------------------------------------------------------------------
+# /v1/batteries/owners — distinct owner list (Fleet filter sheet)
+# ----------------------------------------------------------------------
+
+@router.get('/batteries/owners')
+async def batteries_owners() -> dict:
+    """Distinct owners across battery DUIDs, alphabetical."""
+    sql = '''
+        SELECT DISTINCT "Owner" AS owner
+        FROM duid_info
+        WHERE "Fuel" = 'Battery Storage' AND "Owner" IS NOT NULL
+        ORDER BY 1
+    '''
+    conn = get_connection()
+    try:
+        rows = [r[0] for r in conn.execute(sql).fetchall()]
+    finally:
+        conn.close()
+    return {'data': rows, 'meta': {'count': len(rows), 'as_of': _now_iso()}}
+
+
+# ----------------------------------------------------------------------
+# /v1/batteries/list — DUIDs filtered by regions[] x owners[]
+# ----------------------------------------------------------------------
+
+PHYSICAL_REGIONS = {'NSW1', 'QLD1', 'SA1', 'TAS1', 'VIC1'}
+
+
+@router.get('/batteries/list')
+async def batteries_list(
+    regions: Optional[str] = Query(None),
+    owners: Optional[str] = Query(None),
+) -> dict:
+    """Filtered battery list ordered by capacity descending.
+
+    Display string mirrors desktop `insights_tab.py`:
+        '{Site} ({DUID}) — {capacity:.0f} MW / {storage:.0f} MWh ({duration:.1f}h)'
+    """
+    region_list = [r.strip().upper() for r in (regions or '').split(',') if r.strip()]
+    owner_list  = [o.strip()         for o in (owners  or '').split(',') if o.strip()]
+
+    bad = [r for r in region_list if r not in PHYSICAL_REGIONS]
+    if bad:
+        raise HTTPException(
+            status_code=400,
+            detail={'code': 'INVALID_REGION', 'message': f'Unknown region(s): {bad}'},
+        )
+
+    where = ['"Fuel" = \'Battery Storage\'']
+    params: list = []
+    if region_list:
+        ph = ','.join(['?'] * len(region_list))
+        where.append(f'"Region" IN ({ph})')
+        params.extend(region_list)
+    if owner_list:
+        ph = ','.join(['?'] * len(owner_list))
+        where.append(f'"Owner" IN ({ph})')
+        params.extend(owner_list)
+
+    sql = f'''
+        SELECT "DUID" AS duid, "Site Name" AS site_name, "Owner" AS owner,
+               "Region" AS region, "Capacity(MW)" AS capacity_mw,
+               "Storage(MWh)" AS storage_mwh
+        FROM duid_info
+        WHERE {' AND '.join(where)}
+        ORDER BY "Capacity(MW)" DESC NULLS LAST, "DUID"
+    '''
+
+    conn = get_connection()
+    try:
+        rows = conn.execute(sql, params).fetchall()
+    finally:
+        conn.close()
+
+    out: list[dict] = []
+    for (duid, site, owner, region, cap, stor) in rows:
+        cap = float(cap or 0.0); stor = float(stor or 0.0)
+        dur = stor / cap if cap > 0 else 0.0
+        display = f'{site} ({duid}) — {cap:.0f} MW / {stor:.0f} MWh ({dur:.1f}h)'
+        out.append({
+            'duid':         duid,
+            'site_name':    site,
+            'owner':        owner,
+            'region':       region,
+            'capacity_mw':  cap,
+            'storage_mwh':  stor,
+            'display':      display,
+        })
+
+    return {
+        'data': out,
+        'meta': {
+            'count':   len(out),
+            'regions': region_list or None,
+            'owners':  owner_list or None,
+            'as_of':   _now_iso(),
+        },
+    }
