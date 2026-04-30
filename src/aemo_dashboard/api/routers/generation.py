@@ -23,15 +23,27 @@ VALID_REGIONS = {"NSW1", "QLD1", "SA1", "TAS1", "VIC1"}
 
 # Iteration order for client charts. Swift Charts stacks AreaMarks in
 # encounter order: the first negative-grouped mark sits closest to zero,
-# the next stacks further out; same for positive marks. Transmission
-# Exports first -> closest to zero negative band; Battery Charging next
-# -> deepest negative; Transmission Imports next -> just above zero.
+# the next stacks further out; same for positive marks.
+#
+# Bottom-to-top reading on the chart:
+#   Battery Charging  (deepest negative)
+#   Transmission Exports
+#   --- 0 ---
+#   Transmission Imports  (just above zero)
+#   Rooftop, Solar, Wind  (zero-marginal)
+#   Coal, Water (Hydro), Battery Storage  (mid)
+#   Gas  (highest marginal cost, top of stack)
+#
+# Roughly variable-cost ordered, with Battery Storage between Hydro and
+# Gas to surface its peak-supply role morning + evening.
 FUEL_ORDER = [
     "Transmission Exports",
     "Battery Charging",
     "Transmission Imports",
-    "Coal", "Gas", "Water", "Wind", "Solar", "Rooftop",
+    "Rooftop", "Solar", "Wind",
+    "Coal", "Water",
     "Battery Storage",
+    "Gas",
 ]
 
 # From dashboard's calculate_regional_transmission_flows: per-region map of
