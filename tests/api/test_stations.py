@@ -96,5 +96,16 @@ def test_tod_meta_shape(client, auth_headers):
                    headers=auth_headers)
     assert r.status_code == 200
     meta = r.json()['meta']
-    for k in ('station_name', 'capacity_mw', 'period_days', 'from', 'to', 'as_of'):
+    for k in ('station_name', 'region', 'capacity_mw', 'period_days', 'from', 'to', 'avg_price', 'as_of'):
         assert k in meta, f'missing meta.{k}'
+
+
+def test_tod_data_includes_avg_price(client, auth_headers):
+    r = client.get('/v1/stations/tod?station=Tailem%20Bend&period_days=2',
+                   headers=auth_headers)
+    body = r.json()
+    assert r.status_code == 200
+    if body['data']:
+        p = body['data'][0]
+        for k in ('hour', 'avg_gen_mw', 'avg_price'):
+            assert k in p, f'missing point.{k}'

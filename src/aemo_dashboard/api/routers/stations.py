@@ -299,39 +299,51 @@ async def stations_tod(
         end_excl = datetime.now()
         start = end_excl - timedelta(days=period_days)
         rows = _query_tod(conn, station, start, end_excl, meta)
+        period_avg_price = _query_period_avg_price(conn, meta['region'], start, end_excl)
     finally:
         conn.close()
 
     data = [
-        {'hour': int(h), 'avg_gen_mw': None if v is None else round(float(v), 2)}
-        for (h, v) in rows
+        {
+            'hour':       int(h),
+            'avg_gen_mw': None if v is None else round(float(v), 2),
+            'avg_price':  None if p is None else round(float(p), 2),
+        }
+        for (h, v, p) in rows
     ]
     return {
         'data': data,
         'meta': {
-            'station_name': meta['station_name'],
-            'capacity_mw':  meta['capacity_mw'],
-            'period_days':  period_days,
-            'from':         _utc_iso(start),
-            'to':           _utc_iso(end_excl),
-            'as_of':        _now_iso(),
+            'station_name':  meta['station_name'],
+            'region':        meta['region'],
+            'capacity_mw':   meta['capacity_mw'],
+            'period_days':   period_days,
+            'from':          _utc_iso(start),
+            'to':            _utc_iso(end_excl),
+            'avg_price':     None if period_avg_price is None else round(float(period_avg_price), 2),
+            'as_of':         _now_iso(),
         },
     }
 
 
 def _query_tod(conn, station, start, end_excl, meta) -> list:
-    """List of (hour, avg_gen_mw). Prefer pre-built table; else compute."""
+    """List of (hour, avg_gen_mw, avg_price). Price is the spot price in the
+    station's region, averaged over each hour-of-day across the period.
+    """
     sql_fast = '''
-        WITH per_period AS (
-            SELECT settlementdate, SUM(scadavalue) AS gen_mw
-            FROM station_time_series_30min
-            WHERE station_name = ?
-              AND settlementdate >= ? AND settlementdate < ?
+        WITH per_slot AS (
+            SELECT s.settlementdate,
+                   SUM(s.scadavalue) AS gen_mw,
+                   AVG(s.price)      AS price
+            FROM station_time_series_30min s
+            WHERE s.station_name = ?
+              AND s.settlementdate >= ? AND s.settlementdate < ?
             GROUP BY 1
         )
         SELECT EXTRACT(hour FROM settlementdate)::INTEGER AS hour,
-               AVG(gen_mw) AS avg_gen_mw
-        FROM per_period
+               AVG(gen_mw) AS avg_gen_mw,
+               AVG(price)  AS avg_price
+        FROM per_slot
         GROUP BY 1
         ORDER BY 1
     '''
@@ -342,18 +354,39 @@ def _query_tod(conn, station, start, end_excl, meta) -> list:
 
     duid_ph = ','.join(['?'] * len(meta['duids']))
     sql_fb = f'''
-        WITH per_period AS (
-            SELECT settlementdate, SUM(scadavalue) AS gen_mw
-            FROM scada30
-            WHERE duid IN ({duid_ph})
-              AND settlementdate >= ? AND settlementdate < ?
+        WITH per_slot AS (
+            SELECT s.settlementdate,
+                   SUM(s.scadavalue) AS gen_mw,
+                   AVG(p.rrp)        AS price
+            FROM scada30 s
+            LEFT JOIN prices30 p
+              ON s.settlementdate = p.settlementdate AND p.regionid = ?
+            WHERE s.duid IN ({duid_ph})
+              AND s.settlementdate >= ? AND s.settlementdate < ?
             GROUP BY 1
         )
         SELECT EXTRACT(hour FROM settlementdate)::INTEGER AS hour,
-               AVG(gen_mw) AS avg_gen_mw
-        FROM per_period
+               AVG(gen_mw) AS avg_gen_mw,
+               AVG(price)  AS avg_price
+        FROM per_slot
         GROUP BY 1
         ORDER BY 1
     '''
-    params: list = list(meta['duids']) + [start, end_excl]
+    params: list = [meta['region']] + list(meta['duids']) + [start, end_excl]
     return conn.execute(sql_fb, params).fetchall()
+
+
+def _query_period_avg_price(conn, region: str, start, end_excl) -> Optional[float]:
+    """Time-weighted mean spot price for the station's region over the window."""
+    try:
+        row = conn.execute(
+            '''
+            SELECT AVG(rrp) FROM prices30
+            WHERE regionid = ?
+              AND settlementdate >= ? AND settlementdate < ?
+            ''',
+            [region, start, end_excl],
+        ).fetchone()
+    except duckdb.CatalogException:
+        return None
+    return row[0] if row else None
