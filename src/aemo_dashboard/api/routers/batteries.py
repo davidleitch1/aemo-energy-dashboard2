@@ -186,7 +186,7 @@ async def batteries_owners() -> dict:
     sql = '''
         SELECT DISTINCT "Owner" AS owner
         FROM duid_info
-        WHERE "Fuel" = 'Battery Storage' AND "Owner" IS NOT NULL
+        WHERE "Fuel" = 'Battery Storage' AND "Owner" IS NOT NULL AND "Owner" <> ''
         ORDER BY 1
     '''
     conn = get_connection()
