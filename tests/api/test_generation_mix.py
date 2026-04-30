@@ -53,11 +53,13 @@ def test_mix_resolution_auto_picks_buckets(client, auth_headers):
 
 
 def test_mix_resolution_thresholds(client, auth_headers):
-    """Verify the bucket ladder: 24h→5min, 7d→30min, 30d→1h, >31d→1d."""
+    """Verify the bucket ladder: ≤24h→5min, ≤7d→30min, else→1d.
+    No 1h auto-tier — at 30D the diurnal cycle creates a phone-screen comb."""
     cases = [
         ('2026-04-29T00:00:00Z', '2026-04-29T20:00:00Z', '5min'),   # 20h
         ('2026-04-22T20:00:00Z', '2026-04-29T20:00:00Z', '30min'),  # 7d
-        ('2026-03-30T20:00:00Z', '2026-04-29T20:00:00Z', '1h'),     # 30d
+        ('2026-03-30T20:00:00Z', '2026-04-29T20:00:00Z', '1d'),     # 30d
+        ('2026-01-29T20:00:00Z', '2026-04-29T20:00:00Z', '1d'),     # 90d
         ('2025-04-29T20:00:00Z', '2026-04-29T20:00:00Z', '1d'),     # 365d
     ]
     for from_, to, expected in cases:

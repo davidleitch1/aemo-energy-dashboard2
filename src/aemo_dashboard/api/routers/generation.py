@@ -85,7 +85,9 @@ def _pick_resolution(seconds: float) -> tuple[str, str]:
     hours = seconds / 3600
     if hours <= 24.5:        return ("5min",  "5 minutes")
     if hours <= 24 * 7.5:    return ("30min", "30 minutes")
-    if hours <= 24 * 31:     return ("1h",    "1 hour")
+    # No 1h auto-tier: at 30D the diurnal cycle (24 buckets/day × 30 days = 720
+    # points) creates a comb pattern on a phone-width chart. 1d (30 points)
+    # collapses to daily means and surfaces the seasonal/structural shape.
     return ("1d",  "1 day")
 
 
