@@ -86,7 +86,6 @@ def _pick_resolution(seconds: float) -> tuple[str, str]:
     if hours <= 24.5:        return ("5min",  "5 minutes")
     if hours <= 24 * 7.5:    return ("30min", "30 minutes")
     if hours <= 24 * 31:     return ("1h",    "1 hour")
-    if hours <= 24 * 366:    return ("6h",    "6 hours")
     return ("1d",  "1 day")
 
 
@@ -123,6 +122,12 @@ async def generation_mix(
 
     placeholders = ",".join(["?"] * len(region_list))
 
+    # Use the 30-min pre-aggregate for any resolution coarser than 5min — same
+    # schema, ~6x less data to scan. The 5-min table is only needed for the
+    # 24H view where bucket == source cadence.
+    util_table = "generation_by_fuel_5min" if res_label == "5min" else "generation_by_fuel_30min"
+    trans_table = "transmission5" if res_label == "5min" else "transmission30"
+
     # Utility-scale: Coal/Gas (merged)/Water/Wind/Solar/Other; biomass dropped.
     # Battery Storage is split into discharge (positive) and charging (negative)
     # post-aggregation in Python so the stacked area renders correctly.
@@ -132,7 +137,7 @@ async def generation_mix(
                    CASE WHEN fuel_type IN ('CCGT','OCGT','Gas other') THEN 'Gas'
                         ELSE fuel_type END AS fuel,
                    total_generation_mw AS gen_mw
-            FROM generation_by_fuel_5min
+            FROM {util_table}
             WHERE region IN ({placeholders})
               AND settlementdate >= ? AND settlementdate <= ?
               AND fuel_type != 'Biomass'
@@ -153,22 +158,58 @@ async def generation_mix(
     """
     util_params = list(region_list) + [from_nem, to_nem]
 
-    roof_sql = f"""
-        WITH per_period AS (
-            SELECT settlementdate, SUM(GREATEST(power, 0)) AS mw
-            FROM rooftop30
-            WHERE regionid IN ({placeholders})
-              AND settlementdate >= ? AND settlementdate <= ?
+    # Rooftop is published at 30-min cadence. At 5-min resolution we'd otherwise
+    # only emit a Rooftop point every 6th util stamp, which makes Swift Charts'
+    # stacked AreaMarks step the whole stack up at every 30-min boundary
+    # (rooftop's value is added at those x-positions only). Densify by tiling
+    # each 30-min row across the six 5-min stamps in its window, mirroring the
+    # desktop dashboard's reindex+ffill behaviour.
+    if res_label == "5min":
+        # Widen the source window by 30 min on the left so we can back-fill the
+        # first 5-min util stamps when from_ts falls mid-30-min-window. The
+        # outer WHERE then clips the densified buckets back to [from_nem, to_nem].
+        roof_sql = f"""
+            WITH per_period AS (
+                SELECT settlementdate, SUM(GREATEST(power, 0)) AS mw
+                FROM rooftop30
+                WHERE regionid IN ({placeholders})
+                  AND settlementdate >= ? - INTERVAL 30 MINUTE
+                  AND settlementdate <= ?
+                GROUP BY 1
+            ),
+            tiled AS (
+                SELECT settlementdate + INTERVAL (offset_min) MINUTE AS bucket,
+                       mw
+                FROM per_period,
+                     (SELECT unnest([0, 5, 10, 15, 20, 25]) AS offset_min) o
+            )
+            SELECT bucket, 'Rooftop' AS fuel, mw
+            FROM tiled
+            WHERE bucket >= ? AND bucket <= ?
+            ORDER BY bucket
+        """
+    else:
+        roof_sql = f"""
+            WITH per_period AS (
+                SELECT settlementdate, SUM(GREATEST(power, 0)) AS mw
+                FROM rooftop30
+                WHERE regionid IN ({placeholders})
+                  AND settlementdate >= ? AND settlementdate <= ?
+                GROUP BY 1
+            )
+            SELECT time_bucket(INTERVAL '{ddb_interval}', settlementdate) AS bucket,
+                   'Rooftop' AS fuel,
+                   AVG(mw) AS mw
+            FROM per_period
             GROUP BY 1
-        )
-        SELECT time_bucket(INTERVAL '{ddb_interval}', settlementdate) AS bucket,
-               'Rooftop' AS fuel,
-               AVG(mw) AS mw
-        FROM per_period
-        GROUP BY 1
-        ORDER BY 1
-    """
-    roof_params = list(region_list) + [from_nem, to_nem]
+            ORDER BY 1
+        """
+    if res_label == "5min":
+        # Two pairs of (from_nem, to_nem): one for the widened source window,
+        # one for clipping the densified output back to the requested range.
+        roof_params = list(region_list) + [from_nem, to_nem, from_nem, to_nem]
+    else:
+        roof_params = list(region_list) + [from_nem, to_nem]
 
     # Transmission only when a single physical region is selected.
     trans_rows: list[tuple] = []
@@ -190,7 +231,7 @@ async def generation_mix(
                 WITH per_period AS (
                     SELECT settlementdate,
                            SUM({sign_clause}) AS net_mw
-                    FROM transmission5
+                    FROM {trans_table}
                     WHERE interconnectorid IN ({ic_placeholders})
                       AND settlementdate >= ? AND settlementdate <= ?
                     GROUP BY 1
