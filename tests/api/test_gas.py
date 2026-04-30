@@ -96,3 +96,20 @@ def test_demand_accepts_each_hub(client, auth_headers):
 def test_demand_invalid_hub(client, auth_headers):
     resp = client.get('/v1/gas/demand?hub=AVG', headers=auth_headers)
     assert resp.status_code == 422  # AVG only valid for prices, not demand
+
+
+def test_prices_smoothing_loess_returns_200(client, auth_headers):
+    r = client.get('/v1/gas/prices?hub=AVG&smoothing=loess', headers=auth_headers)
+    assert r.status_code == 200
+    assert r.json()['meta']['smoothing'] == 'loess'
+
+
+def test_prices_smoothing_unknown_returns_400(client, auth_headers):
+    r = client.get('/v1/gas/prices?hub=AVG&smoothing=ema', headers=auth_headers)
+    assert r.status_code == 400
+
+
+def test_prices_default_smoothing_is_null(client, auth_headers):
+    r = client.get('/v1/gas/prices?hub=AVG', headers=auth_headers)
+    assert r.status_code == 200
+    assert r.json()['meta']['smoothing'] is None

@@ -18,6 +18,7 @@ import pandas as pd
 from fastapi import APIRouter, HTTPException, Query
 
 from ..db import get_connection
+from ..downsample import loess
 
 router = APIRouter()
 
@@ -55,6 +56,7 @@ def _safe_query(sql: str, params: list) -> list[tuple]:
 @router.get("/gas/prices")
 async def gas_prices(
     hub: str = Query("AVG"),
+    smoothing: Optional[str] = Query(None),
 ) -> dict:
     """Daily ex-post gas price for the selected hub, 3 calendar years
     overlaid by day-of-year (mirrors the demand chart)."""
@@ -63,6 +65,13 @@ async def gas_prices(
             status_code=422,
             detail={"code": "INVALID_HUB",
                     "message": f"hub must be one of {VALID_PRICE_HUBS}"},
+        )
+    smoothing_norm = smoothing.lower().strip() if smoothing else None
+    if smoothing_norm not in (None, "loess"):
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "INVALID_SMOOTHING",
+                    "message": f"unknown smoothing: {smoothing}"},
         )
 
     if hub == "AVG":
@@ -115,6 +124,28 @@ async def gas_prices(
                 "price": round(float(row["price"]), 4),
             })
 
+        if smoothing_norm == "loess":
+            from collections import defaultdict
+            by_year: dict[int, list[dict]] = defaultdict(list)
+            for d in data:
+                by_year[d["year"]].append(d)
+            smoothed_data: list[dict] = []
+            for y in sorted(by_year):
+                pts = sorted(by_year[y], key=lambda p: p["dayofyear"])
+                if len(pts) >= 5:
+                    xs = list(range(len(pts)))
+                    ys = [p["price"] for p in pts]
+                    ys_smoothed = loess(xs, ys, frac=0.05)
+                    for p, sv in zip(pts, ys_smoothed):
+                        smoothed_data.append({
+                            "year": p["year"],
+                            "dayofyear": p["dayofyear"],
+                            "price": round(float(sv), 4),
+                        })
+                else:
+                    smoothed_data.extend(pts)
+            data = smoothed_data
+
         # Stats over the displayed 3-year window.
         prices = sub["price"].tolist()
         if prices:
@@ -137,6 +168,7 @@ async def gas_prices(
             "mean": mean_price,
             "peak": peak_price,
             "peak_date": peak_date,
+            "smoothing": smoothing_norm,
             "as_of": _now_utc_iso(),
         },
     }
