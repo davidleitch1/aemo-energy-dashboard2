@@ -252,7 +252,8 @@ async def thermal_vs_renewables(
     region: str = Query("NEM", min_length=2, max_length=8),
 ) -> dict:
     """Thermal (Coal+Gas) vs Renewable (Wind+Solar+Rooftop+Hydro), 2018-now,
-    180-day MA."""
+    90-day MA — chosen to surface the seasonal export-to-import flips that
+    180-day smoothing washes out on a phone-scale chart."""
     regions = _validate_region(region)
     start = datetime(START_YEAR, 1, 1)
 
@@ -286,7 +287,7 @@ async def thermal_vs_renewables(
             sub = per_day_cat[per_day_cat["category"] == cat].set_index("date").sort_index()
             if sub.empty:
                 continue
-            smoothed = sub["mw_daily"].rolling(window=180, min_periods=90).mean()
+            smoothed = sub["mw_daily"].rolling(window=90, min_periods=45).mean()
             twh = _annualise_twh(smoothed)
             for d, v in twh.items():
                 if pd.isna(v):
@@ -302,7 +303,7 @@ async def thermal_vs_renewables(
         "meta": {
             "region": region,
             "categories": ["renewable", "thermal"],
-            "smoothing": "180d MA",
+            "smoothing": "90d MA",
             "from": from_iso,
             "to": to_iso,
             "as_of": _now_utc_iso(),
