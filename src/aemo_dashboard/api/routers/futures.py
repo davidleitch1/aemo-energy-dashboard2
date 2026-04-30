@@ -134,3 +134,133 @@ async def forward_curve(
             "latest_settlement": today.isoformat() + "Z" if today.tzinfo is None else today.isoformat(),
         },
     }
+
+
+# ----------------------------------------------------------------------
+# /v1/futures/expectations — Cal+1 and Cal+2 forward averages over time
+# ----------------------------------------------------------------------
+
+CUTOFF = pd.Timestamp('2024-01-01')
+
+
+def _cal_year_avg(df: pd.DataFrame, contracts: dict, year: int) -> pd.Series:
+    cols = [contracts.get((year, q)) for q in (1, 2, 3, 4)]
+    cols = [c for c in cols if c and c in df.columns]
+    if not cols:
+        return pd.Series(dtype=float)
+    return df[cols].mean(axis=1)
+
+
+@router.get('/futures/expectations')
+async def futures_expectations(
+    region: str = Query(..., min_length=2, max_length=8),
+) -> dict:
+    region = region.upper()
+    if region not in VALID_REGIONS:
+        raise HTTPException(
+            status_code=400,
+            detail={'code': 'INVALID_REGION',
+                    'message': 'futures available for NSW1/QLD1/SA1/VIC1 only'},
+        )
+    short = REGION_TRIM[region]
+
+    df = _read_futures_csv()
+    if df.empty:
+        return {
+            'data': {'cal1': [], 'cal2': []},
+            'meta': {'region': region, 'data_available': False,
+                     'as_of': datetime.now(timezone.utc).isoformat()},
+        }
+
+    contracts = _parse_columns(df.columns).get(short, {})
+    today = df.index[-1]
+    cal1_year = today.year + 1
+    cal2_year = today.year + 2
+
+    cal1 = _cal_year_avg(df, contracts, cal1_year)
+    cal2 = _cal_year_avg(df, contracts, cal2_year)
+    cal1 = cal1[cal1.index >= CUTOFF].dropna()
+    cal2 = cal2[cal2.index >= CUTOFF].dropna()
+
+    def _series(s: pd.Series) -> list[dict]:
+        return [
+            {'date': pd.Timestamp(d).isoformat() + 'Z',
+             'price': round(float(v), 2)}
+            for d, v in s.items()
+        ]
+
+    return {
+        'data':  {'cal1': _series(cal1), 'cal2': _series(cal2)},
+        'meta': {
+            'region':         region,
+            'cal1_year':      cal1_year,
+            'cal2_year':      cal2_year,
+            'cutoff':         CUTOFF.date().isoformat(),
+            'data_available': True,
+            'as_of':          datetime.now(timezone.utc).isoformat(),
+        },
+    }
+
+
+# ----------------------------------------------------------------------
+# /v1/futures/contracts — list of (year, quarter) available across all regions
+# ----------------------------------------------------------------------
+
+@router.get('/futures/contracts')
+async def futures_contracts() -> dict:
+    df = _read_futures_csv()
+    if df.empty:
+        return {'data': [], 'meta': {'as_of': datetime.now(timezone.utc).isoformat()}}
+    parsed = _parse_columns(df.columns)
+    keys: set = set()
+    for region_contracts in parsed.values():
+        keys.update(region_contracts.keys())
+    items = [{'year': y, 'quarter': q, 'label': _quarter_label(y, q)}
+             for (y, q) in sorted(keys)]
+    return {'data': items, 'meta': {'count': len(items),
+                                    'as_of': datetime.now(timezone.utc).isoformat()}}
+
+
+# ----------------------------------------------------------------------
+# /v1/futures/contract — single (year, quarter) settlement history per region
+# ----------------------------------------------------------------------
+
+@router.get('/futures/contract')
+async def futures_contract(
+    year: int = Query(...),
+    quarter: int = Query(..., ge=1, le=4),
+) -> dict:
+    df = _read_futures_csv()
+    if df.empty:
+        return {'data': {}, 'meta': {'year': year, 'quarter': quarter,
+                                     'data_available': False,
+                                     'as_of': datetime.now(timezone.utc).isoformat()}}
+
+    parsed = _parse_columns(df.columns)
+    series: dict[str, list[dict]] = {}
+    for short_region, contracts in parsed.items():
+        col = contracts.get((year, quarter))
+        if not col or col not in df.columns:
+            continue
+        s = df[col].dropna()
+        if s.empty:
+            continue
+        # Map short region back to NEM region code
+        full = next((k for k, v in REGION_TRIM.items() if v == short_region), short_region)
+        series[full] = [
+            {'date':  pd.Timestamp(d).isoformat() + 'Z',
+             'price': round(float(v), 2)}
+            for d, v in s.items()
+        ]
+
+    return {
+        'data': series,
+        'meta': {
+            'year':           year,
+            'quarter':        quarter,
+            'label':          _quarter_label(year, quarter),
+            'regions':        sorted(series.keys()),
+            'data_available': bool(series),
+            'as_of':          datetime.now(timezone.utc).isoformat(),
+        },
+    }
