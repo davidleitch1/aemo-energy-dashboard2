@@ -4,7 +4,8 @@ Sources `sttm_expost` from DuckDB (10+ years of daily SYD/BRI/ADL ex-post
 prices and network allocation volumes).
 
   /prices    daily ex-post for one hub (or AVG = mean across SYD+BRI+ADL),
-             selectable lookback window, plus latest/mean/peak summary stats
+             last 3 calendar years overlaid by day-of-year, plus
+             latest/mean/peak summary stats
   /demand    7-day MA TJ/day, last 3 calendar years overlaid by day-of-year,
              single-hub or ALL (sum across hubs)
 """
@@ -30,8 +31,8 @@ def _now_utc_iso() -> str:
 
 
 def _date_iso(d) -> str:
-    if hasattr(d, "isoformat"):
-        return d.isoformat() if isinstance(d, date) else d.date().isoformat()
+    """Always return YYYY-MM-DD, regardless of whether d is a date,
+    datetime, or pandas Timestamp."""
     return pd.Timestamp(d).date().isoformat()
 
 
@@ -54,9 +55,9 @@ def _safe_query(sql: str, params: list) -> list[tuple]:
 @router.get("/gas/prices")
 async def gas_prices(
     hub: str = Query("AVG"),
-    days: int = Query(730, ge=1, le=5840),
 ) -> dict:
-    """Daily ex-post gas price for the selected hub over the last `days` days."""
+    """Daily ex-post gas price for the selected hub, 3 calendar years
+    overlaid by day-of-year (mirrors the demand chart)."""
     if hub not in VALID_PRICE_HUBS:
         raise HTTPException(
             status_code=422,
@@ -64,36 +65,32 @@ async def gas_prices(
                     "message": f"hub must be one of {VALID_PRICE_HUBS}"},
         )
 
-    end = date.today()
-    start = end - timedelta(days=days)
-
     if hub == "AVG":
         # Average across SYD/BRI/ADL per day, only days where all 3 are present.
         sql = """
             SELECT gas_date, AVG(expost_price) AS price
             FROM sttm_expost
-            WHERE gas_date >= ? AND gas_date <= ?
-              AND hub IN ('SYD','BRI','ADL')
+            WHERE hub IN ('SYD','BRI','ADL')
               AND expost_price IS NOT NULL
             GROUP BY 1
             HAVING COUNT(DISTINCT hub) = 3
             ORDER BY 1
         """
-        params = [start, end]
+        params: list = []
     else:
         sql = """
             SELECT gas_date, expost_price AS price
             FROM sttm_expost
-            WHERE gas_date >= ? AND gas_date <= ?
-              AND hub = ?
+            WHERE hub = ?
               AND expost_price IS NOT NULL
             ORDER BY gas_date
         """
-        params = [start, end, hub]
+        params = [hub]
 
     rows = _safe_query(sql, params)
 
     data: list[dict] = []
+    years: list[int] = []
     latest_price = None
     latest_date = None
     mean_price = None
@@ -101,25 +98,40 @@ async def gas_prices(
     peak_date = None
 
     if rows:
-        for d, p in rows:
-            data.append({"date": _date_iso(d), "price": round(float(p), 4)})
-        prices = [r[1] for r in rows]
-        latest = rows[-1]
-        peak_idx = max(range(len(rows)), key=lambda i: rows[i][1])
-        latest_price = round(float(latest[1]), 2)
-        latest_date = _date_iso(latest[0])
-        mean_price = round(sum(prices) / len(prices), 2)
-        peak_price = round(float(rows[peak_idx][1]), 2)
-        peak_date = _date_iso(rows[peak_idx][0])
+        df = pd.DataFrame(rows, columns=["date", "price"])
+        df["date"] = pd.to_datetime(df["date"])
+        df = df.sort_values("date")
+        df["year"] = df["date"].dt.year
+        df["dayofyear"] = df["date"].dt.dayofyear
+
+        all_years = sorted(df["year"].unique())
+        years = [int(y) for y in all_years[-3:]]
+
+        sub = df[df["year"].isin(years)]
+        for _, row in sub.iterrows():
+            data.append({
+                "year": int(row["year"]),
+                "dayofyear": int(row["dayofyear"]),
+                "price": round(float(row["price"]), 4),
+            })
+
+        # Stats over the displayed 3-year window.
+        prices = sub["price"].tolist()
+        if prices:
+            latest_row = sub.iloc[-1]
+            peak_row = sub.loc[sub["price"].idxmax()]
+            latest_price = round(float(latest_row["price"]), 2)
+            latest_date = _date_iso(latest_row["date"])
+            mean_price = round(sum(prices) / len(prices), 2)
+            peak_price = round(float(peak_row["price"]), 2)
+            peak_date = _date_iso(peak_row["date"])
 
     return {
         "data": data,
         "meta": {
             "hub": hub,
             "hub_label": HUB_LABEL.get(hub, hub),
-            "lookback_days": days,
-            "from": start.isoformat(),
-            "to": end.isoformat(),
+            "years": years,
             "latest": latest_price,
             "latest_date": latest_date,
             "mean": mean_price,

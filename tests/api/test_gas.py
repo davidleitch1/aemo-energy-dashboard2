@@ -22,17 +22,21 @@ def test_prices_returns_401_without_auth(client):
 def test_prices_top_level_shape(client, auth_headers):
     body = client.get('/v1/gas/prices?hub=AVG', headers=auth_headers).json()
     assert 'data' in body and 'meta' in body
-    for k in ('hub', 'lookback_days', 'as_of'):
+    for k in ('hub', 'years', 'as_of'):
         assert k in body['meta'], f'missing meta.{k}'
     assert body['meta']['hub'] == 'AVG'
+    assert isinstance(body['meta']['years'], list)
 
 
 def test_prices_point_shape(client, auth_headers):
     body = client.get('/v1/gas/prices?hub=AVG', headers=auth_headers).json()
     if body['data']:
         p = body['data'][0]
-        for k in ('date', 'price'):
+        for k in ('year', 'dayofyear', 'price'):
             assert k in p, f'missing {k}'
+        assert isinstance(p['year'], int)
+        assert isinstance(p['dayofyear'], int)
+        assert 1 <= p['dayofyear'] <= 366
         assert isinstance(p['price'], (int, float))
 
 
@@ -46,26 +50,6 @@ def test_prices_accepts_each_hub(client, auth_headers):
 
 def test_prices_invalid_hub(client, auth_headers):
     resp = client.get('/v1/gas/prices?hub=ZZZ', headers=auth_headers)
-    assert resp.status_code == 422
-
-
-def test_prices_days_default_730(client, auth_headers):
-    body = client.get('/v1/gas/prices?hub=AVG', headers=auth_headers).json()
-    assert body['meta']['lookback_days'] == 730
-
-
-def test_prices_days_custom(client, auth_headers):
-    body = client.get('/v1/gas/prices?hub=AVG&days=365', headers=auth_headers).json()
-    assert body['meta']['lookback_days'] == 365
-
-
-def test_prices_days_clamped_low(client, auth_headers):
-    resp = client.get('/v1/gas/prices?hub=AVG&days=0', headers=auth_headers)
-    assert resp.status_code == 422
-
-
-def test_prices_days_clamped_high(client, auth_headers):
-    resp = client.get('/v1/gas/prices?hub=AVG&days=10000', headers=auth_headers)
     assert resp.status_code == 422
 
 
