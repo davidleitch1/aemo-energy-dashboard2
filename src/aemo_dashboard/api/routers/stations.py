@@ -203,39 +203,77 @@ async def stations_time_series(
 
 def _query_time_series(conn, station, start, end_excl, frequency, meta) -> list:
     """Return list of (t, gen_mw, price). Prefer station_time_series_30min,
-    fall back to scada30 × duid_info × prices30 join."""
+    fall back to scada30 × duid_info × prices30 join. For aggregated
+    frequencies we must sum across DUIDs *first* (giving station total at
+    each 30-min slot), *then* average across slots within the bucket.
+    """
     bucket = FREQ_BUCKET.get(frequency)
-    select_t = (
-        f'time_bucket({bucket}, settlementdate)' if bucket else 'settlementdate'
-    )
 
     # Preferred: pre-built station table.
-    sql_fast = f'''
-        SELECT {select_t} AS t, SUM(scadavalue) AS gen_mw, AVG(price) AS price
-        FROM station_time_series_30min
-        WHERE station_name = ?
-          AND settlementdate >= ? AND settlementdate < ?
-        GROUP BY 1
-        ORDER BY 1
-    '''
+    if bucket:
+        sql_fast = f'''
+            WITH per_slot AS (
+                SELECT settlementdate, SUM(scadavalue) AS gen_mw, AVG(price) AS price
+                FROM station_time_series_30min
+                WHERE station_name = ?
+                  AND settlementdate >= ? AND settlementdate < ?
+                GROUP BY 1
+            )
+            SELECT time_bucket({bucket}, settlementdate) AS t,
+                   AVG(gen_mw) AS gen_mw,
+                   AVG(price)  AS price
+            FROM per_slot
+            GROUP BY 1
+            ORDER BY 1
+        '''
+    else:
+        sql_fast = '''
+            SELECT settlementdate AS t,
+                   SUM(scadavalue) AS gen_mw,
+                   AVG(price)      AS price
+            FROM station_time_series_30min
+            WHERE station_name = ?
+              AND settlementdate >= ? AND settlementdate < ?
+            GROUP BY 1
+            ORDER BY 1
+        '''
     try:
         return conn.execute(sql_fast, [station, start, end_excl]).fetchall()
     except duckdb.CatalogException:
-        pass  # Fall through to scada30-based query.
+        pass
 
     duid_ph = ','.join(['?'] * len(meta['duids']))
-    sql_fb = f'''
-        SELECT {select_t.replace('settlementdate', 's.settlementdate')} AS t,
-               SUM(s.scadavalue) AS gen_mw,
-               AVG(p.rrp)        AS price
-        FROM scada30 s
-        LEFT JOIN prices30 p
-          ON s.settlementdate = p.settlementdate AND p.regionid = ?
-        WHERE s.duid IN ({duid_ph})
-          AND s.settlementdate >= ? AND s.settlementdate < ?
-        GROUP BY 1
-        ORDER BY 1
-    '''
+    if bucket:
+        sql_fb = f'''
+            WITH per_slot AS (
+                SELECT s.settlementdate, SUM(s.scadavalue) AS gen_mw, AVG(p.rrp) AS price
+                FROM scada30 s
+                LEFT JOIN prices30 p
+                  ON s.settlementdate = p.settlementdate AND p.regionid = ?
+                WHERE s.duid IN ({duid_ph})
+                  AND s.settlementdate >= ? AND s.settlementdate < ?
+                GROUP BY 1
+            )
+            SELECT time_bucket({bucket}, settlementdate) AS t,
+                   AVG(gen_mw) AS gen_mw,
+                   AVG(price)  AS price
+            FROM per_slot
+            GROUP BY 1
+            ORDER BY 1
+        '''
+    else:
+        sql_fb = f'''
+            SELECT s.settlementdate AS t,
+                   SUM(s.scadavalue) AS gen_mw,
+                   AVG(p.rrp)        AS price
+            FROM scada30 s
+            LEFT JOIN prices30 p
+              ON s.settlementdate = p.settlementdate AND p.regionid = ?
+            WHERE s.duid IN ({duid_ph})
+              AND s.settlementdate >= ? AND s.settlementdate < ?
+            GROUP BY 1
+            ORDER BY 1
+        '''
     params: list = [meta['region']] + list(meta['duids']) + [start, end_excl]
     return conn.execute(sql_fb, params).fetchall()
 
