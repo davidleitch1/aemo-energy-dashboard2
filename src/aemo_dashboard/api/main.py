@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 
 from .auth import bearer_token_middleware
-from .routers import futures, gas, gauges, generation, meta, outages, prices, trends
+from .routers import batteries, futures, gas, gauges, generation, meta, outages, prices, trends
 
 
 def create_app() -> FastAPI:
@@ -40,6 +40,7 @@ def create_app() -> FastAPI:
     app.include_router(trends.router, prefix="/v1")
     app.include_router(futures.router, prefix="/v1")
     app.include_router(gas.router, prefix="/v1")
+    app.include_router(batteries.router, prefix="/v1")
 
     return app
 
