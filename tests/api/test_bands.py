@@ -23,11 +23,45 @@ def test_bands_row_shape(client, auth_headers):
     body = client.get('/v1/prices/bands?regions=NSW1', headers=auth_headers).json()
     assert body['data'], 'expected at least one band row'
     row = body['data'][0]
-    for k in ('region', 'lower', 'upper', 'count', 'share'):
+    for k in ('region', 'lower', 'upper', 'count', 'share', 'sum_rrp', 'contribution_share'):
         assert k in row, f'missing row.{k}'
     assert isinstance(row['count'], int)
     assert isinstance(row['share'], (int, float))
+    assert isinstance(row['sum_rrp'], (int, float))
+    assert isinstance(row['contribution_share'], (int, float))
     assert row['lower'] < row['upper']
+
+
+def test_bands_contribution_shares_sum_to_one_per_region(client, auth_headers):
+    """Sum of contribution_share per region should be ~1.0 — each band's
+    contribution to the time-weighted average price."""
+    body = client.get(
+        '/v1/prices/bands?regions=NSW1,SA1,VIC1',
+        headers=auth_headers,
+    ).json()
+    by_region: dict[str, float] = {}
+    for row in body['data']:
+        by_region.setdefault(row['region'], 0.0)
+        by_region[row['region']] += row['contribution_share']
+    for regid, total in by_region.items():
+        assert abs(total - 1.0) < 0.01, f'{regid} contribution shares sum to {total}, expected ~1.0'
+
+
+def test_bands_sum_rrp_signed(client, auth_headers):
+    """The negative-price band should have sum_rrp < 0; positive bands ≥ 0."""
+    body = client.get(
+        '/v1/prices/bands?regions=SA1',
+        headers=auth_headers,
+    ).json()
+    for row in body['data']:
+        if row['count'] == 0:
+            assert row['sum_rrp'] == 0.0
+        elif row['lower'] < 0 and row['upper'] <= 0:
+            # Strictly-negative band: sum must be ≤ 0 (== 0 if count == 0)
+            assert row['sum_rrp'] <= 0.0, row
+        elif row['lower'] >= 0:
+            # Strictly non-negative band: sum must be ≥ 0
+            assert row['sum_rrp'] >= 0.0, row
 
 
 def test_bands_default_bins_count(client, auth_headers):

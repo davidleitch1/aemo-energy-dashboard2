@@ -562,20 +562,27 @@ def prices_bands(
               AND rrp IS NOT NULL
         ),
         counted AS (
-            SELECT p.regionid, b.idx, b.lower, b.upper, COUNT(*) AS cnt
+            SELECT p.regionid, b.idx, b.lower, b.upper,
+                   COUNT(*) AS cnt,
+                   SUM(p.rrp) AS sum_rrp
             FROM prices p
             JOIN bands b ON p.rrp >= b.lower AND p.rrp < b.upper
             GROUP BY p.regionid, b.idx, b.lower, b.upper
         ),
         totals AS (
-            SELECT regionid, COUNT(*) AS total FROM prices GROUP BY regionid
+            SELECT regionid,
+                   COUNT(*) AS total,
+                   SUM(rrp) AS total_sum_rrp
+            FROM prices GROUP BY regionid
         )
         SELECT b.idx,
                b.lower,
                b.upper,
                r.regionid AS regionid,
                COALESCE(c.cnt, 0) AS cnt,
-               COALESCE(c.cnt::DOUBLE / NULLIF(t.total, 0), 0.0) AS share
+               COALESCE(c.cnt::DOUBLE / NULLIF(t.total, 0), 0.0) AS share,
+               COALESCE(c.sum_rrp, 0.0) AS sum_rrp,
+               COALESCE(c.sum_rrp / NULLIF(t.total_sum_rrp, 0), 0.0) AS contribution_share
         FROM bands b
         CROSS JOIN (SELECT DISTINCT regionid FROM prices) r
         LEFT JOIN counted c ON c.regionid = r.regionid AND c.idx = b.idx
@@ -597,8 +604,10 @@ def prices_bands(
             "upper": float(hi),
             "count": int(cnt),
             "share": round(float(share), 6),
+            "sum_rrp": round(float(sum_rrp), 4),
+            "contribution_share": round(float(contrib), 6),
         }
-        for _idx, lo, hi, regid, cnt, share in rows
+        for _idx, lo, hi, regid, cnt, share, sum_rrp, contrib in rows
     ]
 
     return {
