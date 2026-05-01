@@ -8,6 +8,8 @@ windows return a manageable payload.
 """
 from __future__ import annotations
 
+import base64
+import binascii
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -487,6 +489,276 @@ def prices_stats(
             "lookback_days": days,
             "from": from_utc.isoformat().replace("+00:00", "Z"),
             "to": to_utc.isoformat().replace("+00:00", "Z"),
+            "as_of": datetime.now(timezone.utc).isoformat(),
+        },
+    }
+
+
+# --- Bands subpage --------------------------------------------------------
+
+DEFAULT_BAND_BINS = [-1000.0, 0.0, 25.0, 50.0, 100.0, 200.0, 300.0, 500.0, 1000.0, 5000.0, 17500.0]
+
+
+def _resolve_bins(bins_q: Optional[str]) -> list[float]:
+    if not bins_q:
+        return list(DEFAULT_BAND_BINS)
+    try:
+        out = [float(x) for x in bins_q.split(',') if x.strip()]
+    except ValueError:
+        raise HTTPException(400, detail={"code": "INVALID_BINS", "message": "bins must be comma-separated numbers"})
+    if len(out) < 2:
+        raise HTTPException(400, detail={"code": "INVALID_BINS", "message": "bins needs at least 2 boundary values"})
+    for a, b in zip(out, out[1:]):
+        if a >= b:
+            raise HTTPException(400, detail={"code": "INVALID_BINS", "message": "bins must be strictly ascending"})
+    return out
+
+
+@router.get("/prices/bands")
+def prices_bands(
+    region: Optional[str] = Query(None, min_length=2, max_length=8),
+    regions: Optional[str] = Query(None),
+    from_: Optional[datetime] = Query(None, alias="from"),
+    to: Optional[datetime] = Query(None),
+    bins: Optional[str] = Query(None),
+) -> dict:
+    """Distribution of 5-min (or 30-min for >30d) prices per region into bands.
+
+    Returns one row per (region × band) with `count` of intervals and
+    `share` of the window. Default bins:
+        [-1000, 0, 25, 50, 100, 200, 300, 500, 1000, 5000, 17500]
+    Override via `bins=` (comma-separated, strictly ascending).
+    """
+    region_list = _resolve_regions(region, regions)
+    bin_edges = _resolve_bins(bins)
+
+    now_utc = datetime.now(timezone.utc)
+    to_utc = to.astimezone(timezone.utc) if to and to.tzinfo else (
+        to.replace(tzinfo=timezone.utc) if to else now_utc
+    )
+    from_utc = from_.astimezone(timezone.utc) if from_ and from_.tzinfo else (
+        from_.replace(tzinfo=timezone.utc) if from_ else (to_utc - timedelta(days=30))
+    )
+    from_nem = utc_to_nem_naive(from_utc)
+    to_nem = utc_to_nem_naive(to_utc)
+    span_seconds = (to_utc - from_utc).total_seconds()
+    src_table, _ = _pick_price_table(span_seconds)
+
+    # Build a values list for the bins CTE: (idx, lower, upper) per band.
+    bands_values_sql = ", ".join(
+        f"({i + 1}, {lo}, {hi})"
+        for i, (lo, hi) in enumerate(zip(bin_edges, bin_edges[1:]))
+    )
+    placeholders = ",".join(["?"] * len(region_list))
+    sql = f"""
+        WITH bands(idx, lower, upper) AS (
+            VALUES {bands_values_sql}
+        ),
+        prices AS (
+            SELECT regionid, rrp
+            FROM {src_table}
+            WHERE regionid IN ({placeholders})
+              AND settlementdate >= ? AND settlementdate <= ?
+              AND rrp IS NOT NULL
+        ),
+        counted AS (
+            SELECT p.regionid, b.idx, b.lower, b.upper, COUNT(*) AS cnt
+            FROM prices p
+            JOIN bands b ON p.rrp >= b.lower AND p.rrp < b.upper
+            GROUP BY p.regionid, b.idx, b.lower, b.upper
+        ),
+        totals AS (
+            SELECT regionid, COUNT(*) AS total FROM prices GROUP BY regionid
+        )
+        SELECT b.idx,
+               b.lower,
+               b.upper,
+               r.regionid AS regionid,
+               COALESCE(c.cnt, 0) AS cnt,
+               COALESCE(c.cnt::DOUBLE / NULLIF(t.total, 0), 0.0) AS share
+        FROM bands b
+        CROSS JOIN (SELECT DISTINCT regionid FROM prices) r
+        LEFT JOIN counted c ON c.regionid = r.regionid AND c.idx = b.idx
+        LEFT JOIN totals t ON t.regionid = r.regionid
+        ORDER BY r.regionid, b.idx
+    """
+    params = list(region_list) + [from_nem, to_nem]
+
+    conn = get_connection()
+    try:
+        rows = conn.execute(sql, params).fetchall()
+    finally:
+        conn.close()
+
+    data = [
+        {
+            "region": regid,
+            "lower": float(lo),
+            "upper": float(hi),
+            "count": int(cnt),
+            "share": round(float(share), 6),
+        }
+        for _idx, lo, hi, regid, cnt, share in rows
+    ]
+
+    return {
+        "data": data,
+        "meta": {
+            "regions": region_list,
+            "bins": bin_edges,
+            "from": from_utc.isoformat().replace("+00:00", "Z"),
+            "to": to_utc.isoformat().replace("+00:00", "Z"),
+            "resolution": "5min" if span_seconds <= THIRTY_DAYS_S else "30min",
+            "as_of": datetime.now(timezone.utc).isoformat(),
+        },
+    }
+
+
+# --- High-price events ----------------------------------------------------
+
+DEFAULT_HIGH_THRESHOLD = 300.0
+
+
+def _encode_cursor(ts_iso: str, region: str) -> str:
+    raw = f"{ts_iso}|{region}".encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("ascii")
+
+
+def _decode_cursor(cursor: str) -> tuple[str, str]:
+    try:
+        raw = base64.urlsafe_b64decode(cursor.encode("ascii")).decode("utf-8")
+    except (binascii.Error, UnicodeDecodeError, ValueError):
+        raise HTTPException(400, detail={"code": "INVALID_CURSOR", "message": "cursor is not valid base64"})
+    if "|" not in raw:
+        raise HTTPException(400, detail={"code": "INVALID_CURSOR", "message": "cursor payload malformed"})
+    ts_iso, region = raw.split("|", 1)
+    return ts_iso, region
+
+
+@router.get("/prices/high-events")
+def prices_high_events(
+    region: Optional[str] = Query(None, min_length=2, max_length=8),
+    regions: Optional[str] = Query(None),
+    from_: Optional[datetime] = Query(None, alias="from"),
+    to: Optional[datetime] = Query(None),
+    threshold: float = Query(DEFAULT_HIGH_THRESHOLD),
+    limit: int = Query(50, ge=1, le=500),
+    cursor: Optional[str] = Query(None),
+) -> dict:
+    """5-min intervals at or above `threshold`, ordered most-recent first.
+
+    duration_minutes is the length (in minutes) of the consecutive run of
+    at-or-above-threshold intervals to which this row belongs (window
+    function). Cursor is base64 of `<timestamp>|<region>` of the last row
+    in the previous page; pagination uses lexicographic comparison so
+    pages are guaranteed disjoint.
+    """
+    region_list = _resolve_regions(region, regions)
+
+    now_utc = datetime.now(timezone.utc)
+    to_utc = to.astimezone(timezone.utc) if to and to.tzinfo else (
+        to.replace(tzinfo=timezone.utc) if to else now_utc
+    )
+    # Default lookback for high-events is 1Y — spike-watching wants history.
+    from_utc = from_.astimezone(timezone.utc) if from_ and from_.tzinfo else (
+        from_.replace(tzinfo=timezone.utc) if from_ else (to_utc - timedelta(days=365))
+    )
+    from_nem = utc_to_nem_naive(from_utc)
+    to_nem = utc_to_nem_naive(to_utc)
+
+    # High-events always reads 5-min (prices5) so durations are reported
+    # in 5-min steps. For pre-2024 windows where 5-min data is sparse,
+    # this still works — empty regions just contribute no rows.
+    src_table = "prices5"
+
+    cursor_ts: Optional[str] = None
+    cursor_region: Optional[str] = None
+    if cursor:
+        cursor_ts, cursor_region = _decode_cursor(cursor)
+
+    placeholders = ",".join(["?"] * len(region_list))
+    # Build ordered → flagged → grouped → runs CTE chain.
+    # `is_start` flags the first row of each consecutive at-or-above run.
+    # `group_id = SUM(is_start) OVER (...)` assigns the same id to every
+    # row in the run. duration = COUNT(*) OVER (PARTITION BY region, group_id).
+    sql = f"""
+        WITH ordered AS (
+            SELECT settlementdate, regionid, rrp,
+                   LAG(rrp) OVER (PARTITION BY regionid ORDER BY settlementdate) AS prev_rrp
+            FROM {src_table}
+            WHERE regionid IN ({placeholders})
+              AND settlementdate >= ? AND settlementdate <= ?
+        ),
+        flagged AS (
+            SELECT settlementdate, regionid, rrp,
+                   CASE WHEN rrp >= ? AND (prev_rrp IS NULL OR prev_rrp < ?)
+                        THEN 1 ELSE 0 END AS is_start
+            FROM ordered
+        ),
+        grouped AS (
+            SELECT settlementdate, regionid, rrp,
+                   SUM(is_start) OVER (PARTITION BY regionid ORDER BY settlementdate) AS group_id
+            FROM flagged
+        ),
+        runs AS (
+            SELECT settlementdate, regionid, rrp, group_id,
+                   COUNT(*) OVER (PARTITION BY regionid, group_id) * 5 AS duration_minutes
+            FROM grouped
+            WHERE rrp >= ?
+        )
+        SELECT settlementdate, regionid, rrp, duration_minutes
+        FROM runs
+        ORDER BY settlementdate DESC, regionid ASC
+    """
+    params = list(region_list) + [from_nem, to_nem, threshold, threshold, threshold]
+
+    conn = get_connection()
+    try:
+        rows = conn.execute(sql, params).fetchall()
+    finally:
+        conn.close()
+
+    # Convert all rows to UTC ISO once so cursor comparison is on the
+    # canonical string we'll return to the client.
+    serialised = [
+        {
+            "timestamp": _utc_iso(ts),
+            "region": regid,
+            "price": float(rrp),
+            "duration_minutes": int(dur),
+        }
+        for ts, regid, rrp, dur in rows
+    ]
+
+    # Apply cursor: locate the cursor row in the ordered list and slice
+    # everything after it. The list is sorted DESC by timestamp, ASC by
+    # region; lex comparison on (ts, region) doesn't match this order
+    # when rows share a timestamp, so we use index-based slicing.
+    if cursor_ts is not None and cursor_region is not None:
+        found_at: Optional[int] = None
+        for i, r in enumerate(serialised):
+            if r["timestamp"] == cursor_ts and r["region"] == cursor_region:
+                found_at = i
+                break
+        page_pool = serialised[found_at + 1:] if found_at is not None else serialised
+    else:
+        page_pool = serialised
+
+    page = page_pool[:limit]
+    has_more = len(page_pool) > limit
+    next_cursor = (
+        _encode_cursor(page[-1]["timestamp"], page[-1]["region"]) if has_more and page else None
+    )
+
+    return {
+        "data": page,
+        "meta": {
+            "regions": region_list,
+            "from": from_utc.isoformat().replace("+00:00", "Z"),
+            "to": to_utc.isoformat().replace("+00:00", "Z"),
+            "threshold": threshold,
+            "next_cursor": next_cursor,
+            "has_more": has_more,
             "as_of": datetime.now(timezone.utc).isoformat(),
         },
     }
