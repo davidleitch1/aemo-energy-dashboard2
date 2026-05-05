@@ -198,8 +198,8 @@ def create_prices_tab(dashboard):
         )
 
         stats_title_pane = pn.pane.Markdown(
-            "### Price Statistics",
-            styles={'color': FLEXOKI_BLACK, 'background-color': FLEXOKI_PAPER, 'padding': '10px'},
+            "## Price Statistics ($)",
+            styles={'color': FLEXOKI_BLACK, 'background-color': FLEXOKI_PAPER},
         )
 
         stats_pane = pn.widgets.Tabulator(
@@ -335,7 +335,7 @@ def create_prices_tab(dashboard):
         # ── Subtab layouts ────────────────────────────────────────────
         price_analysis_content = pn.Column(
             pn.FlexBox(
-                pn.Column("## Price Statistics ($)", stats_pane, min_width=350),
+                pn.Column(stats_title_pane, stats_pane, min_width=350),
                 pn.Column("## Time of Day Pattern", tod_plot_pane, min_width=350),
                 flex_wrap='wrap', gap='20px', sizing_mode='stretch_width',
             ),
@@ -422,7 +422,7 @@ def create_prices_tab(dashboard):
             try:
                 price_plot_pane.object = _placeholder_fig('Loading price data...')
 
-                selected_regions = region_selector.value
+                selected_regions = [r for r in regions if r in region_selector.value]
                 if not selected_regions:
                     _show_empty("Please select at least one region", is_error=True)
                     return
@@ -520,7 +520,7 @@ def create_prices_tab(dashboard):
                         base_stats_df['Statistic'], categories=stat_order, ordered=True,
                     )
                     base_stats_df = base_stats_df.sort_values('Statistic').reset_index(drop=True)
-                    stats_title_pane.object = f"### Price Statistics ({date_range_text})"
+                    stats_title_pane.object = f"## Price Statistics ($) — {date_range_text}"
 
                 # ── Fuel-weighted prices ──
                 try:
@@ -531,17 +531,22 @@ def create_prices_tab(dashboard):
                     if 'Fuel' in duid_mapping.columns:
                         duid_mapping = duid_mapping.rename(columns={'Fuel': 'FUEL_TYPE', 'Region': 'REGIONID'})
 
-                    gen_data = pd.DataFrame()
-                    if hasattr(dashboard, 'generation_query_manager'):
-                        gen_data = dashboard.generation_query_manager.query_generation_by_fuel(
-                            start_datetime, end_datetime, selected_regions,
-                        )
-                    if gen_data.empty:
-                        from ..shared.adapter_selector import load_generation_data
-                        gen_data = load_generation_data(
+                    # query_generation_by_fuel returns aggregated data without DUID;
+                    # compute_fuel_weighted_prices needs DUID-level data, and we need
+                    # ALL selected regions (not just the first). Load per-region and concat.
+                    from ..shared.adapter_selector import load_generation_data
+                    gen_frames = []
+                    for region in selected_regions:
+                        rdf = load_generation_data(
                             start_date=start_datetime, end_date=end_datetime,
-                            region=selected_regions[0], resolution='auto',
+                            region=region, resolution='auto',
                         )
+                        if not rdf.empty:
+                            gen_frames.append(rdf)
+                    gen_data = (
+                        pd.concat(gen_frames, ignore_index=True)
+                        if gen_frames else pd.DataFrame()
+                    )
 
                     if not gen_data.empty and not original_price_data.empty:
                         fuel_prices = compute_fuel_weighted_prices(
