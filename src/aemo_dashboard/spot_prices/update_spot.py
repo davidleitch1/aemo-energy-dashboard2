@@ -24,12 +24,9 @@ from ..shared.logging_config import setup_logging, get_logger
 setup_logging()
 logger = get_logger(__name__)
 
-try:
-    from .twilio_price_alerts import check_price_alerts
-except ImportError:
-    logger.warning("Twilio price alerts not available - install twilio package")
-    def check_price_alerts(data):
-        pass
+# Price alerts are owned by the collector (aemo-data-updater). The
+# dashboard had a duplicate twilio path that fired a second SMS for every
+# breach; removed.
 
 # Configuration from shared config
 AEMO_URL = config.aemo_dispatch_url
@@ -276,11 +273,7 @@ def update_spot_prices():
         logger.info("No new prices - no records newer than existing data")
         return False
     
-    # CHECK FOR PRICE ALERTS before logging
-    try:
-        check_price_alerts(newer_records)
-    except Exception as e:
-        logger.error(f"Error checking price alerts: {e}")
+    # Price alerts moved to collector — see docs/alerts.md.
     
     # Log the new prices found
     settlement_time = newer_records.index[0]

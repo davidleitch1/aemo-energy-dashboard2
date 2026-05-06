@@ -23,7 +23,6 @@ from plotly.subplots import make_subplots
 
 from ..shared.config import config
 from ..shared.logging_config import setup_logging, get_logger
-from ..shared.email_alerts import EmailAlertManager
 from ..analysis.price_analysis_ui import create_price_analysis_tab
 from ..station.station_analysis_ui import create_station_analysis_tab
 from ..nem_dash.nem_dash_tab import create_nem_dash_tab_with_updates
@@ -291,9 +290,9 @@ class EnergyDashboard(param.Parameterized):
         self.query_manager = GenerationQueryManager()
         self._using_aggregated_data = False  # Flag to track if using pre-aggregated data
         
-        # Initialize email alert manager
-        self.email_manager = EmailAlertManager()
-        
+        # Email/Twilio alerts are owned by the collector (aemo-data-updater);
+        # see docs/alerts.md. Dashboard now only logs unknown DUIDs.
+
         # Load initial data
         self.load_reference_data()
         
@@ -463,155 +462,13 @@ class EnergyDashboard(param.Parameterized):
                 for duid in sorted(unknown_duids):
                     logger.warning(f"  - {duid}: No data found")
         
-        # Only send email for new unknown DUIDs not in exception list
+        # New-DUID email is owned by the collector (aemo-data-updater); the
+        # dashboard's duplicate path was silently dead (dashboard2/.env had no
+        # SMTP creds). To keep the warning log from spamming every cycle, we
+        # still auto-add new unknown DUIDs to the local exception list.
         if new_unknown_duids:
-            # Check if email alerts are enabled
-            if os.getenv('ENABLE_EMAIL_ALERTS', 'true').lower() == 'true':
-                if self.should_send_email_alert(new_unknown_duids):
-                    self.send_unknown_duid_email(new_unknown_duids, df)
-                    
-                    # After sending email, optionally add these to exception list
-                    # to prevent repeated emails about the same DUIDs
-                    if os.getenv('AUTO_ADD_TO_EXCEPTIONS', 'true').lower() == 'true':
-                        self.add_duids_to_exception_list(new_unknown_duids)
-                        logger.info("Auto-added alerted DUIDs to exception list")
-            else:
-                logger.info(f"Email alerts disabled - would have alerted about {len(new_unknown_duids)} new DUIDs")
+            self.add_duids_to_exception_list(new_unknown_duids)
 
-    def should_send_email_alert(self, unknown_duids):
-        """Check if we should send an email alert (rate limiting)"""
-        # Load cache of previously alerted DUIDs
-        cache_file = config.data_dir / "unknown_duids_alerts.json"
-        alert_cache = {}
-        
-        try:
-            if cache_file.exists():
-                with open(cache_file, 'r') as f:
-                    alert_cache = json.load(f)
-        except Exception as e:
-            logger.error(f"Error loading alert cache: {e}")
-        
-        # Check if any DUID needs alerting (hasn't been alerted in last 24 hours)
-        now = datetime.now()
-        duids_needing_alert = []
-        
-        for duid in unknown_duids:
-            if duid not in alert_cache:
-                duids_needing_alert.append(duid)
-            else:
-                last_alert = datetime.fromisoformat(alert_cache[duid])
-                if (now - last_alert).total_seconds() > 24 * 3600:  # 24 hours
-                    duids_needing_alert.append(duid)
-        
-        if duids_needing_alert:
-            # Update cache for DUIDs we're about to alert
-            for duid in duids_needing_alert:
-                alert_cache[duid] = now.isoformat()
-            
-            # Save updated cache
-            try:
-                with open(cache_file, 'w') as f:
-                    json.dump(alert_cache, f, indent=2, default=str)
-            except Exception as e:
-                logger.error(f"Error saving alert cache: {e}")
-            
-            return True
-        
-        return False
-
-    def send_unknown_duid_email(self, unknown_duids, df):
-        """Send email alert about unknown DUIDs"""
-        try:
-            # Email configuration - use environment variables
-            sender_email = os.getenv('ALERT_EMAIL')
-            sender_password = os.getenv('ALERT_PASSWORD') 
-            recipient_email = os.getenv('RECIPIENT_EMAIL', sender_email)
-            smtp_server = os.getenv('SMTP_SERVER', 'smtp.mail.me.com')  # Default to iCloud
-            smtp_port = int(os.getenv('SMTP_PORT', '587'))
-            
-            if not all([sender_email, sender_password]):
-                logger.error("Email credentials not configured. Set ALERT_EMAIL and ALERT_PASSWORD environment variables.")
-                return
-            
-            # Create email
-            msg = MIMEMultipart()
-            msg['From'] = sender_email
-            msg['To'] = recipient_email
-            msg['Subject'] = f"⚠️ Unknown DUIDs in Energy Dashboard - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
-            
-            # Create email body
-            body = self.create_alert_email_body(unknown_duids, df)
-            msg.attach(MIMEText(body, 'html'))
-            
-            # Send email using configured SMTP server
-            with smtplib.SMTP(smtp_server, smtp_port) as server:
-                server.starttls()
-                server.login(sender_email, sender_password)
-                server.send_message(msg)
-            
-            logger.info(f"✅ Email alert sent for {len(unknown_duids)} unknown DUIDs via {smtp_server}")
-            
-        except Exception as e:
-            logger.error(f"❌ Failed to send email alert: {e}")
-
-    def create_alert_email_body(self, unknown_duids, df):
-        """Create HTML email body"""
-        # Get sample data for each unknown DUID
-        duid_samples = []
-        for duid in sorted(unknown_duids)[:10]:  # Limit to 10 for email size
-            duid_data = df[df['duid'] == duid]
-            if not duid_data.empty:
-                sample = duid_data.iloc[-1]
-                duid_samples.append({
-                    'duid': duid,
-                    'power': sample['scadavalue'],
-                    'time': sample['settlementdate'],
-                    'records': len(duid_data)
-                })
-        
-        # Build HTML
-        samples_html = ""
-        for sample in duid_samples:
-            samples_html += f"""
-            <tr>
-                <td>{sample['duid']}</td>
-                <td>{sample['power']:.1f} MW</td>
-                <td>{sample['time']}</td>
-                <td>{sample['records']}</td>
-            </tr>
-            """
-        
-        body = f"""
-        <html>
-        <body>
-            <h2>🚨 Unknown DUIDs Detected</h2>
-            <p><strong>Time:</strong> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
-            <p>Found <strong>{len(unknown_duids)} unknown DUID(s)</strong> not in gen_info.pkl</p>
-            
-            <h3>Sample Data:</h3>
-            <table border="1" style="border-collapse: collapse;">
-            <tr>
-                <th>DUID</th>
-                <th>Latest Power</th>
-                <th>Latest Time</th>
-                <th>Records (24h)</th>
-            </tr>
-            {samples_html}
-            </table>
-            
-            <h3>Action Required:</h3>
-            <ul>
-                <li>Update gen_info.pkl with new DUID information</li>
-                <li>Check AEMO data sources for DUID details</li>
-                <li>Verify these are legitimate new generation units</li>
-            </ul>
-            
-            <p><em>All unknown DUIDs: {', '.join(sorted(unknown_duids))}</em></p>
-        </body>
-        </html>
-        """
-        return body
-    
     def load_generation_data(self):
         """Load generation data using optimized query manager for long date ranges"""
         try:
