@@ -9,6 +9,7 @@ consumers (admin SMS/email, iOS Nem Analyst app).
 - `aemo-data-updater` (collector, runs on `.71`)
 - `aemo-energy-dashboard2` (dashboard + API server, runs on `.71`)
 - `standalone_renewable_gauge_with_alerts_updated.py` (separate gauge process)
+- `battery_monitor.py` (separate 5-min-polling daemon)
 - `outage_monitor` (detection-only, no alerting yet)
 
 **Consumer surfaces:**
@@ -110,6 +111,53 @@ The iOS app should let testers toggle each record class individually under
 Settings → Notifications. Default to all-on; testers can mute the spammy ones
 (solar peak fires often in summer).
 
+### Battery records (info)
+
+All produced by `/Users/davidleitch/aemo_production/battery_monitor.py` —
+a standalone daemon polling `bdu5` every 5 minutes
+(`POLL_INTERVAL_SECONDS = 300`). Records state lives in
+`/Users/davidleitch/aemo_production/data/battery_records.json` (active,
+last-updated daily). Currently dispatches via Twilio SMS to
+`MY_PHONE_NUMBER` only.
+
+Three record metrics × four regions × NEM-wide = **15 record alerts**:
+
+| Metric | Per-region IDs | NEM-wide ID |
+|---|---|---|
+| Peak state of charge (MWh) | `battery-soc-record-{nsw1,qld1,vic1,sa1}` | `battery-soc-record-nem` |
+| Peak discharge (MW) | `battery-discharge-record-{nsw1,qld1,vic1,sa1}` | `battery-discharge-record-nem` |
+| Peak charge (MW) | `battery-charge-record-{nsw1,qld1,vic1,sa1}` | `battery-charge-record-nem` |
+
+| Field | Value |
+|---|---|
+| Trigger | Per scope/metric: current 5-min reading > stored max; record gets updated and SMS fires (single message per breach, no rate-limiting beyond "must beat current record") |
+| Producer | `battery_monitor.py:264-289` (`check_records`); SMS in `:325-349` (`send_record_alert`) |
+| State file | `/Users/davidleitch/aemo_production/data/battery_records.json` |
+| Current channels | sms |
+| Recommended iOS | **push (opt-in) + badge + inline** — same per-class toggle pattern as the renewable records. Default the NEM-wide records on (3 alerts, low-frequency, market-significant); default per-region records off (12 alerts, more frequent). |
+| Suggested copy | "🔋 NEM new battery discharge record: 3,641 MW (prev 3,580)" |
+
+The producer is structurally cleaner than the renewable-gauge equivalent
+— `default_records()` factory, `seed_records` backfill mode, dataclass-
+shaped JSON. Worth using as a template if/when the renewable-records
+producer is refactored.
+
+### Battery low-SOC alerts (warning)
+
+Same producer (`battery_monitor.py`).
+
+| Alert ID | Trigger | Recovery |
+|---|---|---|
+| `battery-low-soc-{nsw1,qld1,vic1,sa1}` | Region SOC drops below `LOW_SOC_TRIGGER_PCT = 5.0%` while `low_soc_alerts[region].active == false` | When SOC rises above `LOW_SOC_RECOVER_PCT = 15.0%`, sends a recovery SMS and clears the active flag |
+
+| Field | Value |
+|---|---|
+| Producer | `battery_monitor.py:291-322` (`check_low_soc`); SMS in `:352-379` (`send_low_soc_alert`) |
+| State file | Same JSON, under `low_soc_alerts.{region}` |
+| Current channels | sms (both trigger and recovery) |
+| Recommended iOS | **push + badge** — same tier as the price breach (low SOC across a region during evening peak is market-significant) |
+| Notes | As of 7 May, **QLD1 is currently in active low-SOC state** (triggered 7 May 07:25 NEM); NSW1/VIC1/SA1 not active. The hysteresis (5% / 15%) prevents flapping. |
+
 ### Detection-only (no alerts today)
 
 The outage monitor has the change-detection infrastructure plumbed in but
@@ -141,25 +189,14 @@ Source: `outage_monitor/change_detector.py:32-40` (`ChangeType` enum).
 - **`new-duid-detected`** is implemented twice with separate rate-limit caches.
   Same recommendation: collector wins.
 
-### Missing — battery records
-
-The user's mental model includes "battery records" alongside DUIDs and prices,
-but **no battery-specific alerts exist** in any of the three producer
-projects. Candidate triggers worth specifying when this is built:
-
-- `battery-discharge-record-mw` — new NEM-wide battery discharge MW peak
-- `battery-charge-record-mw` — new NEM-wide battery charge MW peak
-- `battery-fleet-soc-extreme` — fleet SoC drops below X% (low) or hits Y% (high)
-- `battery-revenue-record-daily` — new daily-revenue record (probably too noisy)
-
-State could mirror `renewable_records.json` shape.
-
 ### Missing — opportunity list
 
 - **NEM demand records** — peak / minimum demand records (nothing today)
 - **Renewable-share intra-day record** — current dashboard tracks all-time
   but not intra-day-since-midnight
 - **Negative-price duration records** — sustained negative-price runs
+- **Battery revenue record (daily)** — daily fleet revenue all-time high
+  (would need the prices × dispatch join from `/v1/batteries/overview`)
 
 ---
 
