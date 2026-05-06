@@ -1,0 +1,186 @@
+# AEMO Alerts Catalogue
+
+Single source of truth for every alert that fires across the AEMO production
+systems. Cross-referenced by both producers (collector, dashboard, gauge) and
+consumers (admin SMS/email, iOS Nem Analyst app).
+
+**Producer projects:**
+
+- `aemo-data-updater` (collector, runs on `.71`)
+- `aemo-energy-dashboard2` (dashboard + API server, runs on `.71`)
+- `standalone_renewable_gauge_with_alerts_updated.py` (separate gauge process)
+- `outage_monitor` (detection-only, no alerting yet)
+
+**Consumer surfaces:**
+
+- `sms` — Twilio to a single admin phone (`MY_PHONE_NUMBER` / `ALERT_PHONE_NUMBER`)
+- `email` — SMTP to admin (`RECIPIENT_EMAIL`)
+- `push` — APNs to iPhone via the Nem Analyst app (**not yet wired**)
+- `badge` — app-icon badge count on Nem Analyst (**not yet wired**)
+- `inline` — in-app banner / list, no notification (**not yet wired**)
+- `log` — file log only, no surfacing
+
+## Severity definitions
+
+| Severity | Meaning | Default channels |
+|---|---|---|
+| **critical** | Market-significant event a person would interrupt their day for | sms + push + badge |
+| **warning** | Operational issue (data freshness, new entity to classify) | email + inline |
+| **info** | Notable but not urgent (records, milestones) | push (opt-in) + badge + inline |
+
+---
+
+## Master list
+
+Alerts are stable kebab-case IDs. The iOS column is the *recommended* surface
+for the Nem Analyst app once the push pipeline is built; current state for all
+of them is "not surfaced on iOS".
+
+### Critical
+
+#### `spot-price-high-breach`
+
+| Field | Value |
+|---|---|
+| Trigger | `price >= HIGH_THRESHOLD` (default `$1000/MWh`) per region, with stateful "armed" flag so each breach fires once |
+| Producer | **DUPLICATED** in both `aemo-data-updater/src/aemo_updater/collectors/twilio_price_alerts.py:134-151` and `aemo-energy-dashboard2/src/aemo_dashboard/spot_prices/twilio_price_alerts.py:139-156` |
+| State file | `/Users/davidleitch/aemo_production/data/price_alert_state.pkl` |
+| Current channels | sms |
+| Recommended iOS | **push + badge** — the headline alert. Tap-through to Prices → Spot for that region. |
+| Suggested copy | "⚠️ NSW1 spot $1,420 — breached \$1k/MWh" |
+
+#### `spot-price-extreme-spike`
+
+| Field | Value |
+|---|---|
+| Trigger | `price >= EXTREME_THRESHOLD` (default `$10,000/MWh`) |
+| Producer | Same files as `spot-price-high-breach` (lines 141-146) |
+| State file | Same |
+| Current channels | sms (with escalated emoji `🚨🚨🚨`) |
+| Recommended iOS | **push + badge** with distinctive sound. Always raise even if user has muted normal price alerts. |
+| Suggested copy | "🚨 SA1 spot $14,200 — extreme spike" |
+
+### Warning
+
+#### `new-duid-detected`
+
+| Field | Value |
+|---|---|
+| Trigger | DUID appears in AEMO dispatch but isn't in `gen_info.pkl` / known-DUID set; per-DUID 24h cooldown |
+| Producer | **DUPLICATED** in `aemo-data-updater/src/aemo_updater/collectors/unified_collector.py:246,250-292` and `aemo-energy-dashboard2/src/aemo_dashboard/generation/gen_dash.py:466-471,522-555` |
+| State file | `/Volumes/davidleitch/aemo_production/data/unknown_duids_alerts.json` |
+| Current channels | email (admin only) |
+| Recommended iOS | **inline** in a "What's new in the market" feed. Not a push — a power-industry tester finds it interesting but not interruption-worthy. |
+
+#### `data-file-stale`
+
+| Field | Value |
+|---|---|
+| Trigger | Parquet file unmodified > 30 min (configurable per data type); escalates to ERROR if > 60 min |
+| Producer | `aemo-data-updater/src/aemo_updater/alerts/alert_manager.py:159-205` |
+| Current channels | email (always); sms only if escalated to ERROR |
+| Recommended iOS | **none** — admin operational alert, not a tester-facing event. The app should already surface staleness via the existing freshness meta on each chart. |
+
+#### `data-file-missing`
+
+| Field | Value |
+|---|---|
+| Trigger | Expected parquet file does not exist |
+| Producer | Same alert_manager.py (lines 177-184) |
+| Current channels | email + sms |
+| Recommended iOS | **none** — admin only |
+
+### Info
+
+The five record-tracking alerts below all live in
+`aemo-energy-dashboard2/standalone_renewable_gauge_with_alerts_updated.py`,
+share `/Volumes/davidleitch/aemo_production/data/renewable_records.json` for
+state, and currently dispatch via Twilio SMS to `ALERT_PHONE_NUMBER`. None are
+visible on iOS today.
+
+| Alert ID | Trigger | Emoji | Recommended iOS |
+|---|---|---|---|
+| `renewable-record-percentage` | All-time NEM renewable % surpassed | 🌱 | **push (opt-in) + badge + inline** |
+| `wind-record-mw` | New all-time NEM wind MW peak | 🌬️ | **push (opt-in) + badge + inline** |
+| `solar-record-mw` | New all-time NEM utility solar MW peak | ☀️ | **push (opt-in) + badge + inline** |
+| `hydro-record-mw` | New all-time NEM hydro MW peak | 💧 | **push (opt-in) + badge + inline** (hydro records are rare; valuable when they happen) |
+| `rooftop-solar-record-mw` | New all-time NEM rooftop MW peak | 🏠 | **push (opt-in) + badge + inline** |
+
+The iOS app should let testers toggle each record class individually under
+Settings → Notifications. Default to all-on; testers can mute the spammy ones
+(solar peak fires often in summer).
+
+### Detection-only (no alerts today)
+
+The outage monitor has the change-detection infrastructure plumbed in but
+nothing currently dispatches the events. They live in
+`outage_changes.parquet`. Listed here so the next pass can wire alerting once
+priorities are agreed.
+
+| Alert ID | Trigger |
+|---|---|
+| `outage-new-detected` | New ST-PASA / MT-PASA / High-Impact outage appears |
+| `outage-extended` | Existing outage extended by > 1 day |
+| `outage-cancelled` | Outage withdrawn |
+| `outage-capacity-changed` | Outage capacity changed by > 100 MW |
+
+Source: `outage_monitor/change_detector.py:32-40` (`ChangeType` enum).
+
+---
+
+## Outstanding issues
+
+### Duplication
+
+- **Price alerts** fire from BOTH `aemo-data-updater` and
+  `aemo-energy-dashboard2`. Each maintains its own pickle of
+  per-region "armed" state, so one breach raises two SMS messages. **Pick a
+  single owner before iOS push is added** or every event will deliver in
+  triplicate (sms × 2 + push). Recommendation: collector owns it (closer to
+  the raw data); delete the dashboard copy.
+- **`new-duid-detected`** is implemented twice with separate rate-limit caches.
+  Same recommendation: collector wins.
+
+### Missing — battery records
+
+The user's mental model includes "battery records" alongside DUIDs and prices,
+but **no battery-specific alerts exist** in any of the three producer
+projects. Candidate triggers worth specifying when this is built:
+
+- `battery-discharge-record-mw` — new NEM-wide battery discharge MW peak
+- `battery-charge-record-mw` — new NEM-wide battery charge MW peak
+- `battery-fleet-soc-extreme` — fleet SoC drops below X% (low) or hits Y% (high)
+- `battery-revenue-record-daily` — new daily-revenue record (probably too noisy)
+
+State could mirror `renewable_records.json` shape.
+
+### Missing — opportunity list
+
+- **NEM demand records** — peak / minimum demand records (nothing today)
+- **Renewable-share intra-day record** — current dashboard tracks all-time
+  but not intra-day-since-midnight
+- **Negative-price duration records** — sustained negative-price runs
+
+---
+
+## How to add a new alert
+
+1. Pick a kebab-case ID and add a row to the master list in this file under
+   the appropriate severity.
+2. Implement the producer in the owning project (collector for market-data
+   triggers; gauge for fuel records; outage_monitor for outage events).
+3. Write to a JSON state file under `/Users/davidleitch/aemo_production/data/`
+   following the `renewable_records.json` shape.
+4. For iOS surfacing, add the ID to the iOS app's `AlertCategory` enum and
+   wire the APNs payload. (See companion doc when written: TBD —
+   cross-system docs overview.)
+
+## See also
+
+- A higher-level cross-system documentation overview covering the dashboard
+  and the iOS app is planned. This catalogue will move into / be referenced
+  from that overview when it lands.
+- `aemo-energy-dashboard2/src/aemo_dashboard/api/CLAUDE.md` — API server
+  contracts.
+- `~/.claude/projects/.../memory/aemo_ios_app.md` — iOS app state +
+  next-steps tracker.
