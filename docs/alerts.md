@@ -61,6 +61,22 @@ of them is "not surfaced on iOS".
 | Recommended iOS | **push + badge** with distinctive sound. Always raise even if user has muted normal price alerts. |
 | Suggested copy | "🚨 SA1 spot $14,200 — extreme spike" |
 
+#### `spot-price-recovery`
+
+Fires when an armed region's price drops back below `LOW_THRESHOLD`
+(default `$300/MWh`); the region disarms and a "back to normal"
+message is sent. Severity is **info** — the alert event itself is
+that the breach has cleared, not that anything's wrong.
+
+| Field | Value |
+|---|---|
+| Trigger | `price <= LOW_THRESHOLD` AND region currently armed |
+| Producer | Same files as `spot-price-high-breach` |
+| State file | Same |
+| Current channels | sms (with green-check emoji ✅, includes `Duration: Xh Ym`) |
+| Recommended iOS | **push + badge** alongside the breach pair so users see the "all clear" without having to open the app. |
+| Suggested copy | "✅ NSW1 spot recovered to $250 — Duration 1h 5m" |
+
 ### Warning
 
 #### `new-duid-detected`
