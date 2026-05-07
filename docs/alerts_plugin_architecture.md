@@ -409,7 +409,26 @@ Each step is a small PR that ships independently. Tests pass on each.
 | 7 | Convert `data_freshness` (alert_manager.py:159-205) to plugin. Wire in. | low | unplug a collector temporarily, confirm staleness email |
 | 8 | Convert `battery_monitor.py` to `BatteryRecordsPlugin` + `BatteryLowSocPlugin`. **Stop the standalone daemon**. | medium — losing standalone process means crashes aren't independent | shadow-run for 24h: both daemon and plugin running, compare outputs |
 | 9 | Convert renewable gauge alerts to `RenewableRecordsPlugin`. **Stop the standalone gauge alert daemon**. | medium — same shadow-run approach | shadow-run 24h |
-| 10 | Wire `outage_changes` plugin (was detection-only) | low — net new alert class, no old behaviour to preserve | manual outage extension test |
+| 10 | **DEFERRED** — wire `outage_changes` plugin | low | manual outage extension test |
+
+**Step 10 status (deferred 2026-05-07).** The outage change-detection
+infrastructure already runs continuously: `outage_monitor` writes diffs
+into `outage_changes.parquet` each cycle. Surfacing them as alerts is
+genuinely useful but **not yet a priority** vs. iOS push for price + new
+DUID. Step 10's design is documented below; implementation can resume
+when the user wants outage changes flowing into email or push.
+
+When step 10 is picked up, the plugin (~50 lines) is:
+```python
+class OutageChangesPlugin:
+    def evaluate(self, ctx: AlertContext) -> list[Alert]:
+        df = pd.read_parquet(OUTAGE_CHANGES_PATH)
+        new = df[df['detected_at'] > ctx.last_run_at]
+        return [self._row_to_alert(r) for r in new.itertuples()]
+```
+Routing for v1: `['email', 'log']` (admin operational); not iOS in v1.
+Per-cycle cap (e.g. 10) prevents a re-publish flood. Capacity threshold
+already encoded in the change detector (>100 MW).
 
 Phases 8 and 9 use shadow-running because the standalone daemons have
 their own state files. Plugin reads (not writes) for 24h, compares
