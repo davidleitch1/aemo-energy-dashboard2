@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 
 from .auth import bearer_token_middleware
-from .routers import batteries, evening_peak, futures, gas, gauges, generation, meta, outages, prices, stations, today, trends
+from .routers import batteries, devices, evening_peak, futures, gas, gauges, generation, meta, outages, prices, stations, today, trends
 
 
 def create_app() -> FastAPI:
@@ -27,8 +27,10 @@ def create_app() -> FastAPI:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["https://*.itkservices2.com"],
-        allow_methods=["GET"],
-        allow_headers=["Authorization", "CF-Access-Client-Id", "CF-Access-Client-Secret"],
+        # POST added for /v1/devices/register (iOS APNs token registration).
+        allow_methods=["GET", "POST"],
+        allow_headers=["Authorization", "CF-Access-Client-Id", "CF-Access-Client-Secret",
+                       "Content-Type"],
     )
     app.middleware("http")(bearer_token_middleware)
 
@@ -44,6 +46,7 @@ def create_app() -> FastAPI:
     app.include_router(evening_peak.router, prefix="/v1")
     app.include_router(today.router, prefix="/v1")
     app.include_router(stations.router, prefix="/v1")
+    app.include_router(devices.router, prefix="/v1")
 
     return app
 
