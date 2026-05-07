@@ -214,6 +214,9 @@ Source: `outage_monitor/change_detector.py:32-40` (`ChangeType` enum).
 
 ## See also
 
+- [`alerts_plugin_architecture.md`](alerts_plugin_architecture.md) — the
+  *how* (Plugin / Dispatcher / Sink design that consolidates the three
+  current daemons and prepares the iOS push hook).
 - A higher-level cross-system documentation overview covering the dashboard
   and the iOS app is planned. This catalogue will move into / be referenced
   from that overview when it lands.
