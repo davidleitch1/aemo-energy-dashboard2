@@ -155,10 +155,11 @@ def q(sql: str, params: list | None = None) -> pd.DataFrame:
 # infrastructure to render them is still here for any tab that gets them later.
 TABS = [
     ("today",            "Today",            []),
-    ("generation-mix",   "Generation mix",   [("stack",         "Stack"),
+    ("generation-mix",   "Generation mix",   [("yr-on-yr",      "Yr on yr"),
+                                              ("stack",         "Stack"),
                                               ("tod",           "Time of day"),
-                                              ("transmission",  "Transmission"),
-                                              ("yr-on-yr",      "Yr on yr")]),
+                                              ("trends",        "Trends"),
+                                              ("transmission",  "Transmission")]),
     ("evening-peak",     "Evening peak",     []),
     ("prices",           "Prices",           [("analysis", "Price Analysis"),
                                               ("bands",    "Price Bands")]),
@@ -166,7 +167,9 @@ TABS = [
     ("futures",          "Futures",          []),  # moved
     ("pivot-table",      "Pivot table",      []),
     ("station-analysis", "Station Analysis", []),
-    ("trends",           "Trends",           []),
+    # "Trends" removed from the top nav — it's now a subtab of Generation mix
+    # at /generation-mix/trends. Bookmarks to /trends redirect via the
+    # legacy_trends_redirect handler below.
     ("curtailment",      "Curtailment",      []),
     ("pasa",             "PASA",             []),
     ("gas",              "Gas",              []),
@@ -314,6 +317,10 @@ h1 .brand { color: var(--teal); }
 .pill.active { background: var(--teal); color: #fffcf0; font-weight: 600; }
 .pill.active:hover { background: var(--teal); }
 .pill:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
+.pill.disabled {
+  color: #c7c5b8; cursor: not-allowed; pointer-events: none;
+  background: var(--paper);
+}
 
 /* Custom-range date form (visible only when range=custom) */
 .custom-form {
@@ -521,6 +528,32 @@ def _render_region_pills(base_url: str, active: str,
             f'</div>')
 
 
+# Fuel pill bar for the Trends subtab. Maps to production PenetrationTab's
+# fuel_select values: VRE = aggregate Wind+Solar+Rooftop, else single fuel.
+TRENDS_FUEL_OPTIONS = [("vre", "VRE"), ("wind", "Wind"),
+                       ("solar", "Solar"), ("rooftop", "Rooftop")]
+TRENDS_FUEL_TO_PROD = {"vre": "VRE", "wind": "Wind",
+                       "solar": "Solar", "rooftop": "Rooftop"}
+
+
+def _render_fuel_pills(base_url: str, active: str, other_params: dict) -> str:
+    """Single-select fuel pill bar — VRE / Wind / Solar / Rooftop."""
+    pills = []
+    for slug, label in TRENDS_FUEL_OPTIONS:
+        params = dict(other_params, fuel=slug)
+        url = _build_url(base_url, **params)
+        cls = "pill active" if slug == active else "pill"
+        pills.append(
+            f'<button class="{cls}" '
+            f'hx-get="{url}" hx-target="#tab-body" hx-push-url="true">'
+            f'{label}</button>'
+        )
+    return (f'<div class="pill-bar">'
+            f'<span class="pill-bar-label">Fuel</span>'
+            f'<div class="pill-group">{"".join(pills)}</div>'
+            f'</div>')
+
+
 def _render_smooth_pills(base_url: str, smooth_on: bool, other_params: dict) -> str:
     """On/Off segmented pill for line smoothing (LOESS)."""
     pills = []
@@ -537,6 +570,269 @@ def _render_smooth_pills(base_url: str, smooth_on: bool, other_params: dict) -> 
     return (f'<div class="pill-bar">'
             f'<span class="pill-bar-label">Smooth</span>'
             f'<div class="pill-group">{"".join(pills)}</div>'
+            f'</div>')
+
+
+# ── Gas (STTM) hub + range pills ────────────────────────────────────────────
+# Power data is sub-hourly; STTM is daily back to 2010, so the standard
+# 1h/24h/7d ladder makes no sense. Gas uses month/year presets.
+
+GAS_HUBS = [
+    ("SYD", "Sydney"),
+    ("BRI", "Brisbane"),
+    ("ADL", "Adelaide"),
+    ("AVG", "STTM Avg"),
+]
+GAS_HUB_COLORS = {
+    "SYD": "#205EA6",   # FLEXOKI_ACCENT['blue']
+    "BRI": "#BC5215",   # FLEXOKI_ACCENT['orange']
+    "ADL": "#24837B",   # FLEXOKI_ACCENT['cyan']
+    "AVG": "#100F0F",   # ink — composite line sits on top in black
+}
+GAS_RANGE_OPTIONS = [("3m", "3M"), ("6m", "6M"), ("1y", "1Y"),
+                     ("2y", "2Y"), ("5y", "5Y"), ("all", "All")]
+GAS_RANGE_DAYS = {"3m": 90, "6m": 180, "1y": 365,
+                  "2y": 730, "5y": 1825, "all": None}
+
+
+def _render_gas_hub_pills(base_url: str, active: str,
+                          other_params: dict) -> str:
+    """Multi-select hub pills. `active` is a comma-separated list of hub codes
+    (SYD/BRI/ADL/AVG). Clicking toggles. Last-selected hub cannot be turned
+    off (matches the multi-region pattern)."""
+    selected = set((active or "").split(","))
+    pills = []
+    for code, label in GAS_HUBS:
+        is_active = code in selected
+        if is_active and len(selected) > 1:
+            new_set = selected - {code}
+        elif is_active:
+            new_set = selected
+        else:
+            new_set = selected | {code}
+        # Preserve canonical order so URL is stable.
+        new_param = ",".join(c for c, _ in GAS_HUBS if c in new_set)
+        params = dict(other_params, hub=new_param)
+        url = _build_url(base_url, **params)
+        cls = "pill active" if is_active else "pill"
+        pills.append(
+            f'<button class="{cls}" '
+            f'hx-get="{url}" hx-target="#tab-body" hx-push-url="true">'
+            f'{label}</button>'
+        )
+    return (f'<div class="pill-bar">'
+            f'<span class="pill-bar-label">Hub</span>'
+            f'<div class="pill-toggles">{"".join(pills)}</div>'
+            f'</div>')
+
+
+def _render_gas_range_pills(base_url: str, active: str,
+                            other_params: dict) -> str:
+    """Range pills tuned for the daily STTM series. No Custom pill — the
+    presets cover the meaningful windows and a Custom date picker would
+    invite asking for sub-day windows that don't exist."""
+    pills = []
+    for slug, label in GAS_RANGE_OPTIONS:
+        params = dict(other_params, range=slug)
+        url = _build_url(base_url, **params)
+        cls = "pill active" if slug == active else "pill"
+        pills.append(
+            f'<button class="{cls}" '
+            f'hx-get="{url}" hx-target="#tab-body" hx-push-url="true">'
+            f'{label}</button>'
+        )
+    return (f'<div class="pill-bar">'
+            f'<span class="pill-bar-label">Range</span>'
+            f'<div class="pill-group">{"".join(pills)}</div>'
+            f'</div>')
+
+
+# ── Pivot table helpers ─────────────────────────────────────────────────────
+# Three ordered group-slots over three dims (Region/Fuel/Owner). Station is
+# always implicit between innermost chosen group and DUID. Range pills lift
+# from the standard set but drop sub-day windows — 30-min data, daily totals.
+
+PIVOT_DIMS = [("region", "Region"),
+              ("fuel",   "Fuel"),
+              ("owner",  "Owner")]
+PIVOT_RANGE_OPTIONS = [("7d", "7D"),  ("30d", "30D"), ("90d", "90D"),
+                       ("ytd", "YTD"), ("1y", "1Y"),   ("5y", "5Y")]
+PIVOT_COLUMNS = [
+    ("gwh",   "GWh",      "Generation (GWh) — discharge for batteries"),
+    ("rev",   "Rev ($M)", "Revenue ($M) — VWAP × generation"),
+    ("price", "$/MWh",    "Volume-weighted average price"),
+    ("util",  "Util (%)", "Capacity factor — batteries: storage_mwh/24 base"),
+    ("cap",   "Cap (MW)", "Nameplate capacity"),
+]
+PIVOT_FUEL_GROUPS = [
+    ("Coal",            "Coal"),
+    ("Gas",             "Gas"),       # CCGT + OCGT + Gas other
+    ("Hydro",           "Hydro"),     # raw fuel = Water
+    ("Wind",            "Wind"),
+    ("Solar",           "Solar"),
+    ("Battery Storage", "Battery"),
+    ("Biomass",         "Biomass"),
+    ("Other",           "Other"),
+]
+# Map display-fuel slug to the raw d.fuel values that feed into it.
+PIVOT_FUEL_TO_RAW = {
+    "Coal":            ["Coal"],
+    "Gas":             ["CCGT", "OCGT", "Gas other"],
+    "Hydro":           ["Water"],
+    "Wind":            ["Wind"],
+    "Solar":           ["Solar"],
+    "Battery Storage": ["Battery Storage"],
+    "Biomass":         ["Biomass"],
+    "Other":           ["Other"],
+}
+
+
+def _render_pivot_group_pills(base_url: str, slot: int, active: str | None,
+                              disabled_dims: set[str],
+                              other_params: dict) -> str:
+    """One ordered group slot. `slot` is 1/2/3; `active` is the dim slug
+    selected for this slot (or None for slot 3 which can be empty).
+    `disabled_dims` lists dims chosen in earlier slots — clicking them is a
+    no-op (visually greyed). For slot ≥2 a '(none)' pill is offered so the
+    user can drop the slot entirely."""
+    pills = []
+    if slot >= 2:
+        params = dict(other_params, **{f"g{slot}": ""})
+        url = _build_url(base_url, **params)
+        cls = "pill active" if not active else "pill"
+        pills.append(
+            f'<button class="{cls}" '
+            f'hx-get="{url}" hx-target="#tab-body" hx-push-url="true">'
+            f'(none)</button>'
+        )
+    for slug, label in PIVOT_DIMS:
+        is_active = slug == active
+        is_disabled = slug in disabled_dims and not is_active
+        if is_disabled:
+            pills.append(f'<button class="pill disabled" disabled>{label}</button>')
+            continue
+        params = dict(other_params, **{f"g{slot}": slug})
+        url = _build_url(base_url, **params)
+        cls = "pill active" if is_active else "pill"
+        pills.append(
+            f'<button class="{cls}" '
+            f'hx-get="{url}" hx-target="#tab-body" hx-push-url="true">'
+            f'{label}</button>'
+        )
+    return (f'<div class="pill-bar">'
+            f'<span class="pill-bar-label">Group {slot}</span>'
+            f'<div class="pill-group">{"".join(pills)}</div>'
+            f'</div>')
+
+
+def _render_pivot_range_pills(base_url: str, active: str,
+                              other_params: dict,
+                              start: str = "", end: str = "") -> str:
+    """Preset pills + Custom. Mirrors _render_range_pills but uses the
+    pivot-specific option list (no 1H/24H; adds 90D and 5Y)."""
+    pills = []
+    for slug, label in PIVOT_RANGE_OPTIONS:
+        params = {k: v for k, v in other_params.items()
+                  if k not in ("start", "end")}
+        params["range"] = slug
+        url = _build_url(base_url, **params)
+        cls = "pill active" if slug == active else "pill"
+        pills.append(
+            f'<button class="{cls}" '
+            f'hx-get="{url}" hx-target="#tab-body" hx-push-url="true">'
+            f'{label}</button>'
+        )
+    custom_params = dict(other_params, range="custom")
+    custom_url = _build_url(base_url, **custom_params)
+    custom_cls = "pill active" if active == "custom" else "pill"
+    pills.append(
+        f'<button class="{custom_cls}" '
+        f'hx-get="{custom_url}" hx-target="#tab-body" hx-push-url="true">'
+        f'Custom</button>'
+    )
+
+    form_html = ""
+    if active == "custom":
+        today = datetime.now(NEM_TZ).date()
+        default_start = (today - timedelta(days=30)).isoformat()
+        default_end = today.isoformat()
+        s_val = start or default_start
+        e_val = end or default_end
+        hidden = "".join(
+            f'<input type="hidden" name="{k}" value="{v}">'
+            for k, v in other_params.items() if v and k not in ("start", "end")
+        )
+        form_html = f"""
+        <form class="custom-form" hx-get="{base_url}"
+              hx-target="#tab-body" hx-push-url="true">
+          {hidden}
+          <input type="hidden" name="range" value="custom">
+          <input type="date" name="start" value="{s_val}" max="{today.isoformat()}">
+          <span class="sep">to</span>
+          <input type="date" name="end" value="{e_val}" max="{today.isoformat()}">
+          <button type="submit">Apply</button>
+        </form>"""
+
+    return (f'<div class="pill-bar">'
+            f'<span class="pill-bar-label">Range</span>'
+            f'<div class="pill-group">{"".join(pills)}</div>'
+            f'{form_html}'
+            f'</div>')
+
+
+def _render_pivot_column_pills(base_url: str, active_cols: list[str],
+                               other_params: dict) -> str:
+    """Multi-select column toggles. Last-on column cannot be toggled off."""
+    selected = set(active_cols)
+    pills = []
+    for slug, label, _desc in PIVOT_COLUMNS:
+        is_active = slug in selected
+        if is_active and len(selected) > 1:
+            new_set = selected - {slug}
+        elif is_active:
+            new_set = selected
+        else:
+            new_set = selected | {slug}
+        new_param = ",".join(s for s, _, _ in PIVOT_COLUMNS if s in new_set)
+        params = dict(other_params, cols=new_param)
+        url = _build_url(base_url, **params)
+        cls = "pill active" if is_active else "pill"
+        pills.append(
+            f'<button class="{cls}" '
+            f'hx-get="{url}" hx-target="#tab-body" hx-push-url="true">'
+            f'{label}</button>'
+        )
+    return (f'<div class="pill-bar">'
+            f'<span class="pill-bar-label">Columns</span>'
+            f'<div class="pill-toggles">{"".join(pills)}</div>'
+            f'</div>')
+
+
+def _render_pivot_fuel_pills(base_url: str, active_fuels: list[str],
+                             other_params: dict) -> str:
+    """Multi-select fuel filter (display-fuel groups)."""
+    selected = set(active_fuels)
+    pills = []
+    for code, label in PIVOT_FUEL_GROUPS:
+        is_active = code in selected
+        if is_active and len(selected) > 1:
+            new_set = selected - {code}
+        elif is_active:
+            new_set = selected
+        else:
+            new_set = selected | {code}
+        new_param = ",".join(c for c, _ in PIVOT_FUEL_GROUPS if c in new_set)
+        params = dict(other_params, fuel=new_param)
+        url = _build_url(base_url, **params)
+        cls = "pill active" if is_active else "pill"
+        pills.append(
+            f'<button class="{cls}" '
+            f'hx-get="{url}" hx-target="#tab-body" hx-push-url="true">'
+            f'{label}</button>'
+        )
+    return (f'<div class="pill-bar">'
+            f'<span class="pill-bar-label">Fuel</span>'
+            f'<div class="pill-toggles">{"".join(pills)}</div>'
             f'</div>')
 
 
@@ -2367,6 +2663,131 @@ def _generation_transmission_content(region: str, range_slug: str,
     )
 
 
+_trends_adapter_instance = None
+
+# AEMO's five physical NEM regions. Used to filter out the sub-region IDs
+# (QLDC/QLDN/QLDS/TASN/TASS) that appear in rooftop30 for 2020-2025 but
+# vanish in 2026, double-counting their parents in the NEM aggregate.
+NEM_PHYSICAL_REGIONS = {"NSW1", "QLD1", "VIC1", "SA1", "TAS1"}
+
+
+def _get_trends_adapter():
+    """Module-level singleton that wraps production's PenetrationTab without
+    re-running its auto-update loop. Holds the underlying cache between
+    requests so chart regen is fast after the first call.
+
+    Also fixes a production bug in NEM rooftop aggregation — see comment on
+    the _load_rooftop_30min override below."""
+    global _trends_adapter_instance
+    if _trends_adapter_instance is not None:
+        return _trends_adapter_instance
+    from aemo_dashboard.penetration.penetration_tab import PenetrationTab
+
+    class _Adapter(PenetrationTab):
+        def _update_charts(self, event=None):
+            # Suppress the auto-rebuild that __init__ + watchers trigger.
+            # The caller invokes _create_* methods directly with the desired
+            # region/fuel/smoothing values set first.
+            pass
+
+        def _load_rooftop_30min(self, start_date, end_date):
+            """Filter out non-physical sub-region IDs before the parent's
+            NEM aggregation pivots all columns.
+
+            rooftop30 historically (2020-2025) contains both parent regionids
+            (NSW1/QLD1/VIC1/SA1/TAS1) AND sub-region IDs (QLDC/QLDN/QLDS/TASN/
+            TASS). Production's NEM sum is `df.sum(axis=1)` over all columns,
+            which double-counts QLD and TAS in those years. Starting 2026,
+            the sub-region IDs stop appearing, so the NEM 2026 series ends
+            up correctly summed but looks lower than the over-counted 2025
+            series.
+
+            This override drops the sub-region columns so the NEM sum is
+            consistent across all years."""
+            df = super()._load_rooftop_30min(start_date, end_date)
+            if not df.empty and "settlementdate" in df.columns:
+                keep_cols = ["settlementdate"] + [
+                    c for c in df.columns if c in NEM_PHYSICAL_REGIONS
+                ]
+                df = df[keep_cols]
+            return df
+
+    _trends_adapter_instance = _Adapter()
+    return _trends_adapter_instance
+
+
+def _generation_trends_content(region: str, fuel: str = "vre") -> str:
+    """Renewable-penetration trend charts, reusing production's PenetrationTab.
+
+    Three Plotly figures, stacked one per card. The fuel selector (VRE /
+    Wind / Solar / Rooftop) affects which series the production chart code
+    isolates. Region selector applies; smoothing is fixed at EWM 30 days.
+    """
+    try:
+        adapter = _get_trends_adapter()
+    except ImportError:
+        return ('<div class="placeholder">'
+                '<p><strong>Trends module unavailable.</strong></p></div>')
+    except Exception as exc:
+        return (f'<div class="placeholder">'
+                f'<p><strong>Couldn\'t load Trends data.</strong></p>'
+                f'<p>{exc}</p></div>')
+
+    adapter.region_select.value = region
+    adapter.fuel_select.value = TRENDS_FUEL_TO_PROD.get(fuel, "VRE")
+    adapter.smoothing_select.value = "EWM (30 days, balanced)"
+
+    def _render_chart(fig, slug, title):
+        if fig is None:
+            return ('<div class="card"><div class="placeholder">'
+                    f'<p><strong>{title}: no data available.</strong></p>'
+                    '</div></div>')
+        # Strip the figure's own title — our card header carries it instead,
+        # in the brand teal small-caps style used everywhere else.
+        fig.update_layout(title=None, margin=dict(l=48, r=12, t=8, b=44))
+        div_id = f"plot-{slug}-{int(datetime.now().timestamp() * 1000)}"
+        fig_json = _plot_json(fig)
+        return ('<div class="card">'
+                + _card_h3(title)
+                + f'<div id="{div_id}" style="height:420px"></div>'
+                + f'<script>(function(){{var f={fig_json};'
+                f'Plotly.newPlot("{div_id}",f.data,f.layout,{PLOTLY_CFG});}})();</script>'
+                + '</div>')
+
+    rd = _region_display(region)
+    fuel_label = TRENDS_FUEL_TO_PROD.get(fuel, "VRE")
+    try:
+        vre_fig = adapter._create_vre_production_chart()
+        by_fuel_fig = adapter._create_vre_by_fuel_chart()
+        thermal_fig = adapter._create_thermal_vs_renewables_chart()
+    except Exception as exc:
+        return (f'<div class="placeholder">'
+                f'<p><strong>Couldn\'t build Trends charts.</strong></p>'
+                f'<p>{exc}</p></div>')
+
+    return (
+        '<div class="prices-stack">'
+        + _render_chart(vre_fig, "vre-prod",
+                         f"{rd} {fuel_label} production · annualised TWh, "
+                         f"last 3 years overlaid")
+        + _render_chart(by_fuel_fig, "vre-fuel",
+                         f"{rd} renewable generation by fuel")
+        + _render_chart(thermal_fig, "thermal-vs-renew",
+                         f"{rd} thermal vs renewables share")
+        + '<div class="card">'
+        + f'<p style="color:{MUTED};font-size:11px;margin:8px 14px 0;line-height:1.5">'
+        + 'All three charts use a fixed 30-day exponentially-weighted moving '
+        + 'average (EWM) for smoothing — without it, daily fluctuations bury '
+        + 'the multi-year trend. The Fuel selector affects the top chart\'s '
+        + 'series selection: <b>VRE</b> aggregates Wind + Solar + Rooftop, the '
+        + 'individual fuels isolate just that source. The other two charts '
+        + 'don\'t change with the Fuel selector.'
+        + '</p>'
+        + '</div>'
+        + '</div>'
+    )
+
+
 def _generation_yr_on_yr_content(region: str, range_slug: str,
                                  start: str | None, end: str | None) -> str:
     """Period-on-period fuel + price comparison.
@@ -2513,12 +2934,31 @@ def _generation_yr_on_yr_content(region: str, range_slug: str,
 def generation_mix_root(region: str = "", range: str = "",
                         start: str | None = None, end: str | None = None
                         ) -> RedirectResponse:
+    """Lands the user on Yr-on-yr — most useful single-page view for an
+    analyst doing period-on-period reasoning."""
     params = {}
     if region: params["region"] = region
     if range:  params["range"]  = range
     if start:  params["start"]  = start
     if end:    params["end"]    = end
-    return RedirectResponse(url=_build_url("/generation-mix/stack", **params))
+    return RedirectResponse(url=_build_url("/generation-mix/yr-on-yr", **params))
+
+
+@app.get("/trends", response_class=HTMLResponse)
+def legacy_trends_redirect(region: str = "", range: str = "",
+                           start: str | None = None, end: str | None = None
+                           ) -> RedirectResponse:
+    """Permanent redirect for the legacy /trends URL. Trends is now a
+    subtab of Generation mix."""
+    params = {}
+    if region: params["region"] = region
+    if range:  params["range"]  = range
+    if start:  params["start"]  = start
+    if end:    params["end"]    = end
+    return RedirectResponse(
+        url=_build_url("/generation-mix/trends", **params),
+        status_code=308,  # permanent, preserves query params
+    )
 
 
 @app.get("/generation-mix/{sub}", response_class=HTMLResponse)
@@ -2526,7 +2966,8 @@ def generation_mix_sub(sub: str, request: Request,
                        region: str = "NEM",
                        range: str = "24h",
                        start: str | None = None,
-                       end: str | None = None) -> HTMLResponse:
+                       end: str | None = None,
+                       fuel: str = "vre") -> HTMLResponse:
     _, subtabs = TAB_LOOKUP["generation-mix"]
     sub_slugs = {s for s, _ in subtabs}
     if sub not in sub_slugs:
@@ -2537,21 +2978,41 @@ def generation_mix_sub(sub: str, request: Request,
     valid_ranges = {slug for slug, _ in RANGE_OPTIONS} | {"custom"}
     if range not in valid_ranges:
         range = "24h"
+    valid_fuels = {slug for slug, _ in TRENDS_FUEL_OPTIONS}
+    if fuel not in valid_fuels:
+        fuel = "vre"
 
     base_params = {"region": region, "range": range}
     if start: base_params["start"] = start
     if end:   base_params["end"] = end
+    if fuel != "vre": base_params["fuel"] = fuel  # only carry if non-default
 
     base_url = f"/generation-mix/{sub}"
-    selectors = _render_selector_strip(
-        _render_region_pills(base_url, region,
-                             {k: v for k, v in base_params.items() if k != "region"},
-                             regions=GENMIX_REGION_LIST),
-        _render_range_pills(base_url, range,
-                            {k: v for k, v in base_params.items()
-                             if k not in ("range", "start", "end")},
-                            start=start or "", end=end or ""),
-    )
+    # Trends uses Region + Fuel (no Range/Smooth — full multi-year history,
+    # fixed 30-day EWM smoothing). All other subtabs use Region + Range.
+    if sub == "trends":
+        # Build params carrying fuel so region pills preserve it.
+        trends_carry = {k: v for k, v in base_params.items()
+                        if k not in ("region", "range", "start", "end")}
+        if "fuel" not in trends_carry:
+            trends_carry["fuel"] = fuel
+        selectors = _render_selector_strip(
+            _render_region_pills(base_url, region, trends_carry,
+                                 regions=GENMIX_REGION_LIST),
+            _render_fuel_pills(base_url, fuel,
+                               {k: v for k, v in base_params.items()
+                                if k not in ("fuel",)}),
+        )
+    else:
+        selectors = _render_selector_strip(
+            _render_region_pills(base_url, region,
+                                 {k: v for k, v in base_params.items() if k != "region"},
+                                 regions=GENMIX_REGION_LIST),
+            _render_range_pills(base_url, range,
+                                {k: v for k, v in base_params.items()
+                                 if k not in ("range", "start", "end")},
+                                start=start or "", end=end or ""),
+        )
     subtab_html = _render_subtab_nav("generation-mix", subtabs, sub,
                                       carry_params=base_params)
 
@@ -2576,6 +3037,8 @@ def generation_mix_sub(sub: str, request: Request,
         content = _generation_transmission_content(region, range, start, end)
     elif sub == "yr-on-yr":
         content = _generation_yr_on_yr_content(region, range, start, end)
+    elif sub == "trends":
+        content = _generation_trends_content(region, fuel)
     else:
         content = _placeholder("Generation mix", sub_label)
 
@@ -2970,6 +3433,831 @@ def evening_peak_page(request: Request,
 
 
 # ----------------------------------------------------------------------------
+# /gas — STTM ex-post price + volume (single page, three stacked cards)
+# ----------------------------------------------------------------------------
+#
+# Data lives in sttm_expost (gas_date, hub in {SYD,BRI,ADL}, expost_price,
+# network_allocation). Volumes (network_allocation) are GJ/day → /1000 = TJ.
+# We synthesise an "AVG" pseudo-hub = mean(SYD,BRI,ADL) per day for price.
+# Volume charts always use the physical hubs (AVG isn't a real meter).
+#
+# The price chart respects the Range pills. The two demand charts are
+# day-of-year overlays of the last 3 calendar years and intentionally ignore
+# Range — the comparison only makes sense on a full annual cycle.
+
+GAS_PRICE_CLIP = 100.0  # $/GJ — clip display only; raw price stays in hover
+
+
+def _load_gas_prices() -> pd.DataFrame:
+    """All STTM ex-post prices + computed STTM Avg row per day."""
+    df = q("""SELECT gas_date, hub, expost_price AS price
+              FROM sttm_expost
+              ORDER BY gas_date""")
+    if df.empty:
+        return df
+    df["gas_date"] = pd.to_datetime(df["gas_date"])
+    pivot = df.pivot(index="gas_date", columns="hub", values="price")
+    avg = pivot[["SYD", "ADL", "BRI"]].mean(axis=1)
+    avg_df = pd.DataFrame({"gas_date": avg.index, "hub": "AVG",
+                           "price": avg.values})
+    return (pd.concat([df, avg_df], ignore_index=True)
+              .sort_values("gas_date").reset_index(drop=True))
+
+
+def _load_gas_volumes() -> pd.DataFrame:
+    """Daily TJ per hub (only days with non-null network_allocation)."""
+    df = q("""SELECT gas_date, hub, network_allocation
+              FROM sttm_expost
+              WHERE network_allocation IS NOT NULL
+              ORDER BY gas_date""")
+    if df.empty:
+        return df
+    df["gas_date"] = pd.to_datetime(df["gas_date"])
+    df["demand_tj"] = df["network_allocation"] / 1000.0
+    return df
+
+
+# Year-overlay styling: current year = solid + heaviest, prior = dashed,
+# two-back = dotted + lightest. Matches the production sttm volume tab.
+_YEAR_WIDTHS = {0: 2.0, 1: 1.5, 2: 1.0}
+_YEAR_DASH = {0: "solid", 1: "dash", 2: "dot"}
+
+
+def _build_gas_price_fig(prices: pd.DataFrame, hubs: list[str],
+                        start: pd.Timestamp, end: pd.Timestamp,
+                        range_label: str) -> go.Figure:
+    fig = go.Figure()
+    if prices.empty:
+        fig.add_annotation(text="No STTM price data available",
+                           xref="paper", yref="paper", x=0.5, y=0.5,
+                           showarrow=False,
+                           font=dict(size=14, color=MUTED))
+    else:
+        win = prices[(prices["gas_date"] >= start)
+                     & (prices["gas_date"] <= end)].copy()
+        win["price_display"] = win["price"].clip(upper=GAS_PRICE_CLIP)
+        hub_label = dict(GAS_HUBS)
+        # Plot in the canonical hub order so legend ordering is stable.
+        for code, label in GAS_HUBS:
+            if code not in hubs:
+                continue
+            sub = win[win["hub"] == code]
+            if sub.empty:
+                continue
+            fig.add_trace(go.Scatter(
+                x=sub["gas_date"], y=sub["price_display"],
+                mode="lines",
+                line=dict(color=GAS_HUB_COLORS[code],
+                          width=1.5 if code != "AVG" else 1.2,
+                          dash="solid" if code != "AVG" else "dot"),
+                name=hub_label[code],
+                customdata=sub["price"],
+                hovertemplate=(f"{label}<br>%{{x|%d %b %Y}}<br>"
+                               "$%{customdata:.2f}/GJ<extra></extra>"),
+            ))
+
+        # Stats annotation in top-left, scoped to selected hubs + window.
+        stats_lines = []
+        for code, label in GAS_HUBS:
+            if code not in hubs:
+                continue
+            sub = win[win["hub"] == code]
+            if sub.empty:
+                continue
+            latest = sub.iloc[-1]
+            mean_p = sub["price"].mean()
+            stats_lines.append(
+                f"<b>{label}</b>: ${latest['price']:.2f} "
+                f"(latest) &middot; ${mean_p:.2f} (period avg)"
+            )
+        if stats_lines:
+            fig.add_annotation(
+                text="<br>".join(stats_lines),
+                xref="paper", yref="paper",
+                x=0.01, y=0.99, xanchor="left", yanchor="top",
+                showarrow=False,
+                font=dict(size=11, color=INK),
+                bgcolor=PAPER, bordercolor=BORDER, borderwidth=1,
+                opacity=0.92,
+            )
+        if (win["price"] > GAS_PRICE_CLIP).any():
+            fig.add_annotation(
+                text=("Display capped at $100/GJ &mdash; hover for raw price"),
+                xref="paper", yref="paper",
+                x=0.99, y=0.99, xanchor="right", yanchor="top",
+                showarrow=False,
+                font=dict(size=10, color=MUTED),
+            )
+
+    fig.update_layout(
+        paper_bgcolor=PAPER, plot_bgcolor=PAPER,
+        height=460,
+        margin=dict(l=52, r=24, t=20, b=44),
+        legend=dict(orientation="h", yanchor="bottom", y=-0.18,
+                    xanchor="center", x=0.5, font=dict(size=11),
+                    bgcolor=PAPER),
+        xaxis=dict(gridcolor=BORDER, gridwidth=0.5, showspikes=False),
+        yaxis=dict(title=dict(text="$/GJ", font=dict(size=11, color=MUTED)),
+                   gridcolor=BORDER, gridwidth=0.5, zeroline=False),
+    )
+    return fig
+
+
+def _build_gas_total_demand_fig(vol_df: pd.DataFrame) -> go.Figure:
+    """Total STTM demand summed across SYD+BRI+ADL, last 3 years overlaid on
+    day-of-year. 7-day rolling mean. Range pills do not apply."""
+    fig = go.Figure()
+    if vol_df.empty:
+        fig.add_annotation(text="No STTM volume data available",
+                           xref="paper", yref="paper", x=0.5, y=0.5,
+                           showarrow=False,
+                           font=dict(size=14, color=MUTED))
+    else:
+        daily = vol_df.groupby("gas_date")["demand_tj"].sum().reset_index()
+        daily = daily.sort_values("gas_date")
+        daily["ma7"] = daily["demand_tj"].rolling(7, min_periods=1).mean()
+        daily["year"] = daily["gas_date"].dt.year
+        daily["doy"] = daily["gas_date"].dt.dayofyear
+        cur_yr = int(daily["year"].max())
+        years = sorted(daily["year"].unique())[-3:]
+        palette = {0: "#205EA6", 1: "#BC5215", 2: "#24837B"}
+        for yr in years:
+            age = cur_yr - yr
+            sub = daily[daily["year"] == yr]
+            fig.add_trace(go.Scatter(
+                x=sub["doy"], y=sub["ma7"], mode="lines",
+                line=dict(color=palette.get(age, MUTED),
+                          width=_YEAR_WIDTHS.get(age, 1.0),
+                          dash=_YEAR_DASH.get(age, "solid")),
+                name=str(yr),
+                hovertemplate=(f"{yr}<br>Day %{{x}}<br>"
+                               "%{y:.1f} TJ/day<extra></extra>"),
+            ))
+
+    fig.update_layout(
+        paper_bgcolor=PAPER, plot_bgcolor=PAPER,
+        height=380,
+        margin=dict(l=52, r=24, t=20, b=44),
+        legend=dict(orientation="h", yanchor="bottom", y=-0.20,
+                    xanchor="center", x=0.5, font=dict(size=11),
+                    bgcolor=PAPER),
+        xaxis=dict(title=dict(text="Day of year",
+                              font=dict(size=11, color=MUTED)),
+                   range=[1, 366], dtick=30,
+                   gridcolor=BORDER, gridwidth=0.5, showspikes=False),
+        yaxis=dict(title=dict(text="TJ/day (7-day MA)",
+                              font=dict(size=11, color=MUTED)),
+                   gridcolor=BORDER, gridwidth=0.5, zeroline=False),
+    )
+    return fig
+
+
+def _build_gas_hub_demand_fig(vol_df: pd.DataFrame,
+                              physical_hubs: list[str]) -> go.Figure:
+    """Per-hub demand, last 3 years overlaid on day-of-year. 7-day rolling
+    mean. Trace colour = hub, dash style = year age."""
+    fig = go.Figure()
+    if vol_df.empty or not physical_hubs:
+        fig.add_annotation(text="No STTM volume data for the selected hubs",
+                           xref="paper", yref="paper", x=0.5, y=0.5,
+                           showarrow=False,
+                           font=dict(size=14, color=MUTED))
+    else:
+        v = vol_df[vol_df["hub"].isin(physical_hubs)].copy()
+        v = v.sort_values(["hub", "gas_date"])
+        v["ma7"] = v.groupby("hub")["demand_tj"].transform(
+            lambda s: s.rolling(7, min_periods=1).mean()
+        )
+        v["year"] = v["gas_date"].dt.year
+        v["doy"] = v["gas_date"].dt.dayofyear
+        cur_yr = int(v["year"].max())
+        years = sorted(v["year"].unique())[-3:]
+        hub_label = dict(GAS_HUBS)
+        for code in physical_hubs:
+            hub_v = v[v["hub"] == code]
+            if hub_v.empty:
+                continue
+            for yr in years:
+                sub = hub_v[hub_v["year"] == yr]
+                if sub.empty:
+                    continue
+                age = cur_yr - yr
+                fig.add_trace(go.Scatter(
+                    x=sub["doy"], y=sub["ma7"], mode="lines",
+                    line=dict(color=GAS_HUB_COLORS[code],
+                              width=_YEAR_WIDTHS.get(age, 1.0),
+                              dash=_YEAR_DASH.get(age, "solid")),
+                    name=f"{hub_label[code]} {yr}",
+                    hovertemplate=(f"{hub_label[code]} {yr}<br>"
+                                   "Day %{x}<br>%{y:.1f} TJ/day<extra></extra>"),
+                ))
+
+    fig.update_layout(
+        paper_bgcolor=PAPER, plot_bgcolor=PAPER,
+        height=420,
+        margin=dict(l=52, r=24, t=20, b=44),
+        legend=dict(orientation="h", yanchor="bottom", y=-0.22,
+                    xanchor="center", x=0.5, font=dict(size=10),
+                    bgcolor=PAPER),
+        xaxis=dict(title=dict(text="Day of year",
+                              font=dict(size=11, color=MUTED)),
+                   range=[1, 366], dtick=30,
+                   gridcolor=BORDER, gridwidth=0.5, showspikes=False),
+        yaxis=dict(title=dict(text="TJ/day (7-day MA)",
+                              font=dict(size=11, color=MUTED)),
+                   gridcolor=BORDER, gridwidth=0.5, zeroline=False),
+    )
+    return fig
+
+
+def _gas_range_window(range_slug: str,
+                      prices: pd.DataFrame) -> tuple[pd.Timestamp, pd.Timestamp, str]:
+    """Resolve a Range pill to (start, end, label) using the data's own max
+    date — NOT today — so the window aligns with the last published gas_date."""
+    days = GAS_RANGE_DAYS.get(range_slug, GAS_RANGE_DAYS["1y"])
+    if prices.empty:
+        today = pd.Timestamp(datetime.now(NEM_TZ).replace(tzinfo=None).date())
+        return today - timedelta(days=365), today, "1 year"
+    end = prices["gas_date"].max()
+    if days is None:
+        start = prices["gas_date"].min()
+        label = "all data"
+    else:
+        start = end - timedelta(days=days)
+        label = dict(GAS_RANGE_OPTIONS).get(range_slug, "1Y").lower()
+        label = {"3m": "3 months", "6m": "6 months", "1y": "1 year",
+                 "2y": "2 years", "5y": "5 years"}.get(range_slug, label)
+    return start, end, label
+
+
+def _gas_content(hubs: list[str], range_slug: str) -> str:
+    prices = _load_gas_prices()
+    vols = _load_gas_volumes()
+    start, end, range_label = _gas_range_window(range_slug, prices)
+
+    # Price card
+    price_fig = _build_gas_price_fig(prices, hubs, start, end, range_label)
+    price_id = f"plot-gas-price-{int(datetime.now().timestamp() * 1000)}"
+    price_json = _plot_json(price_fig)
+    price_html = (
+        _card_h3(f"STTM ex-post gas price &middot; {range_label}")
+        + f'<div id="{price_id}" style="height:460px"></div>'
+        + f'<script>(function(){{var f={price_json};'
+          f'Plotly.newPlot("{price_id}",f.data,f.layout,'
+          f'{PLOTLY_CFG});}})();</script>'
+        + f'<p style="color:{MUTED};font-size:11px;margin:10px 14px 0;'
+          f'line-height:1.5">Daily ex-post prices ($/GJ) for the AEMO Short '
+          f'Term Trading Market hubs. STTM Avg is the unweighted mean of '
+          f'SYD, BRI, ADL.</p>'
+    )
+
+    # Volume cards — physical hubs only (AVG is synthetic, no meter).
+    physical = [c for c in hubs if c in ("SYD", "BRI", "ADL")]
+    if not physical:
+        physical = ["SYD", "BRI", "ADL"]
+
+    total_fig = _build_gas_total_demand_fig(vols)
+    total_id = f"plot-gas-total-{int(datetime.now().timestamp() * 1000)}"
+    total_json = _plot_json(total_fig)
+    total_html = (
+        _card_h3("Total STTM gas demand &middot; last 3 years")
+        + f'<div id="{total_id}" style="height:380px"></div>'
+        + f'<script>(function(){{var f={total_json};'
+          f'Plotly.newPlot("{total_id}",f.data,f.layout,'
+          f'{PLOTLY_CFG});}})();</script>'
+        + f'<p style="color:{MUTED};font-size:11px;margin:10px 14px 0;'
+          f'line-height:1.5">Sum across all three hubs, 7-day rolling mean. '
+          f'Years overlaid on day-of-year so seasonal shape is comparable.</p>'
+    )
+
+    hub_fig = _build_gas_hub_demand_fig(vols, physical)
+    hub_id = f"plot-gas-hub-{int(datetime.now().timestamp() * 1000)}"
+    hub_json = _plot_json(hub_fig)
+    hub_html = (
+        _card_h3("STTM gas demand by hub &middot; last 3 years")
+        + f'<div id="{hub_id}" style="height:420px"></div>'
+        + f'<script>(function(){{var f={hub_json};'
+          f'Plotly.newPlot("{hub_id}",f.data,f.layout,'
+          f'{PLOTLY_CFG});}})();</script>'
+        + f'<p style="color:{MUTED};font-size:11px;margin:10px 14px 0;'
+          f'line-height:1.5">Hub selection above filters this chart '
+          f'(physical hubs only). Colour = hub, line weight/dash = year age.</p>'
+    )
+
+    return (f'<div class="prices-stack">'
+            f'<div class="card">{price_html}</div>'
+            f'<div class="card">{total_html}</div>'
+            f'<div class="card">{hub_html}</div>'
+            f'</div>')
+
+
+@app.get("/gas", response_class=HTMLResponse)
+def gas_page(request: Request,
+             hub: str = "SYD,BRI,ADL,AVG",
+             range: str = "1y") -> HTMLResponse:
+    hub_codes = [c for c, _ in GAS_HUBS]
+    hubs = [h for h in (hub or "").split(",") if h in hub_codes]
+    if not hubs:
+        hubs = hub_codes
+    hub_param = ",".join(c for c in hub_codes if c in hubs)
+
+    valid_ranges = {slug for slug, _ in GAS_RANGE_OPTIONS}
+    if range not in valid_ranges:
+        range = "1y"
+
+    base_params = {"hub": hub_param, "range": range}
+    base_url = "/gas"
+    selectors = _render_selector_strip(
+        _render_gas_hub_pills(base_url, hub_param,
+                              {k: v for k, v in base_params.items()
+                               if k != "hub"}),
+        _render_gas_range_pills(base_url, range,
+                                {k: v for k, v in base_params.items()
+                                 if k != "range"}),
+    )
+    content = _gas_content(hubs, range)
+    body = _render_tab_body("", selectors + content)
+    if _is_htmx(request):
+        return HTMLResponse(body)
+    return HTMLResponse(_render_shell(body))
+
+
+# ----------------------------------------------------------------------------
+# /pivot-table — multi-level grouped Tabulator over DUID aggregates
+# ----------------------------------------------------------------------------
+#
+# Query goes always to 30-min data, joins generation_30min × prices_30min ×
+# duid_mapping. Per-DUID aggregates roll up into a nested tree where every
+# parent row carries its own totals (so collapsed groups don't go blank).
+#
+# Discharge-only convention for batteries: SUM(GREATEST(scadavalue, 0))
+# everywhere. For non-battery fuels scadavalue is already ≥0 so the floor
+# is a no-op, but it keeps the pricing math sane for batteries.
+#
+# Effective capacity is inline: storage_mwh/24 for batteries, capacity_mw
+# otherwise. Aggregated up through the tree by summing.
+
+PIVOT_RANGE_DEFS = {
+    "7d":  (timedelta(days=7),    "last 7 days"),
+    "30d": (timedelta(days=30),   "last 30 days"),
+    "90d": (timedelta(days=90),   "last 90 days"),
+    "1y":  (timedelta(days=365),  "last 12 months"),
+    "5y":  (timedelta(days=1825), "last 5 years"),
+}
+
+
+def _pivot_range_window(range_slug: str, start: str | None = None,
+                        end: str | None = None
+                        ) -> tuple[pd.Timestamp, pd.Timestamp, str]:
+    """Resolve (start, end, label). Uses the data's max ts as the end for
+    presets so the window aligns with the freshest aggregate; honours
+    explicit start/end for range=custom."""
+    end_row = q("SELECT MAX(settlementdate) AS ts FROM generation_30min")
+    if end_row.empty or end_row["ts"].iloc[0] is None:
+        end_ts = pd.Timestamp(datetime.now(NEM_TZ).replace(tzinfo=None))
+    else:
+        end_ts = pd.Timestamp(end_row["ts"].iloc[0])
+
+    if range_slug in PIVOT_RANGE_DEFS:
+        delta, label = PIVOT_RANGE_DEFS[range_slug]
+        return end_ts - delta, end_ts, label
+    if range_slug == "ytd":
+        return (pd.Timestamp(year=end_ts.year, month=1, day=1), end_ts,
+                "year to date")
+    if range_slug == "custom" and start and end:
+        s = pd.Timestamp(start)
+        e = pd.Timestamp(end) + timedelta(days=1)
+        return s, e, f"{start} → {end}"
+    if range_slug == "custom":
+        # Custom selected but no dates yet — default to last 30 days
+        return end_ts - timedelta(days=30), end_ts, "last 30 days"
+    return end_ts - timedelta(days=365), end_ts, "last 12 months"
+
+
+def _pivot_query(s_ts: pd.Timestamp, e_ts: pd.Timestamp,
+                 regions: list[str], fuels_raw: list[str]) -> pd.DataFrame:
+    """One DUID-level aggregate row over the window. Filters happen in SQL
+    so we never bring more than the window's worth of pre-filtered DUIDs
+    back. Discharge-only for batteries (GREATEST(scada, 0))."""
+    region_in = ", ".join(f"'{r}'" for r in regions)
+    fuel_in = ", ".join(f"'{f}'" for f in fuels_raw)
+    sql = f"""
+      SELECT
+        COALESCE(NULLIF(d.region, ''), 'Unknown')        AS region,
+        COALESCE(d.fuel, 'Unknown')                       AS fuel_raw,
+        COALESCE(NULLIF(d.owner, ''), 'Unknown')          AS owner,
+        COALESCE(NULLIF(d."site name", ''), g.duid)       AS station_name,
+        g.duid                                            AS duid,
+        FIRST(d.capacity_mw)                              AS capacity_mw,
+        FIRST(d.storage_mwh)                              AS storage_mwh,
+        SUM(GREATEST(g.scadavalue, 0)) * 0.5              AS gen_mwh,
+        SUM(GREATEST(g.scadavalue, 0) * COALESCE(p.rrp, 0) * 0.5) AS revenue,
+        COUNT(*)                                          AS n_intervals
+      FROM generation_30min g
+      LEFT JOIN duid_mapping d ON g.duid = d.duid
+      LEFT JOIN prices_30min p
+        ON g.settlementdate = p.settlementdate
+        AND d.region = p.regionid
+      WHERE g.settlementdate >= ? AND g.settlementdate < ?
+        AND COALESCE(NULLIF(d.region, ''), 'Unknown') IN ({region_in})
+        AND COALESCE(d.fuel, 'Unknown') IN ({fuel_in})
+      GROUP BY d.region, d.fuel, d.owner, d."site name", g.duid
+    """
+    df = q(sql, [s_ts, e_ts])
+    if df.empty:
+        return df
+
+    # Display fuel (collapse CCGT/OCGT/Gas other → Gas, Water → Hydro).
+    raw_to_display = {raw: disp for disp, raws in PIVOT_FUEL_TO_RAW.items()
+                      for raw in raws}
+    df["fuel"] = df["fuel_raw"].map(lambda f: raw_to_display.get(f, "Other"))
+
+    # Effective capacity: batteries = storage_mwh/24, else capacity_mw.
+    is_battery = df["fuel"] == "Battery Storage"
+    df["effective_cap_mw"] = np.where(
+        is_battery & df["storage_mwh"].notna(),
+        df["storage_mwh"] / 24.0,
+        df["capacity_mw"].fillna(0),
+    )
+    df["capacity_mw"] = df["capacity_mw"].fillna(0)
+    return df
+
+
+# ── Tree builder ────────────────────────────────────────────────────────────
+# Build nested rows: groups → station → DUID. At every level we carry
+# generation, revenue, capacity totals so a collapsed parent still shows
+# numbers. Price and utilisation are derived AT the parent level from the
+# pooled sums (not averaged from children).
+
+def _agg_node(rows: pd.DataFrame, hours: float, label: str,
+              kind: str, ctx: dict) -> dict:
+    """Aggregate one set of leaf rows into a single tree node payload.
+    `kind` is 'group' / 'station' / 'duid' so the front end can style
+    parents vs leaves. `ctx` carries the filter context for click handlers."""
+    gen_mwh = float(rows["gen_mwh"].sum())
+    revenue = float(rows["revenue"].sum())
+    cap_mw = float(rows["effective_cap_mw"].sum()) if kind != "duid" \
+             else float(rows["effective_cap_mw"].iloc[0])
+    price = (revenue / gen_mwh) if gen_mwh > 0 else None
+    util_denom = cap_mw * hours
+    util_pct = (gen_mwh / util_denom * 100) if util_denom > 0 else None
+    n_duids = int(rows["duid"].nunique()) if kind != "duid" else 1
+    return {
+        "label":   label,
+        "kind":    kind,
+        "ctx":     ctx,
+        "gen_gwh": round(gen_mwh / 1000.0),
+        "rev_m":   round(revenue / 1_000_000.0),
+        "price":   round(price) if price is not None else None,
+        "util":    round(util_pct) if util_pct is not None else None,
+        "cap_mw":  round(cap_mw),
+        "n_items": n_duids,
+    }
+
+
+def _build_pivot_tree(df: pd.DataFrame, group_dims: list[str],
+                      hours: float) -> list[dict]:
+    """Recursive group → station → DUID tree. `group_dims` is the ordered
+    list of chosen group columns (subset of region/fuel/owner)."""
+    if df.empty:
+        return []
+    # Always station as the level above DUID.
+    def recurse(sub: pd.DataFrame, remaining: list[str], ctx: dict,
+                depth: int) -> list[dict]:
+        if not remaining:
+            # Group by station, then DUID under each station.
+            station_nodes = []
+            for station, srows in sub.groupby("station_name", sort=False):
+                station_ctx = dict(ctx, station=station)
+                duid_children = []
+                for _, drow in srows.sort_values("gen_mwh",
+                                                 ascending=False).iterrows():
+                    duid_ctx = dict(station_ctx, duid=drow["duid"])
+                    one = pd.DataFrame([drow])
+                    duid_children.append(_agg_node(
+                        one, hours, drow["duid"], "duid", duid_ctx))
+                node = _agg_node(srows, hours, station, "station", station_ctx)
+                node["_children"] = duid_children
+                station_nodes.append(node)
+            station_nodes.sort(key=lambda n: n["gen_gwh"], reverse=True)
+            return station_nodes
+
+        dim = remaining[0]
+        rest = remaining[1:]
+        nodes = []
+        # Use display-fuel name for the fuel dim, otherwise the raw value.
+        for key, grp in sub.groupby(dim, sort=False):
+            sub_ctx = dict(ctx, **{dim: key})
+            children = recurse(grp, rest, sub_ctx, depth + 1)
+            node = _agg_node(grp, hours, str(key), "group", sub_ctx)
+            node["_children"] = children
+            nodes.append(node)
+        nodes.sort(key=lambda n: n["gen_gwh"], reverse=True)
+        return nodes
+
+    return recurse(df, group_dims, {}, 0)
+
+
+# ── Content + route ─────────────────────────────────────────────────────────
+
+def _pivot_content(g_dims: list[str], cols: list[str], range_slug: str,
+                   regions: list[str], fuels: list[str],
+                   start: str | None = None, end: str | None = None) -> str:
+    s_ts, e_ts, range_label = _pivot_range_window(range_slug, start, end)
+    hours = max((e_ts - s_ts).total_seconds() / 3600.0, 1e-9)
+
+    fuels_raw = []
+    for disp in fuels:
+        fuels_raw.extend(PIVOT_FUEL_TO_RAW.get(disp, []))
+    if not fuels_raw:
+        # Empty fuel filter ⇒ no data; bail with a friendly card.
+        return ('<div class="prices-stack"><div class="card">'
+                + _card_h3("Pivot table")
+                + '<p style="padding:14px;color:#878580">'
+                  'No fuels selected.</p>'
+                + '</div></div>')
+
+    df = _pivot_query(s_ts, e_ts, regions, fuels_raw)
+    if df.empty:
+        return ('<div class="prices-stack"><div class="card">'
+                + _card_h3(f"Pivot table &middot; {range_label}")
+                + '<p style="padding:14px;color:#878580">'
+                  f'No generation data for the selected window '
+                  f'({s_ts:%d %b %Y} → {e_ts:%d %b %Y}).</p>'
+                + '</div></div>')
+
+    tree = _build_pivot_tree(df, g_dims, hours)
+
+    # Column definitions for Tabulator. Always show the Name column;
+    # remaining columns gated by the column-toggle pills. Units live in the
+    # header label so the cells stay plain numbers (whole, comma-grouped).
+    col_defs = [
+        '{title:"Name", field:"label", frozen:true, '
+        ' minWidth:260, widthGrow:2, headerSort:false,'
+        ' formatter:_pivotLabelFmt}',
+    ]
+    int_money = ('formatter:"money", '
+                 'formatterParams:{precision:0, thousand:","}')
+    # Numeric columns: cells AND header right-aligned (House style).
+    num_axes = 'hozAlign:"right", headerHozAlign:"right",'
+    if "gwh" in cols:
+        col_defs.append(
+            '{title:"GWh", field:"gen_gwh", '
+            f' {num_axes}'
+            ' minWidth:80, headerSort:true,'
+            f' {int_money}}}')
+    if "rev" in cols:
+        col_defs.append(
+            '{title:"Rev $M", field:"rev_m", '
+            f' {num_axes}'
+            ' minWidth:80, headerSort:true,'
+            f' {int_money}}}')
+    if "price" in cols:
+        col_defs.append(
+            '{title:"$/MWh", field:"price", '
+            f' {num_axes}'
+            ' minWidth:80, headerSort:true,'
+            ' formatter:_pivotIntDashFmt}')
+    if "util" in cols:
+        col_defs.append(
+            '{title:"Util %", field:"util", '
+            f' {num_axes}'
+            ' minWidth:80, headerSort:true,'
+            ' formatter:_pivotIntDashFmt}')
+    if "cap" in cols:
+        col_defs.append(
+            '{title:"Cap MW", field:"cap_mw", '
+            f' {num_axes}'
+            ' minWidth:80, headerSort:true,'
+            f' {int_money}}}')
+
+    col_defs_str = "[" + ",\n".join(col_defs) + "]"
+
+    title_chain = " → ".join(
+        dict(PIVOT_DIMS)[d] for d in g_dims) or "—"
+    n_rows = len(df)
+    n_duids = df["duid"].nunique()
+    n_stations = df["station_name"].nunique()
+    subtitle = (f"{title_chain} → Station → DUID &middot; "
+                f"{n_stations:,} stations / {n_duids:,} DUIDs &middot; "
+                f"{range_label} ({s_ts:%d %b %Y} → {e_ts:%d %b %Y})")
+
+    tree_json = json.dumps(tree, default=lambda v: None)
+
+    table_html = f"""
+<link href="https://unpkg.com/tabulator-tables@6.3.1/dist/css/tabulator_simple.min.css" rel="stylesheet">
+<script src="https://unpkg.com/tabulator-tables@6.3.1/dist/js/tabulator.min.js"></script>
+<style>
+  #pivot-tabulator .tabulator {{
+    background: {PAPER}; font-family: Inter, sans-serif;
+    border: 1px solid {BORDER}; border-radius: 6px;
+  }}
+  #pivot-tabulator .tabulator-header {{
+    background: {BORDER}; color: {INK};
+    border-bottom: 1px solid {BORDER};
+  }}
+  #pivot-tabulator .tabulator-col {{
+    background: {BORDER};
+    font-size: 11px; text-transform: uppercase;
+    letter-spacing: 0.4px; color: {INK}; font-weight: 600;
+  }}
+  #pivot-tabulator .tabulator-row {{
+    background: {PAPER}; color: {INK};
+    border-bottom: 1px solid #f0eedf;
+    font-size: 13px;
+  }}
+  #pivot-tabulator .tabulator-row.tabulator-row-even {{ background: #f7f5e8; }}
+  #pivot-tabulator .tabulator-row:hover {{ background: #ece9d5; cursor: pointer; }}
+  #pivot-tabulator .pivot-group-label {{ font-weight: 600; color: {INK}; }}
+  #pivot-tabulator .pivot-station-label {{ color: {INK}; }}
+  #pivot-tabulator .pivot-duid-label {{
+    color: {MUTED}; font-family: ui-monospace, Menlo, monospace;
+    font-size: 12px;
+  }}
+  #pivot-tabulator .pivot-n {{ color: {MUTED}; font-size: 11px; margin-left: 6px; }}
+  #pivot-selection-plot {{ margin-top: 12px; }}
+</style>
+
+<div id="pivot-tabulator" style="margin-top:8px"></div>
+<div id="pivot-selection-plot"></div>
+
+<script>
+(function () {{
+  var data = {tree_json};
+
+  function _pivotLabelFmt(cell, formatterParams, onRendered) {{
+    var row = cell.getRow();
+    var d = row.getData();
+    var depth = row.getTreeParent() ? 1 : 0;
+    var p = row.getTreeParent();
+    while (p) {{ depth++; p = p.getTreeParent(); }}
+    var indent = (depth * 16) + "px";
+    var name = d.label || "";
+    var cls = d.kind === "duid" ? "pivot-duid-label"
+            : d.kind === "station" ? "pivot-station-label"
+            : "pivot-group-label";
+    var meta = (d.kind !== "duid" && d.n_items)
+             ? '<span class="pivot-n">(' + d.n_items + ')</span>'
+             : '';
+    return '<span style="padding-left:' + indent + '" class="' + cls + '">'
+         + name + meta + '</span>';
+  }}
+  function _pivotIntDashFmt(cell) {{
+    var v = cell.getValue();
+    if (v === null || v === undefined)
+      return '<span style="color:#878580">—</span>';
+    return Math.round(v).toLocaleString('en-AU');
+  }}
+
+  var table = new Tabulator("#pivot-tabulator", {{
+    data: data,
+    dataTree: true,
+    dataTreeStartExpanded: false,
+    dataTreeBranchElement: '<span style="color:#878580;margin-right:4px">│</span>',
+    dataTreeCollapseElement: '<span style="color:#24837b;cursor:pointer;margin-right:4px;font-weight:700">▾</span>',
+    dataTreeExpandElement: '<span style="color:#24837b;cursor:pointer;margin-right:4px;font-weight:700">▸</span>',
+    dataTreeChildIndent: 0,
+    layout: "fitColumns",
+    height: "calc(100vh - 280px)",
+    columns: {col_defs_str},
+    rowClick: function (e, row) {{
+      var d = row.getData();
+      // Leaf row (DUID) → navigate to station-analysis with the DUID.
+      if (d.kind === "duid") {{
+        e.stopPropagation();
+        window.location.href = "/station-analysis?duid=" +
+          encodeURIComponent(d.ctx.duid || d.label);
+        return;
+      }}
+      // Otherwise (group / station) → update the selection-plot stub.
+      var ctx = d.ctx || {{}};
+      var plot = document.getElementById("pivot-selection-plot");
+      var ctxBits = [];
+      ["region", "fuel", "owner", "station"].forEach(function (k) {{
+        if (ctx[k]) ctxBits.push(k + " = " + ctx[k]);
+      }});
+      plot.innerHTML =
+        '<div class="card">'
+        + '<h3 style="margin:0 0 8px 0;font-size:12px;color:#24837b;'
+        + 'text-transform:uppercase;letter-spacing:0.5px;font-weight:600">'
+        + 'Selection plot (stub)</h3>'
+        + '<p style="margin:0;padding:8px 14px;color:#403e3c">'
+        + '<strong>' + d.label + '</strong> &middot; '
+        + ctxBits.join(' &middot; ')
+        + '</p>'
+        + '<p style="margin:0;padding:4px 14px 14px;color:#878580;font-size:12px">'
+        + 'Generation time-series chart will render here once the design is settled. '
+        + 'Aggregate stats: ' + (d.gen_gwh || 0).toLocaleString()
+        + ' GWh &middot; $' + (d.rev_m || 0).toLocaleString() + 'M revenue '
+        + '&middot; ' + (d.n_items || 0) + ' DUIDs.</p>'
+        + '</div>';
+    }},
+  }});
+}})();
+</script>
+"""
+
+    return ('<div class="prices-stack">'
+            '<div class="card">'
+            + _card_h3(f"Pivot table &middot; {range_label}")
+            + f'<p style="color:{MUTED};font-size:12px;margin:0 0 8px 14px">'
+              f'{subtitle}</p>'
+            + table_html
+            + f'<p style="color:{MUTED};font-size:11px;margin:10px 14px 0;'
+              f'line-height:1.5">Click a DUID to open it in Station Analysis '
+              f'(landing on placeholder for now). Click any group row to '
+              f'queue a selection plot below the table.</p>'
+            + '</div>'
+            + '</div>')
+
+
+@app.get("/pivot-table", response_class=HTMLResponse)
+def pivot_page(request: Request,
+               g1: str = "fuel", g2: str = "region", g3: str = "",
+               cols: str = "gwh,rev,price,util,cap",
+               range: str = "1y",
+               start: str | None = None, end: str | None = None,
+               region: str = "NSW1,QLD1,SA1,TAS1,VIC1",
+               fuel: str = "Coal,Gas,Hydro,Wind,Solar,Battery Storage,"
+                            "Biomass,Other",
+               ) -> HTMLResponse:
+    valid_dims = {slug for slug, _ in PIVOT_DIMS}
+
+    # Pick ordered group dims, dropping empties + de-duping silently.
+    g_dims: list[str] = []
+    for slot in (g1, g2, g3):
+        if slot in valid_dims and slot not in g_dims:
+            g_dims.append(slot)
+    if not g_dims:
+        g_dims = ["fuel"]
+
+    valid_cols = {slug for slug, _, _ in PIVOT_COLUMNS}
+    selected_cols = [c for c in (cols or "").split(",") if c in valid_cols]
+    if not selected_cols:
+        selected_cols = ["gwh", "rev", "price"]
+
+    valid_ranges = {slug for slug, _ in PIVOT_RANGE_OPTIONS} | {"custom"}
+    if range not in valid_ranges:
+        range = "1y"
+
+    region_list = [r for r in (region or "").split(",") if r in REGION_ORDER]
+    if not region_list:
+        region_list = REGION_ORDER[:]
+    region_param = ",".join(r for r in REGION_ORDER if r in region_list)
+
+    valid_fuels = {code for code, _ in PIVOT_FUEL_GROUPS}
+    fuel_list = [f for f in (fuel or "").split(",") if f in valid_fuels]
+    if not fuel_list:
+        fuel_list = [code for code, _ in PIVOT_FUEL_GROUPS]
+    fuel_param = ",".join(code for code, _ in PIVOT_FUEL_GROUPS
+                          if code in fuel_list)
+
+    base_params = {
+        "g1": g_dims[0] if len(g_dims) > 0 else "",
+        "g2": g_dims[1] if len(g_dims) > 1 else "",
+        "g3": g_dims[2] if len(g_dims) > 2 else "",
+        "cols": ",".join(selected_cols),
+        "range": range,
+        "region": region_param,
+        "fuel": fuel_param,
+    }
+    if start: base_params["start"] = start
+    if end:   base_params["end"] = end
+    base_url = "/pivot-table"
+
+    def _other(*excl: str) -> dict:
+        return {k: v for k, v in base_params.items() if k not in excl}
+
+    selectors = _render_selector_strip(
+        _render_pivot_group_pills(base_url, 1,
+                                   g_dims[0] if len(g_dims) > 0 else None,
+                                   set(),
+                                   _other("g1")),
+        _render_pivot_group_pills(base_url, 2,
+                                   g_dims[1] if len(g_dims) > 1 else None,
+                                   {g_dims[0]} if g_dims else set(),
+                                   _other("g2")),
+        _render_pivot_group_pills(base_url, 3,
+                                   g_dims[2] if len(g_dims) > 2 else None,
+                                   set(g_dims[:2]),
+                                   _other("g3")),
+        _render_pivot_range_pills(base_url, range,
+                                  _other("range", "start", "end"),
+                                  start=start or "", end=end or ""),
+        _render_region_pills(base_url, region_param,
+                             _other("region"), multi=True),
+        _render_pivot_fuel_pills(base_url, fuel_list, _other("fuel")),
+        _render_pivot_column_pills(base_url, selected_cols, _other("cols")),
+    )
+    content = _pivot_content(g_dims, selected_cols, range,
+                             region_list, fuel_list, start, end)
+    body = _render_tab_body("", selectors + content)
+    if _is_htmx(request):
+        return HTMLResponse(body)
+    return HTMLResponse(_render_shell(body))
+
+
+# ----------------------------------------------------------------------------
 # Flat placeholder routes for the remaining tabs (anything not Today or Prices)
 # ----------------------------------------------------------------------------
 
@@ -2984,7 +4272,8 @@ def _make_flat_route(slug: str, label: str):
 
 
 for _slug, _label, _subs in TABS:
-    if _slug in ("today", "prices", "generation-mix", "evening-peak") or _subs:
+    if _slug in ("today", "prices", "generation-mix", "evening-peak",
+                 "gas", "pivot-table") or _subs:
         continue
     _make_flat_route(_slug, _label)
 
