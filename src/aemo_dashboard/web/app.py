@@ -48,6 +48,27 @@ MUTED = "#878580"
 BORDER = "#e6e4d9"
 TEAL = "#24837b"  # ITK brand accent — used for card titles and header underline
 
+# Plotly chart defaults. Setting font.family explicitly avoids Plotly's
+# fall-through-to-Open-Sans, which renders less crisply than the system font
+# the rest of the page uses. PLOTLY_CFG controls the modebar: 'hover' means
+# the toolbar only appears when the user hovers, so the default view stays
+# clean but interactivity (box-zoom on x-axis, pan, autoscale reset) is one
+# mouse-move away. Legend click-to-toggle is enabled by default in Plotly
+# regardless of modebar setting.
+PLOTLY_FONT = dict(
+    family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+    size=11, color=INK,
+)
+PLOTLY_CFG = ("{displayModeBar:'hover',displaylogo:false,"
+              "modeBarButtonsToRemove:['lasso2d','select2d','toImage',"
+              "'sendDataToCloud'],responsive:true}")
+
+
+def _plot_json(fig) -> str:
+    """Apply shared chart defaults (font) and serialise."""
+    fig.update_layout(font=PLOTLY_FONT)
+    return fig.to_json()
+
 REGION_ORDER = ["NSW1", "QLD1", "SA1", "TAS1", "VIC1"]
 REGION_COLORS = {
     "NSW1": "#879a39", "QLD1": "#da702c", "SA1": "#a02f6f",
@@ -57,15 +78,20 @@ REGION_COLORS = {
 # table calls hydro "Water" and splits gas into CCGT/OCGT/Gas other; rooftop
 # isn't in that table at all (it lives in `rooftop30`). `_normalise_fuels`
 # folds raw → display.
+#
+# Colours match production's gen_dash.get_fuel_colors() exactly — a mix of
+# FLEXOKI_ACCENT 600-shade darks (Gas, Wind, Hydro, Battery, Transmission)
+# and three custom shades (Coal brown, Solar gold, Rooftop lighter yellow).
+# Production calls #E8C547 "lighter yellow — distributed solar" specifically.
 FUEL_COLORS = {
-    "Coal":            "#6F6E69",
-    "Gas":             "#af3029",
-    "Hydro":           "#205ea6",
-    "Wind":            "#66800b",
-    "Solar":           "#ad8301",
-    "Rooftop Solar":   "#bc5215",
-    "Battery Storage": "#5e409d",
-    "Biomass":         "#7a6b3e",
+    "Coal":            "#6B3A10",   # brown — production custom
+    "Gas":             "#BC5215",   # FLEXOKI_ACCENT['orange']
+    "Hydro":           "#24837B",   # FLEXOKI_ACCENT['cyan']
+    "Wind":            "#66800B",   # FLEXOKI_ACCENT['green']
+    "Solar":           "#D4A000",   # gold — production custom (bright yellow)
+    "Rooftop Solar":   "#E8C547",   # lighter yellow — production custom
+    "Battery Storage": "#5E409D",   # FLEXOKI_ACCENT['purple']
+    "Biomass":         "#4A7C23",   # dark green — production custom
     "Other":           "#878580",
 }
 GAUGE_FUEL_COLORS = {
@@ -129,7 +155,10 @@ def q(sql: str, params: list | None = None) -> pd.DataFrame:
 # infrastructure to render them is still here for any tab that gets them later.
 TABS = [
     ("today",            "Today",            []),
-    ("generation-mix",   "Generation mix",   []),
+    ("generation-mix",   "Generation mix",   [("stack",         "Stack"),
+                                              ("tod",           "Time of day"),
+                                              ("transmission",  "Transmission"),
+                                              ("yr-on-yr",      "Yr on yr")]),
     ("evening-peak",     "Evening peak",     []),
     ("prices",           "Prices",           [("analysis", "Price Analysis"),
                                               ("bands",    "Price Bands")]),
@@ -152,7 +181,12 @@ SHELL_CSS = """
 }
 body {
   margin: 0; background: var(--paper); color: var(--ink);
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-family: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  /* Tighter macOS anti-aliasing — Inter + grayscale smoothing is what gives
+     the production dashboard its crisp tabular numbers. */
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
 }
 header {
   padding: 16px 24px;
@@ -368,6 +402,9 @@ def _render_shell(body_html: str) -> str:
 <head>
   <meta charset="utf-8">
   <title>NEM Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <script src="https://unpkg.com/htmx.org@2.0.4"></script>
   <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
   <style>{SHELL_CSS}</style>
@@ -416,7 +453,8 @@ def _is_htmx(request: Request) -> bool:
 from urllib.parse import urlencode
 
 RANGE_OPTIONS = [("1h", "1H"), ("24h", "24H"), ("7d", "7D"),
-                  ("30d", "30D"), ("ytd", "YTD"), ("all", "All")]
+                  ("30d", "30D"), ("ytd", "YTD"), ("1y", "Yr"),
+                  ("all", "All")]
 
 
 def _build_url(base: str, **params) -> str:
@@ -424,22 +462,34 @@ def _build_url(base: str, **params) -> str:
     return f"{base}?{urlencode(clean)}" if clean else base
 
 
+def _region_display(region: str) -> str:
+    """Display label for a region. NEM stays as 'NEM'; physical regions
+    drop their trailing '1' (NSW1 → NSW)."""
+    return "NEM" if region == "NEM" else region[:-1]
+
+
 def _render_region_pills(base_url: str, active: str,
-                         other_params: dict, multi: bool = False) -> str:
+                         other_params: dict, multi: bool = False,
+                         regions: list[str] | None = None) -> str:
     """Single-region (segmented capsule) by default. multi=True switches to
     independent toggle pills with comma-separated `region` URL param —
     clicking adds/removes from the selection. Last selected region cannot
-    be deselected (would leave nothing to query)."""
+    be deselected (would leave nothing to query).
+
+    `regions` overrides the default REGION_ORDER list — e.g. pass
+    ['NEM','NSW1','QLD1','SA1','TAS1','VIC1'] for the Generation stack
+    where a NEM-wide view is meaningful."""
+    region_list = regions if regions is not None else REGION_ORDER
     if not multi:
         pills = []
-        for region in REGION_ORDER:
+        for region in region_list:
             params = dict(other_params, region=region)
             url = _build_url(base_url, **params)
             cls = "pill active" if region == active else "pill"
             pills.append(
                 f'<button class="{cls}" '
                 f'hx-get="{url}" hx-target="#tab-body" hx-push-url="true">'
-                f'{region[:-1]}</button>'
+                f'{_region_display(region)}</button>'
             )
         return (f'<div class="pill-bar">'
                 f'<span class="pill-bar-label">Region</span>'
@@ -448,7 +498,7 @@ def _render_region_pills(base_url: str, active: str,
 
     selected = set((active or "").split(","))
     pills = []
-    for region in REGION_ORDER:
+    for region in region_list:
         is_active = region in selected
         if is_active and len(selected) > 1:
             new_set = selected - {region}      # toggle off
@@ -456,14 +506,14 @@ def _render_region_pills(base_url: str, active: str,
             new_set = selected                  # last one — no-op
         else:
             new_set = selected | {region}      # toggle on
-        new_param = ",".join(r for r in REGION_ORDER if r in new_set)
+        new_param = ",".join(r for r in region_list if r in new_set)
         params = dict(other_params, region=new_param)
         url = _build_url(base_url, **params)
         cls = "pill active" if is_active else "pill"
         pills.append(
             f'<button class="{cls}" '
             f'hx-get="{url}" hx-target="#tab-body" hx-push-url="true">'
-            f'{region[:-1]}</button>'
+            f'{_region_display(region)}</button>'
         )
     return (f'<div class="pill-bar">'
             f'<span class="pill-bar-label">Region</span>'
@@ -593,6 +643,7 @@ def _range_window(range_slug: str, start: str | None, end: str | None
         "24h": (timedelta(hours=24), "last 24h"),
         "7d":  (timedelta(days=7),   "last 7 days"),
         "30d": (timedelta(days=30),  "last 30 days"),
+        "1y":  (timedelta(days=365), "last 12 months"),
     }
     if range_slug in presets:
         delta, label = presets[range_slug]
@@ -804,13 +855,13 @@ def _build_tod_chart(regions: list[str], s_ts, e_ts, range_label: str) -> str:
     )
     title = f"Time of day &middot; mean raw price by hour &middot; {range_label}"
     div_id = f"plot-tod-{int(datetime.now().timestamp() * 1000)}"
-    fig_json = fig.to_json()
+    fig_json = _plot_json(fig)
     return (
         _card_h3(title)
         + f'<div id="{div_id}" style="height:280px"></div>'
         + f'<script>(function(){{var f={fig_json};'
           f'Plotly.newPlot("{div_id}",f.data,f.layout,'
-          f'{{displayModeBar:false,responsive:true}});}})();</script>'
+          f'{PLOTLY_CFG});}})();</script>'
         + f'<p style="color:{MUTED};font-size:11px;margin:10px 14px 0;'
           f'line-height:1.5">Hourly means over the selected window. '
           f'Per-region means are in the stats table above.</p>'
@@ -863,13 +914,13 @@ def _prices_analysis_content(regions: list[str], range_slug: str, smooth: bool,
     region_list_str = ", ".join(r[:-1] for r in regions)
     chart_title = f"{region_list_str} spot prices &middot; {range_label}{note}"
     div_id = f"plot-prices-{int(datetime.now().timestamp() * 1000)}"
-    fig_json = fig.to_json()
+    fig_json = _plot_json(fig)
     chart_html = (
         _card_h3(chart_title)
         + f'<div id="{div_id}" style="height:340px"></div>'
         + f'<script>(function(){{var f={fig_json};'
           f'Plotly.newPlot("{div_id}",f.data,f.layout,'
-          f'{{displayModeBar:false,responsive:true}});}})();</script>'
+          f'{PLOTLY_CFG});}})();</script>'
     )
 
     stats_html = _build_prices_stats_table(regions, df, s_ts, e_ts, range_label)
@@ -1093,14 +1144,14 @@ def _prices_bands_content(regions: list[str], range_slug: str,
 
     fig = build_band_charts(bands_df, range_label)
     div_id = f"plot-butterfly-{int(datetime.now().timestamp() * 1000)}"
-    fig_json = fig.to_json()
+    fig_json = _plot_json(fig)
     fig_height = fig.layout.height or 320
     butterfly_html = (
         _card_h3(f"Price band contribution &middot; {range_label}")
         + f'<div id="{div_id}" style="height:{fig_height}px"></div>'
         + f'<script>(function(){{var f={fig_json};'
           f'Plotly.newPlot("{div_id}",f.data,f.layout,'
-          f'{{displayModeBar:false,responsive:true}});}})();</script>'
+          f'{PLOTLY_CFG});}})();</script>'
         + f'<p style="color:{MUTED};font-size:11px;margin:10px 14px 0;line-height:1.5">'
           f'Left bars = % of time each band was active. Right bars = each band\'s '
           f'contribution to the flat-load average ($/MWh). Bar widths on both '
@@ -1151,13 +1202,13 @@ def _prices_bands_content(regions: list[str], range_slug: str,
                        zeroline=True, zerolinecolor=BORDER, zerolinewidth=1),
         )
         stack_div = f"plot-bandstack-{int(datetime.now().timestamp() * 1000)}"
-        stack_json = stack_fig.to_json()
+        stack_json = _plot_json(stack_fig)
         stack_html = (
             _card_h3(f"Price contribution by band &middot; {range_label}")
             + f'<div id="{stack_div}" style="height:320px"></div>'
             + f'<script>(function(){{var f={stack_json};'
               f'Plotly.newPlot("{stack_div}",f.data,f.layout,'
-              f'{{displayModeBar:false,responsive:true}});}})();</script>'
+              f'{PLOTLY_CFG});}})();</script>'
             + f'<p style="color:{MUTED};font-size:11px;margin:10px 14px 0;'
               f'line-height:1.5">Total bar height = region\'s mean spot price. '
               f'Segments show how each band pulls the mean up or down.</p>'
@@ -1260,6 +1311,1665 @@ def prices_sub(sub: str, request: Request,
 
 
 # ----------------------------------------------------------------------------
+# /generation-mix — Stack subtab (single region + NEM, auto-resolution)
+# ----------------------------------------------------------------------------
+#
+# Tiering matches the iOS API at aemo_dashboard/api/routers/generation.py:
+#   ≤24h  → 5-min   (raw cadence, 288 points)
+#   ≤7d   → 30-min  (use pre-aggregate table, ~336 points)
+#   >7d   → 1-day   (daily means via time_bucket, keeps long views readable)
+# Production gen_dash always resamples to 5-min which is why YTD/All views
+# choke. time_bucket() at query time pushes the aggregation into DuckDB.
+
+GENMIX_REGION_LIST = ["NEM", "NSW1", "QLD1", "SA1", "TAS1", "VIC1"]
+
+# From the iOS router. Per-region map of interconnector → flow direction.
+# "from" = the raw meteredmwflow is signed as flow *leaving* the region, so
+# we negate to render imports as positive in the stack.
+INTERCONNECTOR_MAP = {
+    "NSW1": {"NSW1-QLD1": "from", "VIC1-NSW1": "to",   "N-Q-MNSP1": "from"},
+    "QLD1": {"NSW1-QLD1": "to",   "N-Q-MNSP1": "to"},
+    "VIC1": {"VIC1-NSW1": "from", "V-SA": "from",      "V-S-MNSP1": "from", "T-V-MNSP1": "to"},
+    "SA1":  {"V-SA": "to",        "V-S-MNSP1": "to"},
+    "TAS1": {"T-V-MNSP1": "from"},
+}
+
+# Stacking order (bottom-to-top on the chart). Picks up from the production
+# convention: thermal at the base, zero-marginal-cost on top, battery slotted
+# between hydro and gas to show its peak-supply role.
+STACK_FUEL_ORDER = ["Coal", "Hydro", "Wind", "Solar", "Rooftop Solar",
+                    "Battery (discharge)", "Gas"]
+
+
+def _pick_gen_resolution(span_seconds: float) -> tuple[str, str, str, str]:
+    """Returns (res_label, ddb_interval, util_table, trans_table)."""
+    hours = span_seconds / 3600
+    if hours <= 24.5:
+        return ("5min", "5 minutes",
+                "generation_by_fuel_5min", "transmission5")
+    if hours <= 24 * 7.5:
+        return ("30min", "30 minutes",
+                "generation_by_fuel_30min", "transmission30")
+    return ("1d", "1 day",
+            "generation_by_fuel_30min", "transmission30")
+
+
+def _generation_stack_content(region: str, range_slug: str,
+                              start: str | None, end: str | None) -> str:
+    """Stacked area chart of generation by fuel for one region (or NEM)."""
+    s_ts, e_ts, _, range_label = _range_window(range_slug, start, end)
+    span_s = (e_ts - s_ts).total_seconds()
+    res_label, ddb_interval, util_table, trans_table = _pick_gen_resolution(span_s)
+
+    is_nem = region == "NEM"
+    physical_regions = ["NSW1", "QLD1", "VIC1", "SA1", "TAS1"]
+    if is_nem:
+        fuel_region_clause = (
+            "region IN ('NSW1','QLD1','VIC1','SA1','TAS1')"
+        )
+        roof_region_clause = (
+            "regionid IN ('NSW1','QLD1','VIC1','SA1','TAS1')"
+        )
+    else:
+        fuel_region_clause = f"region = '{region}'"
+        roof_region_clause = f"regionid = '{region}'"
+
+    # --- Utility-scale generation, bucketed -------------------------------
+    util_sql = f"""
+        WITH labeled AS (
+            SELECT settlementdate,
+                   CASE WHEN fuel_type IN ('CCGT','OCGT','Gas other') THEN 'Gas'
+                        WHEN fuel_type = 'Water' THEN 'Hydro'
+                        ELSE fuel_type END AS fuel,
+                   total_generation_mw AS gen_mw
+              FROM {util_table}
+             WHERE {fuel_region_clause}
+               AND settlementdate >= ? AND settlementdate < ?
+               AND fuel_type NOT IN ('Biomass', 'Other')
+        ),
+        per_period AS (
+            SELECT settlementdate, fuel, SUM(gen_mw) AS mw
+              FROM labeled
+             GROUP BY settlementdate, fuel
+        )
+        SELECT time_bucket(INTERVAL '{ddb_interval}', settlementdate) AS bucket,
+               fuel,
+               AVG(mw) AS mw
+          FROM per_period
+         GROUP BY bucket, fuel
+         ORDER BY bucket, fuel
+    """
+    util_df = q(util_sql, [s_ts, e_ts])
+    if util_df.empty:
+        return (f'<div class="placeholder">'
+                f'<p><strong>No generation data for {_region_display(region)} '
+                f'in {range_label}.</strong></p></div>')
+
+    util_pivot = (util_df.pivot(index="bucket", columns="fuel", values="mw")
+                          .fillna(0))
+
+    # --- Rooftop (30-min table; forward-fill onto util grid) --------------
+    roof_sql = f"""
+        WITH per_period AS (
+            SELECT settlementdate, SUM(GREATEST(power, 0)) AS mw
+              FROM rooftop30
+             WHERE {roof_region_clause}
+               AND settlementdate >= ? AND settlementdate < ?
+             GROUP BY settlementdate
+        )
+        SELECT time_bucket(INTERVAL '{ddb_interval}', settlementdate) AS bucket,
+               AVG(mw) AS mw
+          FROM per_period
+         GROUP BY bucket
+         ORDER BY bucket
+    """
+    roof_df = q(roof_sql, [s_ts, e_ts])
+    if not roof_df.empty:
+        roof_aligned = (roof_df.set_index("bucket")["mw"]
+                              .reindex(util_pivot.index, method="ffill")
+                              .fillna(0))
+    else:
+        roof_aligned = pd.Series(0.0, index=util_pivot.index)
+
+    # --- Transmission (single physical region only) -----------------------
+    trans_aligned = pd.Series(0.0, index=util_pivot.index)
+    if not is_nem:
+        ic_map = INTERCONNECTOR_MAP.get(region, {})
+        if ic_map:
+            ic_ids = list(ic_map.keys())
+            ic_in = ",".join(f"'{i}'" for i in ic_ids)
+            from_set = [k for k, v in ic_map.items() if v == "from"]
+            from_in = ",".join(f"'{i}'" for i in from_set)
+            sign = (f"CASE WHEN interconnectorid IN ({from_in}) "
+                    f"THEN -meteredmwflow ELSE meteredmwflow END"
+                    if from_set else "meteredmwflow")
+            trans_sql = f"""
+                WITH per_period AS (
+                    SELECT settlementdate, SUM({sign}) AS net_mw
+                      FROM {trans_table}
+                     WHERE interconnectorid IN ({ic_in})
+                       AND settlementdate >= ? AND settlementdate < ?
+                     GROUP BY settlementdate
+                )
+                SELECT time_bucket(INTERVAL '{ddb_interval}', settlementdate) AS bucket,
+                       AVG(net_mw) AS mw
+                  FROM per_period
+                 GROUP BY bucket
+                 ORDER BY bucket
+            """
+            try:
+                trans_df = q(trans_sql, [s_ts, e_ts])
+                if not trans_df.empty:
+                    trans_aligned = (trans_df.set_index("bucket")["mw"]
+                                            .reindex(util_pivot.index,
+                                                     method="ffill")
+                                            .fillna(0))
+            except Exception:
+                pass
+
+    # --- Build the stacked traces -----------------------------------------
+    fig = go.Figure()
+    BATTERY_COLOR = FUEL_COLORS["Battery Storage"]  # FLEXOKI purple
+    TRANS_COLOR   = "#A02F6F"                        # FLEXOKI_ACCENT['magenta']
+
+    # Track which legendgroup names have already shown in the legend so the
+    # second half (battery charging, transmission exports) reuses the parent
+    # group without duplicating.
+    legend_shown: set[str] = set()
+
+    def add_trace(name: str, series: pd.Series, color: str,
+                  stackgroup: str, legendgroup: str | None = None):
+        # Skip empty traces (no positive values for "positive" stack, etc.)
+        if stackgroup == "positive" and series.sum() <= 0: return
+        if stackgroup == "negative" and series.sum() >= 0: return
+        grp = legendgroup or name
+        show = grp not in legend_shown
+        legend_shown.add(grp)
+        fig.add_trace(go.Scatter(
+            x=series.index, y=series / 1000, name=name,
+            stackgroup=stackgroup, mode="lines",
+            legendgroup=grp, showlegend=show,
+            line=dict(width=0.3, color=color),
+            fillcolor=color,
+            hovertemplate=f"{name}: %{{y:.2f}} GW<extra></extra>",
+        ))
+
+    # Stack order chosen so Transmission flows read as one series both sides
+    # of zero — imports are the first positive trace (sits on the zero line)
+    # and exports are the first negative trace (sits just below zero); battery
+    # charging stacks below transmission exports so the two negatives are
+    # cleanly separated. Everything else sits above transmission imports.
+
+    # Positive stack (bottom → top): Transmission · Coal · Hydro · Wind ·
+    # Solar · Rooftop · Battery discharge · Gas
+    if not is_nem and trans_aligned.abs().sum() > 0:
+        add_trace("Transmission", trans_aligned.clip(lower=0),
+                  TRANS_COLOR, "positive", legendgroup="Transmission")
+    for fuel in ("Coal", "Hydro", "Wind", "Solar"):
+        if fuel in util_pivot.columns:
+            add_trace(fuel, util_pivot[fuel].clip(lower=0),
+                      FUEL_COLORS.get(fuel, MUTED), "positive")
+    if roof_aligned.sum() > 0:
+        add_trace("Rooftop Solar", roof_aligned,
+                  FUEL_COLORS["Rooftop Solar"], "positive")
+    if "Battery Storage" in util_pivot.columns:
+        batt = util_pivot["Battery Storage"]
+        add_trace("Battery", batt.clip(lower=0), BATTERY_COLOR,
+                  "positive", legendgroup="Battery")
+    if "Gas" in util_pivot.columns:
+        add_trace("Gas", util_pivot["Gas"].clip(lower=0),
+                  FUEL_COLORS["Gas"], "positive")
+
+    # Negative stack (closest-to-zero first): Transmission exports first,
+    # then Battery charging below
+    if not is_nem and trans_aligned.abs().sum() > 0:
+        add_trace("Transmission", trans_aligned.clip(upper=0),
+                  TRANS_COLOR, "negative", legendgroup="Transmission")
+    if "Battery Storage" in util_pivot.columns:
+        batt = util_pivot["Battery Storage"]
+        add_trace("Battery", batt.clip(upper=0), BATTERY_COLOR,
+                  "negative", legendgroup="Battery")
+
+    fig.update_layout(
+        paper_bgcolor=PAPER, plot_bgcolor=PAPER,
+        height=440, margin=dict(l=48, r=12, t=8, b=72),
+        legend=dict(orientation="h", yanchor="top", y=-0.14,
+                    xanchor="center", x=0.5, font=dict(size=10),
+                    bgcolor=PAPER),
+        xaxis=dict(showgrid=False, tickfont=dict(size=10, color=MUTED)),
+        yaxis=dict(showgrid=False, tickfont=dict(size=10, color=MUTED),
+                   title=dict(text="GW", font=dict(size=10, color=MUTED)),
+                   zeroline=True, zerolinecolor=BORDER, zerolinewidth=1),
+    )
+    title = (f"{_region_display(region)} generation stack &middot; "
+             f"{range_label} &middot; {res_label} buckets")
+    div_id = f"plot-genstack-{int(datetime.now().timestamp() * 1000)}"
+    fig_json = _plot_json(fig)
+    return (
+        f'<div class="prices-stack">'
+        f'<div class="card">'
+        f'{_card_h3(title)}'
+        f'<div id="{div_id}" style="height:440px"></div>'
+        f'<script>(function(){{var f={fig_json};'
+        f'Plotly.newPlot("{div_id}",f.data,f.layout,'
+        f'{PLOTLY_CFG});}})();</script>'
+        f'<p style="color:{MUTED};font-size:11px;margin:8px 14px 0;line-height:1.5">'
+        f'Bucket size auto-picked from range: 5-min for ≤24h, 30-min for ≤7d, '
+        f'daily means above. Transmission imports/exports shown for single '
+        f'regions only (interconnectors net to zero across NEM).'
+        f'</p>'
+        f'</div>'
+        f'</div>'
+    )
+
+
+def _generation_fuel_stats(region: str, s_ts, e_ts) -> tuple[list[dict], dict]:
+    """By-fuel volume + VWAP table data, plus summary metrics.
+
+    Always 30-min aligned (generation_by_fuel_30min × prices30 ×
+    transmission30 × rooftop30). For NEM, weights each fuel's contribution
+    by its source region's price — i.e. Gas in NSW is priced at NSW's RRP,
+    Gas in VIC at VIC's RRP. The NEM-wide flat price uses demand-weighted
+    price across the five regions.
+
+    Returns (stats_list, summary):
+      stats_list rows: fuel, avg_gw, volume_gwh, share, vwap
+      summary keys: avg_total_gw, total_gwh, lwap, flat_price,
+                    battery_charge {avg_gw,gwh,vwap}|None,
+                    trans_export {avg_gw,gwh,vwap}|None, net_demand_gwh
+    """
+    is_nem = region == "NEM"
+    physical = ["NSW1", "QLD1", "VIC1", "SA1", "TAS1"]
+    if is_nem:
+        region_list = ",".join(f"'{r}'" for r in physical)
+        region_filter = f"region IN ({region_list})"
+        roof_region_filter = f"regionid IN ({region_list})"
+        price_region_filter = f"regionid IN ({region_list})"
+    else:
+        region_filter = f"region = '{region}'"
+        roof_region_filter = f"regionid = '{region}'"
+        price_region_filter = f"regionid = '{region}'"
+
+    gen_sql = f"""
+        WITH gen AS (
+            SELECT settlementdate, region,
+                   CASE WHEN fuel_type IN ('CCGT','OCGT','Gas other') THEN 'Gas'
+                        WHEN fuel_type = 'Water'           THEN 'Hydro'
+                        WHEN fuel_type = 'Battery Storage' THEN 'Battery'
+                        ELSE fuel_type END AS fuel,
+                   total_generation_mw AS gen_mw
+              FROM generation_by_fuel_30min
+             WHERE {region_filter}
+               AND settlementdate >= ? AND settlementdate < ?
+               AND fuel_type NOT IN ('Biomass', 'Other')
+        ),
+        agg AS (
+            SELECT settlementdate, region, fuel, SUM(gen_mw) AS gen_mw
+              FROM gen
+             GROUP BY 1, 2, 3
+        )
+        SELECT a.settlementdate, a.region, a.fuel, a.gen_mw, p.rrp
+          FROM agg a
+          JOIN prices30 p ON p.settlementdate = a.settlementdate
+                          AND p.regionid       = a.region
+    """
+    gen = q(gen_sql, [s_ts, e_ts])
+
+    # Rooftop (positive only by construction)
+    roof_sql = f"""
+        SELECT r.settlementdate, r.regionid AS region,
+               'Rooftop Solar' AS fuel,
+               SUM(GREATEST(r.power, 0)) AS gen_mw,
+               p.rrp
+          FROM rooftop30 r
+          JOIN prices30 p ON p.settlementdate = r.settlementdate
+                          AND p.regionid       = r.regionid
+         WHERE {roof_region_filter.replace('regionid', 'r.regionid')}
+           AND r.settlementdate >= ? AND r.settlementdate < ?
+         GROUP BY 1, 2, p.rrp
+    """
+    roof = q(roof_sql, [s_ts, e_ts])
+    if not roof.empty:
+        gen = pd.concat([gen, roof], ignore_index=True)
+
+    # Transmission (single region only). imports = positive, exports = negative.
+    trans = pd.DataFrame()
+    if not is_nem:
+        ic_map = INTERCONNECTOR_MAP.get(region, {})
+        if ic_map:
+            ic_ids = list(ic_map.keys())
+            ic_in = ",".join(f"'{i}'" for i in ic_ids)
+            from_set = [k for k, v in ic_map.items() if v == "from"]
+            from_in = ",".join(f"'{i}'" for i in from_set)
+            sign = (f"CASE WHEN interconnectorid IN ({from_in}) "
+                    f"THEN -meteredmwflow ELSE meteredmwflow END"
+                    if from_set else "meteredmwflow")
+            trans_sql = f"""
+                WITH t AS (
+                    SELECT settlementdate, SUM({sign}) AS net_mw
+                      FROM transmission30
+                     WHERE interconnectorid IN ({ic_in})
+                       AND settlementdate >= ? AND settlementdate < ?
+                     GROUP BY settlementdate
+                )
+                SELECT t.settlementdate, t.net_mw, p.rrp
+                  FROM t JOIN prices30 p
+                    ON p.settlementdate = t.settlementdate
+                   AND p.regionid       = '{region}'
+            """
+            try:
+                trans = q(trans_sql, [s_ts, e_ts])
+            except Exception:
+                trans = pd.DataFrame()
+
+    if gen.empty:
+        return [], {"avg_total_gw": 0, "total_gwh": 0, "lwap": 0,
+                    "flat_price": 0, "battery_charge": None,
+                    "trans_export": None, "net_demand_gwh": 0}
+
+    n_intervals = gen["settlementdate"].nunique()
+
+    # Per-fuel rows in merit order. Battery shows discharge only here;
+    # charging is a separate footer row.
+    merit = ["Coal", "Wind", "Solar", "Rooftop Solar",
+             "Battery", "Hydro", "Gas"]
+    stats: list[dict] = []
+    for fuel in merit:
+        fuel_rows = gen[(gen["fuel"] == fuel) & (gen["gen_mw"] > 0)]
+        if fuel_rows.empty:
+            continue
+        total_mw = float(fuel_rows["gen_mw"].sum())
+        vwap = float((fuel_rows["gen_mw"] * fuel_rows["rrp"]).sum() / total_mw)
+        stats.append({
+            "fuel": fuel,
+            "avg_gw": total_mw / n_intervals / 1000,
+            "volume_gwh": total_mw * 0.5 / 1000,
+            "vwap": vwap,
+            "share": 0.0,
+        })
+
+    # Add transmission imports
+    if not trans.empty:
+        imports = trans[trans["net_mw"] > 0]
+        if not imports.empty:
+            total_mw = float(imports["net_mw"].sum())
+            vwap = float((imports["net_mw"] * imports["rrp"]).sum() / total_mw)
+            stats.append({
+                "fuel": "Transmission",
+                "avg_gw": total_mw / n_intervals / 1000,
+                "volume_gwh": total_mw * 0.5 / 1000,
+                "vwap": vwap,
+                "share": 0.0,
+            })
+
+    sum_gwh = sum(s["volume_gwh"] for s in stats)
+    if sum_gwh > 0:
+        for s in stats:
+            s["share"] = s["volume_gwh"] / sum_gwh * 100
+
+    # Per-interval total supply (positive contributions only)
+    supply_per_interval = (gen[gen["gen_mw"] > 0]
+                             .groupby("settlementdate")["gen_mw"].sum())
+    if not trans.empty:
+        imports = (trans[trans["net_mw"] > 0]
+                     .groupby("settlementdate")["net_mw"].sum())
+        supply_per_interval = supply_per_interval.add(imports, fill_value=0)
+    avg_total_gw = float(supply_per_interval.mean() / 1000) if not supply_per_interval.empty else 0
+    total_supply_mwh = float(supply_per_interval.sum() * 0.5)
+
+    # Single price series for LWAP + flat_price.
+    if is_nem:
+        nem_p_sql = f"""
+            SELECT p.settlementdate,
+                   SUM(p.rrp * d.demand) / NULLIF(SUM(d.demand), 0) AS rrp
+              FROM prices30 p
+              JOIN demand30 d
+                ON p.settlementdate = d.settlementdate
+               AND p.regionid       = d.regionid
+             WHERE {price_region_filter.replace('regionid', 'p.regionid')}
+               AND p.settlementdate >= ? AND p.settlementdate < ?
+             GROUP BY p.settlementdate
+        """
+        price_df = q(nem_p_sql, [s_ts, e_ts])
+    else:
+        price_df = q(
+            f"""SELECT settlementdate, rrp FROM prices30
+                WHERE {price_region_filter}
+                  AND settlementdate >= ? AND settlementdate < ?""",
+            [s_ts, e_ts],
+        )
+    price_series = price_df.set_index("settlementdate")["rrp"]
+    aligned = price_series.reindex(supply_per_interval.index)
+    if supply_per_interval.sum() > 0:
+        lwap = float((aligned * supply_per_interval).sum() / supply_per_interval.sum())
+    else:
+        lwap = 0.0
+    flat_price = float(price_series.mean()) if not price_series.empty else 0.0
+
+    # Battery charging — negative battery rows folded to positive volumes.
+    bc_summary = None
+    batt_charge = gen[(gen["fuel"] == "Battery") & (gen["gen_mw"] < 0)]
+    if not batt_charge.empty:
+        bc_abs = batt_charge["gen_mw"].abs()
+        bc_mw = float(bc_abs.sum())
+        bc_vwap = float((bc_abs * batt_charge["rrp"]).sum() / bc_mw) if bc_mw else 0.0
+        bc_summary = {"avg_gw": bc_mw / n_intervals / 1000,
+                       "gwh": bc_mw * 0.5 / 1000, "vwap": bc_vwap}
+
+    # Transmission exports (single region)
+    te_summary = None
+    if not trans.empty:
+        exports = trans[trans["net_mw"] < 0]
+        if not exports.empty:
+            te_abs = exports["net_mw"].abs()
+            te_mw = float(te_abs.sum())
+            te_vwap = float((te_abs * exports["rrp"]).sum() / te_mw) if te_mw else 0.0
+            te_summary = {"avg_gw": te_mw / n_intervals / 1000,
+                           "gwh": te_mw * 0.5 / 1000, "vwap": te_vwap}
+
+    net_demand_gwh = total_supply_mwh / 1000
+    if bc_summary: net_demand_gwh -= bc_summary["gwh"]
+    if te_summary: net_demand_gwh -= te_summary["gwh"]
+
+    summary = {
+        "avg_total_gw":  avg_total_gw,
+        "total_gwh":     total_supply_mwh / 1000,
+        "lwap":          lwap,
+        "flat_price":    flat_price,
+        "battery_charge": bc_summary,
+        "trans_export":   te_summary,
+        "net_demand_gwh": net_demand_gwh,
+    }
+    return stats, summary
+
+
+def _render_fuel_table(stats: list[dict], summary: dict, range_label: str) -> str:
+    """Five-column table: Fuel · Avg GW · GWh · Share % · VWAP $/MWh.
+    Footer adds Total Supply, optional Battery Charge / Transmission Exports,
+    Net Demand, and a Flat load $/MWh row (time-weighted price)."""
+    if not stats:
+        return ('<div class="placeholder">'
+                '<p>No generation data for the selected range.</p></div>')
+
+    def n(v, dec=1):
+        if v is None or pd.isna(v):
+            return "&mdash;"
+        return f"{v:,.{dec}f}"
+
+    def d(v):
+        if v is None or pd.isna(v):
+            return "&mdash;"
+        return f"{int(round(v)):,}"
+
+    head = (
+        f'<tr style="border-bottom:1.5px solid {MUTED}">'
+        f'<th style="text-align:left;padding:8px 12px;font-weight:600;font-size:13px;color:{INK}">Fuel</th>'
+        f'<th style="text-align:right;padding:8px 12px;font-weight:600;font-size:13px;color:{INK}">Avg GW</th>'
+        f'<th style="text-align:right;padding:8px 12px;font-weight:600;font-size:13px;color:{INK}">GWh</th>'
+        f'<th style="text-align:right;padding:8px 12px;font-weight:600;font-size:13px;color:{INK}">Share %</th>'
+        f'<th style="text-align:right;padding:8px 12px;font-weight:600;font-size:13px;color:{INK}">VWAP $/MWh</th>'
+        f'</tr>'
+    )
+    body_rows = []
+    for s in stats:
+        body_rows.append(
+            f'<tr style="border-bottom:0.5px solid {BORDER}">'
+            f'<td style="padding:6px 12px;color:{INK};font-weight:500">{s["fuel"]}</td>'
+            f'<td style="text-align:right;padding:6px 12px">{n(s["avg_gw"])}</td>'
+            f'<td style="text-align:right;padding:6px 12px">{n(s["volume_gwh"])}</td>'
+            f'<td style="text-align:right;padding:6px 12px">{n(s["share"])}</td>'
+            f'<td style="text-align:right;padding:6px 12px">{d(s["vwap"])}</td>'
+            f'</tr>'
+        )
+
+    def total_row(label, gw, gwh, vwap, *, is_total=False):
+        border = (f"border-top:1.5px solid {MUTED};" if is_total else "")
+        weight = "600" if is_total else "400"
+        color = INK if is_total else INK
+        return (
+            f'<tr style="{border}border-bottom:0.5px solid {BORDER}">'
+            f'<td style="padding:8px 12px;color:{color};font-weight:{weight}">{label}</td>'
+            f'<td style="text-align:right;padding:8px 12px;font-weight:{weight}">{n(gw)}</td>'
+            f'<td style="text-align:right;padding:8px 12px;font-weight:{weight}">{n(gwh)}</td>'
+            f'<td></td>'
+            f'<td style="text-align:right;padding:8px 12px;font-weight:{weight}">{d(vwap)}</td>'
+            f'</tr>'
+        )
+
+    foot_rows = [total_row("Total Supply", summary["avg_total_gw"],
+                           summary["total_gwh"], summary["lwap"], is_total=True)]
+    bc = summary.get("battery_charge")
+    if bc:
+        foot_rows.append(total_row("Battery Charge", bc["avg_gw"], bc["gwh"], bc["vwap"]))
+    te = summary.get("trans_export")
+    if te:
+        foot_rows.append(total_row("Transmission Exports", te["avg_gw"], te["gwh"], te["vwap"]))
+    foot_rows.append(
+        f'<tr style="border-top:1.5px solid {MUTED};border-bottom:0.5px solid {BORDER}">'
+        f'<td style="padding:8px 12px;color:{INK};font-weight:600">Net Demand</td>'
+        f'<td></td>'
+        f'<td style="text-align:right;padding:8px 12px;font-weight:600">{n(summary["net_demand_gwh"])}</td>'
+        f'<td></td><td></td>'
+        f'</tr>'
+    )
+    foot_rows.append(
+        f'<tr style="border-bottom:0.5px solid {BORDER}">'
+        f'<td style="padding:8px 12px;color:{INK};font-weight:600">Flat load $/MWh</td>'
+        f'<td></td><td></td><td></td>'
+        f'<td style="text-align:right;padding:8px 12px;font-weight:600">{d(summary["flat_price"])}</td>'
+        f'</tr>'
+    )
+
+    return (
+        _card_h3(f"Generation by fuel &middot; {range_label}")
+        + f'<table style="width:100%;border-collapse:collapse;font-size:13px">'
+        + f'<thead>{head}</thead>'
+        + f'<tbody>{"".join(body_rows)}{"".join(foot_rows)}</tbody></table>'
+        + f'<p style="color:{MUTED};font-size:11px;margin:10px 14px 0;line-height:1.5">'
+        f'VWAP = Σ(price × generation) / Σ(generation) at 30-min resolution. '
+        f'For NEM, each region\'s output is priced at that region\'s RRP. '
+        f'Flat load = simple time-weighted price.'
+        f'</p>'
+    )
+
+
+def _generation_price_chart(region: str, range_slug: str,
+                            s_ts, e_ts, range_label: str) -> str:
+    """Companion price chart for the Stack subtab. LOESS-smoothed for short
+    windows where wiggle dominates; raw for longer. Single region = one line;
+    NEM = all five regional lines (no single 'NEM price' exists)."""
+    is_nem = region == "NEM"
+    span_h = (e_ts - s_ts).total_seconds() / 3600
+    table = "prices5" if span_h <= 24.5 else "prices30"
+
+    if is_nem:
+        region_list = "('NSW1','QLD1','VIC1','SA1','TAS1')"
+    else:
+        region_list = f"('{region}')"
+
+    df = q(
+        f"""SELECT settlementdate, regionid, rrp FROM {table}
+            WHERE regionid IN {region_list}
+              AND settlementdate >= ? AND settlementdate < ?
+            ORDER BY settlementdate""",
+        [s_ts, e_ts],
+    )
+    if df.empty:
+        return ""
+
+    pivot = df.pivot_table(index="settlementdate", columns="regionid",
+                            values="rrp", aggfunc="mean").sort_index()
+    apply_smooth = span_h <= 24 * 7.5  # LOESS up to ~7 days
+
+    fig = go.Figure()
+    regions_to_plot = ["NSW1", "QLD1", "VIC1", "SA1", "TAS1"] if is_nem else [region]
+    for r in regions_to_plot:
+        if r not in pivot.columns:
+            continue
+        raw = pivot[r].to_numpy(dtype=float)
+        y_disp = _smooth_region(raw) if apply_smooth else raw
+        fig.add_trace(go.Scatter(
+            x=pivot.index, y=y_disp, name=r, mode="lines",
+            line=dict(color=REGION_COLORS[r], width=1.6),
+            hovertemplate="%{x|%-d %b %H:%M} $%{y:.0f}/MWh<extra></extra>",
+        ))
+
+    fig.update_layout(
+        paper_bgcolor=PAPER, plot_bgcolor=PAPER,
+        height=220, margin=dict(l=48, r=12, t=8, b=28),
+        legend=dict(orientation="v", yanchor="middle", y=0.5,
+                    xanchor="left", x=1.005, font=dict(size=10),
+                    bgcolor="rgba(0,0,0,0)"),
+        showlegend=is_nem,
+        xaxis=dict(showgrid=False, tickfont=dict(size=10, color=MUTED)),
+        yaxis=dict(showgrid=False, tickfont=dict(size=10, color=MUTED),
+                   autorange=True,
+                   title=dict(text="$/MWh", font=dict(size=10, color=MUTED))),
+    )
+    note = " &middot; LOESS smoothed" if apply_smooth else " &middot; raw"
+    region_label = _region_display(region)
+    title = f"{region_label} spot prices &middot; {range_label}{note}"
+    div_id = f"plot-genprice-{int(datetime.now().timestamp() * 1000)}"
+    fig_json = _plot_json(fig)
+    return (
+        _card_h3(title)
+        + f'<div id="{div_id}" style="height:220px"></div>'
+        + f'<script>(function(){{var f={fig_json};'
+        f'Plotly.newPlot("{div_id}",f.data,f.layout,'
+        f'{PLOTLY_CFG});}})();</script>'
+    )
+
+
+def _generation_tod_content(region: str, range_slug: str,
+                            start: str | None, end: str | None) -> str:
+    """Hour-of-day generation stack with average-price line underneath.
+
+    Always 30-min aligned. Same stack ordering as the Stack subtab so the
+    eye reads the two views the same way. Price is the simple mean of the
+    selected window's prices per hour-of-day (matches production); no LOESS
+    smoothing because hour-of-day means already average across days.
+    """
+    from plotly.subplots import make_subplots
+
+    s_ts, e_ts, _, range_label = _range_window(range_slug, start, end)
+    is_nem = region == "NEM"
+
+    if is_nem:
+        fuel_region_clause = "region IN ('NSW1','QLD1','VIC1','SA1','TAS1')"
+        roof_region_clause = "regionid IN ('NSW1','QLD1','VIC1','SA1','TAS1')"
+    else:
+        fuel_region_clause = f"region = '{region}'"
+        roof_region_clause = f"regionid = '{region}'"
+
+    # Utility generation, mean MW per (hour, fuel) across the window.
+    util_sql = f"""
+        WITH labeled AS (
+            SELECT settlementdate,
+                   CASE WHEN fuel_type IN ('CCGT','OCGT','Gas other') THEN 'Gas'
+                        WHEN fuel_type = 'Water'           THEN 'Hydro'
+                        WHEN fuel_type = 'Battery Storage' THEN 'Battery Storage'
+                        ELSE fuel_type END AS fuel,
+                   total_generation_mw AS gen_mw
+              FROM generation_by_fuel_30min
+             WHERE {fuel_region_clause}
+               AND settlementdate >= ? AND settlementdate < ?
+               AND fuel_type NOT IN ('Biomass', 'Other')
+        ),
+        per_period AS (
+            SELECT settlementdate, fuel, SUM(gen_mw) AS mw
+              FROM labeled
+             GROUP BY settlementdate, fuel
+        )
+        SELECT EXTRACT(HOUR FROM settlementdate) AS hour, fuel, AVG(mw) AS mw
+          FROM per_period
+         GROUP BY hour, fuel
+         ORDER BY hour, fuel
+    """
+    util_df = q(util_sql, [s_ts, e_ts])
+    if util_df.empty:
+        return (f'<div class="placeholder"><p><strong>No generation data for '
+                f'{_region_display(region)} in {range_label}.</strong></p></div>')
+
+    util_pivot = (util_df.pivot(index="hour", columns="fuel", values="mw")
+                          .fillna(0))
+
+    # Rooftop, mean MW per hour
+    roof_sql = f"""
+        WITH per_period AS (
+            SELECT settlementdate, SUM(GREATEST(power, 0)) AS mw
+              FROM rooftop30
+             WHERE {roof_region_clause}
+               AND settlementdate >= ? AND settlementdate < ?
+             GROUP BY settlementdate
+        )
+        SELECT EXTRACT(HOUR FROM settlementdate) AS hour, AVG(mw) AS mw
+          FROM per_period
+         GROUP BY hour
+         ORDER BY hour
+    """
+    roof_df = q(roof_sql, [s_ts, e_ts])
+    roof_aligned = (roof_df.set_index("hour")["mw"]
+                          .reindex(util_pivot.index).fillna(0)
+                    if not roof_df.empty
+                    else pd.Series(0.0, index=util_pivot.index))
+
+    # Transmission, mean MW per hour (single region only)
+    trans_aligned = pd.Series(0.0, index=util_pivot.index)
+    if not is_nem:
+        ic_map = INTERCONNECTOR_MAP.get(region, {})
+        if ic_map:
+            ic_ids = list(ic_map.keys())
+            ic_in = ",".join(f"'{i}'" for i in ic_ids)
+            from_set = [k for k, v in ic_map.items() if v == "from"]
+            from_in = ",".join(f"'{i}'" for i in from_set)
+            sign = (f"CASE WHEN interconnectorid IN ({from_in}) "
+                    f"THEN -meteredmwflow ELSE meteredmwflow END"
+                    if from_set else "meteredmwflow")
+            trans_sql = f"""
+                WITH per_period AS (
+                    SELECT settlementdate, SUM({sign}) AS net_mw
+                      FROM transmission30
+                     WHERE interconnectorid IN ({ic_in})
+                       AND settlementdate >= ? AND settlementdate < ?
+                     GROUP BY settlementdate
+                )
+                SELECT EXTRACT(HOUR FROM settlementdate) AS hour, AVG(net_mw) AS mw
+                  FROM per_period
+                 GROUP BY hour
+                 ORDER BY hour
+            """
+            try:
+                trans_df = q(trans_sql, [s_ts, e_ts])
+                if not trans_df.empty:
+                    trans_aligned = (trans_df.set_index("hour")["mw"]
+                                            .reindex(util_pivot.index).fillna(0))
+            except Exception:
+                pass
+
+    # Price per hour-of-day. Single region = its RRP mean; NEM = demand-weighted.
+    if is_nem:
+        price_sql = """
+            WITH nem AS (
+                SELECT p.settlementdate,
+                       SUM(p.rrp * d.demand) / NULLIF(SUM(d.demand), 0) AS rrp
+                  FROM prices30 p
+                  JOIN demand30 d
+                    ON p.settlementdate = d.settlementdate
+                   AND p.regionid       = d.regionid
+                 WHERE p.regionid IN ('NSW1','QLD1','VIC1','SA1','TAS1')
+                   AND p.settlementdate >= ? AND p.settlementdate < ?
+                 GROUP BY p.settlementdate
+            )
+            SELECT EXTRACT(HOUR FROM settlementdate) AS hour, AVG(rrp) AS rrp
+              FROM nem
+             GROUP BY hour
+             ORDER BY hour
+        """
+        price_df = q(price_sql, [s_ts, e_ts])
+    else:
+        price_df = q(
+            f"""SELECT EXTRACT(HOUR FROM settlementdate) AS hour,
+                       AVG(rrp) AS rrp
+                  FROM prices30
+                 WHERE regionid = '{region}'
+                   AND settlementdate >= ? AND settlementdate < ?
+                 GROUP BY hour
+                 ORDER BY hour""",
+            [s_ts, e_ts],
+        )
+
+    # --- Build the figure: stack on top, price line underneath -----------
+    fig = make_subplots(
+        rows=2, cols=1, shared_xaxes=True,
+        vertical_spacing=0.06,
+        row_heights=[0.7, 0.3],
+    )
+
+    BATTERY_COLOR = FUEL_COLORS["Battery Storage"]
+    TRANS_COLOR   = "#A02F6F"
+    legend_shown: set[str] = set()
+
+    def add_trace(name, series, color, stackgroup, legendgroup=None):
+        if stackgroup == "positive" and series.sum() <= 0: return
+        if stackgroup == "negative" and series.sum() >= 0: return
+        grp = legendgroup or name
+        show = grp not in legend_shown
+        legend_shown.add(grp)
+        fig.add_trace(go.Scatter(
+            x=series.index, y=series / 1000, name=name,
+            stackgroup=stackgroup, mode="lines",
+            legendgroup=grp, showlegend=show,
+            line=dict(width=0.3, color=color),
+            fillcolor=color,
+            hovertemplate=f"{name}: %{{y:.2f}} GW<extra></extra>",
+        ), row=1, col=1)
+
+    # Positive stack: Transmission imports first, then merit order, then Gas
+    if not is_nem and trans_aligned.abs().sum() > 0:
+        add_trace("Transmission", trans_aligned.clip(lower=0),
+                  TRANS_COLOR, "positive", legendgroup="Transmission")
+    for fuel in ("Coal", "Hydro", "Wind", "Solar"):
+        if fuel in util_pivot.columns:
+            add_trace(fuel, util_pivot[fuel].clip(lower=0),
+                      FUEL_COLORS.get(fuel, MUTED), "positive")
+    if roof_aligned.sum() > 0:
+        add_trace("Rooftop Solar", roof_aligned,
+                  FUEL_COLORS["Rooftop Solar"], "positive")
+    if "Battery Storage" in util_pivot.columns:
+        batt = util_pivot["Battery Storage"]
+        add_trace("Battery", batt.clip(lower=0), BATTERY_COLOR,
+                  "positive", legendgroup="Battery")
+    if "Gas" in util_pivot.columns:
+        add_trace("Gas", util_pivot["Gas"].clip(lower=0),
+                  FUEL_COLORS["Gas"], "positive")
+
+    # Negative stack: Transmission exports first, Battery charging below
+    if not is_nem and trans_aligned.abs().sum() > 0:
+        add_trace("Transmission", trans_aligned.clip(upper=0),
+                  TRANS_COLOR, "negative", legendgroup="Transmission")
+    if "Battery Storage" in util_pivot.columns:
+        batt = util_pivot["Battery Storage"]
+        add_trace("Battery", batt.clip(upper=0), BATTERY_COLOR,
+                  "negative", legendgroup="Battery")
+
+    # Price line in the bottom subplot (raw mean per hour)
+    if not price_df.empty:
+        fig.add_trace(go.Scatter(
+            x=price_df["hour"], y=price_df["rrp"],
+            name="Price", mode="lines+markers",
+            line=dict(width=2, color="#D4A000"),
+            marker=dict(size=5),
+            showlegend=False,
+            hovertemplate="%{x:02d}:00 $%{y:.0f}/MWh<extra></extra>",
+        ), row=2, col=1)
+
+    fig.update_layout(
+        paper_bgcolor=PAPER, plot_bgcolor=PAPER,
+        height=520, margin=dict(l=48, r=12, t=8, b=44),
+        legend=dict(orientation="h", yanchor="top", y=-0.10,
+                    xanchor="center", x=0.5, font=dict(size=10),
+                    bgcolor=PAPER),
+    )
+    fig.update_yaxes(
+        showgrid=False, zeroline=True, zerolinecolor=BORDER, zerolinewidth=1,
+        tickfont=dict(size=10, color=MUTED),
+        title=dict(text="GW", font=dict(size=10, color=MUTED)),
+        row=1, col=1,
+    )
+    fig.update_yaxes(
+        showgrid=False,
+        tickfont=dict(size=10, color="#D4A000"),
+        title=dict(text="$/MWh", font=dict(size=10, color="#D4A000")),
+        row=2, col=1,
+    )
+    # Hour ticks on the bottom (shared) axis
+    fig.update_xaxes(showgrid=False,
+                     tickfont=dict(size=10, color=MUTED),
+                     tickmode="array",
+                     tickvals=list(range(0, 24, 3)),
+                     ticktext=[f"{h:02d}:00" for h in range(0, 24, 3)],
+                     row=1, col=1)
+    fig.update_xaxes(showgrid=False,
+                     tickfont=dict(size=10, color=MUTED),
+                     tickmode="array",
+                     tickvals=list(range(0, 24, 3)),
+                     ticktext=[f"{h:02d}:00" for h in range(0, 24, 3)],
+                     title=dict(text="Hour of day (NEM time)",
+                                font=dict(size=10, color=MUTED)),
+                     row=2, col=1)
+
+    title = (f"{_region_display(region)} generation by hour of day "
+             f"&middot; {range_label}")
+    div_id = f"plot-gentod-{int(datetime.now().timestamp() * 1000)}"
+    fig_json = _plot_json(fig)
+    return (
+        f'<div class="prices-stack"><div class="card">'
+        + _card_h3(title)
+        + f'<div id="{div_id}" style="height:520px"></div>'
+        + f'<script>(function(){{var f={fig_json};'
+        f'Plotly.newPlot("{div_id}",f.data,f.layout,{PLOTLY_CFG});}})();</script>'
+        + f'<p style="color:{MUTED};font-size:11px;margin:8px 14px 0;line-height:1.5">'
+        f'Top: mean MW per fuel for each hour of day across the selected window. '
+        f'Bottom: mean spot price per hour ('
+        f'{"demand-weighted across regions" if is_nem else "regional RRP"}). '
+        f'No smoothing — the hour-of-day averaging already collapses cross-day noise.'
+        f'</p>'
+        + '</div></div>'
+    )
+
+
+# Per-interconnector colors — Flexoki LINE_COLORS palette (per the
+# flexoki-plotting skill). The skill's 5-series palette is Blue/Orange/
+# Cyan/Green/Magenta deliberately, because Red and Orange sit too close
+# on the hue wheel to discriminate at line widths. For the 6th interconnector
+# (T-V-MNSP1) we use Flexoki Purple, which is non-adjacent to all the others
+# and never co-occurs with Battery (the only other place we use this hex).
+INTERCONNECTOR_COLORS = {
+    "NSW1-QLD1":  "#205EA6",   # Flexoki Blue 600
+    "VIC1-NSW1":  "#BC5215",   # Flexoki Orange 600
+    "V-SA":       "#24837B",   # Flexoki Cyan 600
+    "V-S-MNSP1":  "#66800B",   # Flexoki Green 600
+    "N-Q-MNSP1":  "#A02F6F",   # Flexoki Magenta 600
+    "T-V-MNSP1":  "#5E409D",   # Flexoki Purple 600 (was Red — too close to Orange)
+}
+
+
+def _generation_transmission_content(region: str, range_slug: str,
+                                     start: str | None, end: str | None) -> str:
+    """Per-interconnector flow series + hour-of-day, both signed so that
+    positive = import to the selected region. NEM has no transmission view
+    (interconnectors net to zero); placeholder is shown instead."""
+    if region == "NEM":
+        return ('<div class="placeholder">'
+                '<p><strong>Transmission isn\'t shown for the NEM-wide view.</strong></p>'
+                '<p>Pick a state region to see its interconnector flows.</p>'
+                '</div>')
+    ic_map = INTERCONNECTOR_MAP.get(region, {})
+    if not ic_map:
+        return ('<div class="placeholder">'
+                f'<p><strong>No interconnectors mapped for {region}.</strong></p>'
+                '</div>')
+
+    s_ts, e_ts, _, range_label = _range_window(range_slug, start, end)
+    span_h = (e_ts - s_ts).total_seconds() / 3600
+    if span_h <= 24.5:
+        ts_table, ddb_interval, res_label = "transmission5", "5 minutes", "5min"
+    elif span_h <= 24 * 7.5:
+        ts_table, ddb_interval, res_label = "transmission30", "30 minutes", "30min"
+    else:
+        ts_table, ddb_interval, res_label = "transmission30", "1 day", "1d"
+
+    ic_ids = list(ic_map.keys())
+    ic_in  = ",".join(f"'{i}'" for i in ic_ids)
+    # Sign correction per the production convention: 'from' interconnectors
+    # report raw flow as leaving the region, so we negate to render imports
+    # as positive.
+    case_sign = " ".join(
+        f"WHEN interconnectorid = '{ic}' THEN "
+        f"{'-meteredmwflow' if direction == 'from' else 'meteredmwflow'}"
+        for ic, direction in ic_map.items()
+    )
+
+    # Time series, bucketed
+    ts_sql = f"""
+        WITH labeled AS (
+            SELECT settlementdate, interconnectorid,
+                   CASE {case_sign} END AS signed_flow
+              FROM {ts_table}
+             WHERE interconnectorid IN ({ic_in})
+               AND settlementdate >= ? AND settlementdate < ?
+        )
+        SELECT time_bucket(INTERVAL '{ddb_interval}', settlementdate) AS bucket,
+               interconnectorid,
+               AVG(signed_flow) AS mw
+          FROM labeled
+         GROUP BY bucket, interconnectorid
+         ORDER BY bucket, interconnectorid
+    """
+    ts_df = q(ts_sql, [s_ts, e_ts])
+
+    # Time of day, always 30-min data
+    tod_sql = f"""
+        WITH labeled AS (
+            SELECT settlementdate, interconnectorid,
+                   CASE {case_sign} END AS signed_flow
+              FROM transmission30
+             WHERE interconnectorid IN ({ic_in})
+               AND settlementdate >= ? AND settlementdate < ?
+        )
+        SELECT EXTRACT(HOUR FROM settlementdate) AS hour,
+               interconnectorid,
+               AVG(signed_flow) AS mw
+          FROM labeled
+         GROUP BY hour, interconnectorid
+         ORDER BY hour, interconnectorid
+    """
+    tod_df = q(tod_sql, [s_ts, e_ts])
+
+    if ts_df.empty:
+        return ('<div class="placeholder">'
+                f'<p><strong>No transmission data for {region} in {range_label}.</strong></p>'
+                '</div>')
+
+    def build_line_fig(df, height, x_field, x_axis_args, hover_x):
+        fig = go.Figure()
+        pivot = df.pivot(index=x_field, columns="interconnectorid", values="mw")
+        for ic in ic_ids:
+            if ic not in pivot.columns:
+                continue
+            fig.add_trace(go.Scatter(
+                x=pivot.index, y=pivot[ic] / 1000, mode="lines", name=ic,
+                line=dict(width=2.5, color=INTERCONNECTOR_COLORS.get(ic, MUTED)),
+                hovertemplate=f"{ic}<br>{hover_x} %{{y:.2f}} GW<extra></extra>",
+            ))
+        fig.add_hline(y=0, line_dash="dash", line_color=BORDER,
+                      line_width=1, opacity=0.6)
+        fig.update_layout(
+            paper_bgcolor=PAPER, plot_bgcolor=PAPER,
+            height=height, margin=dict(l=48, r=12, t=8, b=44),
+            legend=dict(orientation="h", yanchor="top", y=-0.14,
+                        xanchor="center", x=0.5, font=dict(size=10),
+                        bgcolor=PAPER),
+            xaxis=x_axis_args,
+            yaxis=dict(showgrid=False, tickfont=dict(size=10, color=MUTED),
+                       title=dict(text="GW", font=dict(size=10, color=MUTED)),
+                       zeroline=False),
+        )
+        return fig
+
+    ts_fig = build_line_fig(
+        ts_df, height=300, x_field="bucket",
+        x_axis_args=dict(showgrid=False,
+                         tickfont=dict(size=10, color=MUTED)),
+        hover_x="%{x|%-d %b %H:%M}",
+    )
+    tod_fig = build_line_fig(
+        tod_df, height=280, x_field="hour",
+        x_axis_args=dict(showgrid=False,
+                         tickfont=dict(size=10, color=MUTED),
+                         tickmode="array",
+                         tickvals=list(range(0, 24, 3)),
+                         ticktext=[f"{h:02d}:00" for h in range(0, 24, 3)],
+                         title=dict(text="Hour of day (NEM time)",
+                                    font=dict(size=10, color=MUTED))),
+        hover_x="%{x:02d}:00",
+    )
+
+    ts_div  = f"plot-trans-ts-{int(datetime.now().timestamp() * 1000)}"
+    tod_div = f"plot-trans-tod-{int(datetime.now().timestamp() * 1000)}-2"
+    ts_json  = _plot_json(ts_fig)
+    tod_json = _plot_json(tod_fig)
+    rd = _region_display(region)
+    ts_title = (f"{rd} transmission flows &middot; {range_label} "
+                f"&middot; {res_label} buckets")
+    tod_title = f"{rd} transmission by hour of day &middot; {range_label}"
+
+    return (
+        '<div class="prices-stack">'
+        + '<div class="card">'
+        + _card_h3(ts_title)
+        + f'<div id="{ts_div}" style="height:300px"></div>'
+        + f'<script>(function(){{var f={ts_json};'
+          f'Plotly.newPlot("{ts_div}",f.data,f.layout,{PLOTLY_CFG});}})();</script>'
+        + f'<p style="color:{MUTED};font-size:11px;margin:8px 14px 0;line-height:1.5">'
+        + f'Positive = import to {rd}, negative = export. One line per '
+        + 'interconnector. Zero-crossings mark direction changes.</p>'
+        + '</div>'
+        + '<div class="card">'
+        + _card_h3(tod_title)
+        + f'<div id="{tod_div}" style="height:280px"></div>'
+        + f'<script>(function(){{var f={tod_json};'
+          f'Plotly.newPlot("{tod_div}",f.data,f.layout,{PLOTLY_CFG});}})();</script>'
+        + f'<p style="color:{MUTED};font-size:11px;margin:8px 14px 0;line-height:1.5">'
+        + 'Mean flow per hour of day across the selected window.</p>'
+        + '</div>'
+        + '</div>'
+    )
+
+
+def _generation_yr_on_yr_content(region: str, range_slug: str,
+                                 start: str | None, end: str | None) -> str:
+    """Period-on-period fuel + price comparison.
+
+    Reuses the iOS API helpers from
+    `aemo_dashboard.api.routers.generation_comparison` verbatim — same
+    annualised-TWh + generation-weighted VWAP semantics, same Battery-spread
+    metric, same TWAP for the total row. Renders as an HTML table with
+    sign-coloured deltas (Flexoki green/red)."""
+    # The iOS endpoint only supports a fixed set of periods. Our pill slugs
+    # are broader; fold to the nearest supported period.
+    period_map = {
+        "7d": "7d", "30d": "30d", "ytd": "ytd", "1y": "1y",
+        "1h": "7d", "24h": "7d", "all": "1y", "custom": "ytd",
+    }
+    period = period_map.get(range_slug, "ytd")
+    period_note = (f' &middot; range "{range_slug.upper()}" → "{period.upper()}"'
+                   if range_slug != period and range_slug not in ("custom",)
+                   else "")
+
+    try:
+        from aemo_dashboard.api.routers.generation_comparison import (
+            _resolve_window, _safe_year_minus_one, _period_days,
+            _fetch_fuel_window, _fetch_twap, _aggregate_groups,
+            GROUP_ORDER, GROUP_DISPLAY,
+        )
+    except ImportError:
+        return ('<div class="placeholder">'
+                'Year-on-year module unavailable.</div>')
+
+    import duckdb
+    conn = duckdb.connect(DB_PATH, read_only=True)
+    try:
+        end_curr = conn.execute(
+            "SELECT MAX(settlementdate) FROM scada30").fetchone()[0]
+        if end_curr is None:
+            return '<div class="placeholder">No data.</div>'
+        start_curr, end_curr = _resolve_window(period, end_curr)
+        end_prev   = _safe_year_minus_one(end_curr)
+        start_prev = _safe_year_minus_one(start_curr)
+        days_curr  = _period_days(start_curr, end_curr)
+        days_prev  = _period_days(start_prev, end_prev)
+
+        cur_raw = _fetch_fuel_window(conn, start_curr, end_curr, region)
+        prv_raw = _fetch_fuel_window(conn, start_prev, end_prev, region)
+        twap_curr = _fetch_twap(conn, start_curr, end_curr, region)
+        twap_prev = _fetch_twap(conn, start_prev, end_prev, region)
+    finally:
+        conn.close()
+
+    cur_groups = _aggregate_groups(cur_raw, days_curr)
+    prv_groups = _aggregate_groups(prv_raw, days_prev)
+
+    GREEN, RED = "#66800B", "#AF3029"
+
+    def fmt_num(v, dec=1):
+        if v is None: return "&mdash;"
+        return f"{v:,.{dec}f}"
+
+    def fmt_delta(v, dec=1):
+        if v is None: return "&mdash;"
+        sign = "+" if v > 0 else ("" if v == 0 else "")
+        color = GREEN if v > 0 else (RED if v < 0 else MUTED)
+        return f'<span style="color:{color};font-weight:600">{sign}{v:,.{dec}f}</span>'
+
+    body_rows = []
+    for gkey in GROUP_ORDER:
+        c, p = cur_groups[gkey], prv_groups[gkey]
+        if c["_mwh"] == 0 and p["_mwh"] == 0:
+            continue
+        d_twh = (c["twh"] - p["twh"]) if (c["twh"] is not None and p["twh"] is not None) else None
+        d_vwap = (c["vwap"] - p["vwap"]) if (c["vwap"] is not None and p["vwap"] is not None) else None
+        label = GROUP_DISPLAY[gkey]
+        if c["is_spread"]:
+            label += "*"
+        body_rows.append(
+            f'<tr style="border-bottom:0.5px solid {BORDER}">'
+            f'<td style="padding:6px 12px;color:{INK};font-weight:500">{label}</td>'
+            f'<td style="text-align:right;padding:6px 12px">{fmt_num(c["twh"])}</td>'
+            f'<td style="text-align:right;padding:6px 12px">{fmt_num(p["twh"])}</td>'
+            f'<td style="text-align:right;padding:6px 12px">{fmt_delta(d_twh)}</td>'
+            f'<td style="text-align:right;padding:6px 12px">{fmt_num(c["vwap"], 0)}</td>'
+            f'<td style="text-align:right;padding:6px 12px">{fmt_num(p["vwap"], 0)}</td>'
+            f'<td style="text-align:right;padding:6px 12px">{fmt_delta(d_vwap, 0)}</td>'
+            f'</tr>'
+        )
+
+    # Total row — TWh sums, demand-weighted TWAP for price
+    total_twh_cur = sum((g["twh"] or 0.0) for g in cur_groups.values())
+    total_twh_prv = sum((g["twh"] or 0.0) for g in prv_groups.values())
+    d_total_twh = total_twh_cur - total_twh_prv
+    d_twap = ((twap_curr - twap_prev)
+              if (twap_curr is not None and twap_prev is not None) else None)
+    total_label = "NEM total" if region == "NEM" else f"{_region_display(region)} total"
+    body_rows.append(
+        f'<tr style="border-top:1.5px solid {MUTED};border-bottom:0.5px solid {BORDER}">'
+        f'<td style="padding:8px 12px;color:{INK};font-weight:600">{total_label}</td>'
+        f'<td style="text-align:right;padding:8px 12px;font-weight:600">{fmt_num(total_twh_cur)}</td>'
+        f'<td style="text-align:right;padding:8px 12px;font-weight:600">{fmt_num(total_twh_prv)}</td>'
+        f'<td style="text-align:right;padding:8px 12px">{fmt_delta(d_total_twh)}</td>'
+        f'<td style="text-align:right;padding:8px 12px;font-weight:600">{fmt_num(twap_curr, 0)}</td>'
+        f'<td style="text-align:right;padding:8px 12px;font-weight:600">{fmt_num(twap_prev, 0)}</td>'
+        f'<td style="text-align:right;padding:8px 12px">{fmt_delta(d_twap, 0)}</td>'
+        f'</tr>'
+    )
+
+    head = (
+        f'<tr style="border-bottom:1.5px solid {MUTED}">'
+        f'<th style="text-align:left;padding:8px 12px;font-weight:600;font-size:13px;color:{INK}">Fuel</th>'
+        f'<th style="text-align:right;padding:8px 12px;font-weight:600;font-size:13px;color:{INK}">Current TWh</th>'
+        f'<th style="text-align:right;padding:8px 12px;font-weight:600;font-size:13px;color:{INK}">Prior TWh</th>'
+        f'<th style="text-align:right;padding:8px 12px;font-weight:600;font-size:13px;color:{INK}">Δ TWh</th>'
+        f'<th style="text-align:right;padding:8px 12px;font-weight:600;font-size:13px;color:{INK}">Current $/MWh</th>'
+        f'<th style="text-align:right;padding:8px 12px;font-weight:600;font-size:13px;color:{INK}">Prior $/MWh</th>'
+        f'<th style="text-align:right;padding:8px 12px;font-weight:600;font-size:13px;color:{INK}">Δ $/MWh</th>'
+        f'</tr>'
+    )
+
+    period_labels = {"7d": "Last 7 days", "30d": "Last 30 days",
+                     "ytd": "Year to date", "1y": "Last 12 months"}
+    period_label = period_labels.get(period, period)
+    title = (f"{_region_display(region)} year on year &middot; "
+             f"{period_label}{period_note}")
+
+    cur_win = f"{start_curr:%-d %b %Y} → {end_curr:%-d %b %Y}"
+    prv_win = f"{start_prev:%-d %b %Y} → {end_prev:%-d %b %Y}"
+
+    return (
+        '<div class="prices-stack"><div class="card">'
+        + _card_h3(title)
+        + '<table style="width:100%;border-collapse:collapse;font-size:13px">'
+        + f'<thead>{head}</thead><tbody>{"".join(body_rows)}</tbody></table>'
+        + f'<p style="color:{MUTED};font-size:11px;margin:10px 14px 0;line-height:1.5">'
+        + f'Current: <strong>{cur_win}</strong> &middot; Prior: <strong>{prv_win}</strong>. '
+        + 'TWh annualised over each window. $/MWh per fuel is generation-weighted VWAP '
+        + '(*Battery row shows discharge − charge spread). Total row $/MWh is '
+        + 'demand-weighted TWAP across all intervals. Δ in green when positive, red when negative.'
+        + '</p>'
+        + '</div></div>'
+    )
+
+
+@app.get("/generation-mix", response_class=HTMLResponse)
+def generation_mix_root(region: str = "", range: str = "",
+                        start: str | None = None, end: str | None = None
+                        ) -> RedirectResponse:
+    params = {}
+    if region: params["region"] = region
+    if range:  params["range"]  = range
+    if start:  params["start"]  = start
+    if end:    params["end"]    = end
+    return RedirectResponse(url=_build_url("/generation-mix/stack", **params))
+
+
+@app.get("/generation-mix/{sub}", response_class=HTMLResponse)
+def generation_mix_sub(sub: str, request: Request,
+                       region: str = "NEM",
+                       range: str = "24h",
+                       start: str | None = None,
+                       end: str | None = None) -> HTMLResponse:
+    _, subtabs = TAB_LOOKUP["generation-mix"]
+    sub_slugs = {s for s, _ in subtabs}
+    if sub not in sub_slugs:
+        return HTMLResponse(status_code=404, content="Not found")
+
+    if region not in GENMIX_REGION_LIST:
+        region = "NEM"
+    valid_ranges = {slug for slug, _ in RANGE_OPTIONS} | {"custom"}
+    if range not in valid_ranges:
+        range = "24h"
+
+    base_params = {"region": region, "range": range}
+    if start: base_params["start"] = start
+    if end:   base_params["end"] = end
+
+    base_url = f"/generation-mix/{sub}"
+    selectors = _render_selector_strip(
+        _render_region_pills(base_url, region,
+                             {k: v for k, v in base_params.items() if k != "region"},
+                             regions=GENMIX_REGION_LIST),
+        _render_range_pills(base_url, range,
+                            {k: v for k, v in base_params.items()
+                             if k not in ("range", "start", "end")},
+                            start=start or "", end=end or ""),
+    )
+    subtab_html = _render_subtab_nav("generation-mix", subtabs, sub,
+                                      carry_params=base_params)
+
+    sub_label = dict(subtabs)[sub]
+    if sub == "stack":
+        s_ts, e_ts, _, range_label = _range_window(range, start, end)
+        stack_card = _generation_stack_content(region, range, start, end)
+        price_chart_html = _generation_price_chart(
+            region, range, s_ts, e_ts, range_label)
+        stats, summary = _generation_fuel_stats(region, s_ts, e_ts)
+        fuel_table_html = _render_fuel_table(stats, summary, range_label)
+        content = (
+            f'{stack_card}'  # stack returns its own prices-stack wrapper
+            + f'<div class="prices-stack">'
+            + (f'<div class="card">{price_chart_html}</div>' if price_chart_html else '')
+            + f'<div class="card">{fuel_table_html}</div>'
+            + f'</div>'
+        )
+    elif sub == "tod":
+        content = _generation_tod_content(region, range, start, end)
+    elif sub == "transmission":
+        content = _generation_transmission_content(region, range, start, end)
+    elif sub == "yr-on-yr":
+        content = _generation_yr_on_yr_content(region, range, start, end)
+    else:
+        content = _placeholder("Generation mix", sub_label)
+
+    body = _render_tab_body(subtab_html, selectors + content)
+    if _is_htmx(request):
+        return HTMLResponse(body)
+    return HTMLResponse(_render_shell(body))
+
+
+# ----------------------------------------------------------------------------
+# /evening-peak — period-on-period 4-panel comparison (17:00–22:00)
+# ----------------------------------------------------------------------------
+
+EVENING_PEAK_REGION_LIST = ["NEM", "NSW1", "QLD1", "SA1", "TAS1", "VIC1"]
+
+
+def _evening_peak_content(region: str, range_slug: str,
+                           start: str | None, end: str | None) -> str:
+    """4-panel comparison of evening peak (17:00–22:00) fuel mix and price
+    vs the same calendar window one year ago. Uses production's
+    `get_evening_data` helper so the numbers match the existing dashboard.
+    """
+    from datetime import date
+    from aemo_dashboard.evening_peak.evening_analysis import (
+        get_evening_data, get_latest_data_date,
+        FUEL_ORDER as EP_FUEL_ORDER,
+        FUEL_COLORS as EP_FUEL_COLORS,
+    )
+    from plotly.subplots import make_subplots
+
+    end_date = get_latest_data_date()
+
+    # Resolve period from the standard range pills. Anything <7d falls back
+    # to 30 days because the comparison needs a meaningful window.
+    if range_slug == "custom" and start and end:
+        s_d = date.fromisoformat(start)
+        e_d = date.fromisoformat(end)
+        end_date = e_d
+        period_days = max(7, (e_d - s_d).days + 1)
+    elif range_slug == "ytd":
+        period_days = (end_date - date(end_date.year, 1, 1)).days + 1
+    else:
+        period_days = {"7d": 7, "30d": 30, "1y": 365,
+                       "all": 365, "1h": 30, "24h": 30}.get(range_slug, 30)
+
+    end_excl = (end_date + timedelta(days=1)).strftime("%Y-%m-%d")
+    start_str = (end_date - timedelta(days=period_days - 1)).strftime("%Y-%m-%d")
+    pcp_end = end_date - timedelta(days=365)
+    pcp_end_excl = (pcp_end + timedelta(days=1)).strftime("%Y-%m-%d")
+    pcp_start = (pcp_end - timedelta(days=period_days - 1)).strftime("%Y-%m-%d")
+
+    try:
+        ty_data, ty_prices, _ = get_evening_data(start_str, end_excl, region)
+        ly_data, ly_prices, _ = get_evening_data(pcp_start, pcp_end_excl, region)
+    except Exception as exc:
+        return (f'<div class="placeholder">'
+                f'<p><strong>Couldn\'t load evening peak data.</strong></p>'
+                f'<p>{exc}</p></div>')
+
+    if ty_data.empty or ly_data.empty:
+        return ('<div class="placeholder">'
+                f'<p><strong>No evening peak data for {_region_display(region)} '
+                f'over {period_days} days.</strong></p></div>')
+
+    # Common ordering and y-axis cap across the two area panels
+    times = ty_data.index.tolist()
+    max_total_mw = max(
+        ty_data[[c for c in EP_FUEL_ORDER if c in ty_data.columns]].clip(lower=0).sum(axis=1).max(),
+        ly_data[[c for c in EP_FUEL_ORDER if c in ly_data.columns]].clip(lower=0).sum(axis=1).max(),
+    )
+    y_cap_gw = (max_total_mw / 1000) * 1.05
+
+    rd = _region_display(region)
+    ty_label = f"{datetime.strptime(start_str, '%Y-%m-%d'):%-d %b %Y} → {end_date:%-d %b %Y}"
+    ly_label = f"{datetime.strptime(pcp_start, '%Y-%m-%d'):%-d %b %Y} → {pcp_end:%-d %b %Y}"
+
+    # Use a real middle-dot — &middot; is HTML and Plotly subplot titles render
+    # as SVG; HTML entities pass through as literal text.
+    fig = make_subplots(
+        rows=2, cols=2,
+        subplot_titles=(
+            f"<b>{rd} this year</b> · {ty_label}",
+            f"<b>{rd} prior year</b> · {ly_label}",
+            "Demand-weighted price by time of day",
+            "Average MW change by fuel (this year − prior)",
+        ),
+        horizontal_spacing=0.10, vertical_spacing=0.24,
+        row_heights=[0.5, 0.5],
+    )
+
+    legend_shown: set[str] = set()
+
+    def add_area(data_df, row, col, stack_id: str):
+        """Stack fuels in a single subplot. Each subplot uses unique stackgroup
+        names so Plotly doesn't try to stack across the two side-by-side panels."""
+        x = list(range(len(times)))
+        for fuel in EP_FUEL_ORDER:
+            if fuel not in data_df.columns:
+                continue
+            values = data_df[fuel].reindex(times).fillna(0).values
+            if np.allclose(values, 0):
+                continue
+            color = EP_FUEL_COLORS.get(fuel, MUTED)
+            show = fuel not in legend_shown
+            legend_shown.add(fuel)
+            if fuel == "Net Imports":
+                pos = np.maximum(values, 0)
+                neg = np.minimum(values, 0)
+                if pos.any():
+                    fig.add_trace(go.Scatter(
+                        x=x, y=pos / 1000, mode="lines",
+                        stackgroup=f"{stack_id}-pos",
+                        line=dict(width=0.3, color=color),
+                        fillcolor=color,
+                        name=fuel, legendgroup=fuel, showlegend=show,
+                        hovertemplate=f"{fuel}: %{{customdata:.0f}} MW<extra></extra>",
+                        customdata=pos,
+                    ), row=row, col=col)
+                if neg.any():
+                    show_neg = (fuel not in legend_shown or not pos.any()) and show
+                    fig.add_trace(go.Scatter(
+                        x=x, y=neg / 1000, mode="lines",
+                        stackgroup=f"{stack_id}-neg",
+                        line=dict(width=0.3, color=color),
+                        fillcolor=color,
+                        name=fuel, legendgroup=fuel, showlegend=show_neg,
+                        hovertemplate=f"{fuel}: %{{customdata:.0f}} MW<extra></extra>",
+                        customdata=neg,
+                    ), row=row, col=col)
+            else:
+                fig.add_trace(go.Scatter(
+                    x=x, y=values / 1000, mode="lines",
+                    stackgroup=f"{stack_id}-pos",
+                    line=dict(width=0.3, color=color),
+                    fillcolor=color,
+                    name=fuel, legendgroup=fuel, showlegend=show,
+                    hovertemplate=f"{fuel}: %{{customdata:.0f}} MW<extra></extra>",
+                    customdata=values,
+                ), row=row, col=col)
+
+    add_area(ty_data, row=1, col=1, stack_id="ty")
+    add_area(ly_data, row=1, col=2, stack_id="ly")
+
+    # Price comparison — TY vs LY (both demand-weighted) + average dashed lines
+    times_ly = ly_data.index.tolist()
+    ty_price_vals = ty_prices.reindex(times).fillna(method="ffill").values
+    ly_price_vals = ly_prices.reindex(times_ly).fillna(method="ffill").values
+    ty_avg = float(np.nanmean(ty_price_vals)) if len(ty_price_vals) else 0
+    ly_avg = float(np.nanmean(ly_price_vals)) if len(ly_price_vals) else 0
+    fig.add_trace(go.Scatter(
+        x=list(range(len(times))), y=ty_price_vals,
+        mode="lines+markers", name=f"This year (avg ${ty_avg:.0f})",
+        line=dict(color="#205EA6", width=2.5),
+        marker=dict(size=6),
+        showlegend=True, legendgroup="price-ty",
+        hovertemplate="This year: $%{y:.0f}/MWh<extra></extra>",
+    ), row=2, col=1)
+    fig.add_trace(go.Scatter(
+        x=list(range(len(times_ly))), y=ly_price_vals,
+        mode="lines+markers", name=f"Prior year (avg ${ly_avg:.0f})",
+        line=dict(color="#A02F6F", width=2.5, dash="dash"),
+        marker=dict(size=6),
+        showlegend=True, legendgroup="price-ly",
+        hovertemplate="Prior year: $%{y:.0f}/MWh<extra></extra>",
+    ), row=2, col=1)
+    # Average reference lines through the peak window — value-annotated below.
+    # NB: the actual add_annotation calls happen AFTER the layout block,
+    # because update_annotations(font=...) there clobbers every annotation's
+    # font settings if we add them first.
+    fig.add_hline(y=ty_avg, line=dict(color="#205EA6", width=1, dash="dot"),
+                  opacity=0.7, row=2, col=1)
+    fig.add_hline(y=ly_avg, line=dict(color="#A02F6F", width=1, dash="dot"),
+                  opacity=0.7, row=2, col=1)
+
+    # Waterfall — average MW change per fuel
+    fuels_present = [f for f in EP_FUEL_ORDER
+                     if f in ty_data.columns or f in ly_data.columns]
+    fuel_labels = []
+    fuel_deltas = []
+    # NB: use distinct local names — earlier in this function `ty_avg`/`ly_avg`
+    # hold the period-average *prices* used by the avg-price annotations below.
+    # Shadowing them here caused the labels to display the last fuel's mean MW.
+    for fuel in fuels_present:
+        ty_fuel_mw = ty_data[fuel].mean() if fuel in ty_data.columns else 0
+        ly_fuel_mw = ly_data[fuel].mean() if fuel in ly_data.columns else 0
+        delta = ty_fuel_mw - ly_fuel_mw
+        if abs(delta) < 1:  # < 1 MW change, suppress
+            continue
+        fuel_labels.append(fuel)
+        fuel_deltas.append(delta)
+    measures = ["relative"] * len(fuel_deltas) + ["total"]
+    fuel_labels.append("Net change")
+    fuel_deltas.append(sum(fuel_deltas))
+    fig.add_trace(go.Waterfall(
+        x=fuel_labels, y=fuel_deltas, measure=measures,
+        increasing=dict(marker=dict(color="#66800B")),
+        decreasing=dict(marker=dict(color="#AF3029")),
+        totals=dict(marker=dict(color="#5E409D")),
+        textposition="outside",
+        text=[f"{int(round(v)):+,d}" for v in fuel_deltas],
+        cliponaxis=False,
+        hovertemplate="%{x}: %{y:+,.0f} MW<extra></extra>",
+        showlegend=False,
+    ), row=2, col=2)
+    # Compute the running cumulative range so we can give the y-axis enough
+    # headroom for the outside text labels. Without this the +X labels above
+    # the tallest bars crowd the subplot title.
+    running = 0.0
+    cum_max = 0.0
+    cum_min = 0.0
+    for v in fuel_deltas[:-1]:        # exclude the explicit "total" entry
+        running += v
+        cum_max = max(cum_max, running)
+        cum_min = min(cum_min, running)
+    cum_max = max(cum_max, fuel_deltas[-1])
+    cum_min = min(cum_min, fuel_deltas[-1])
+    pad = max(abs(cum_max), abs(cum_min)) * 0.25
+    wf_y_range = [cum_min - pad, cum_max + pad]
+
+    fig.update_layout(
+        paper_bgcolor=PAPER, plot_bgcolor=PAPER,
+        height=820, margin=dict(l=48, r=12, t=50, b=72),
+        legend=dict(orientation="h", yanchor="top", y=-0.05,
+                    xanchor="center", x=0.5, font=dict(size=10),
+                    bgcolor=PAPER),
+    )
+    fig.update_annotations(font=dict(size=12, color=INK))
+
+    # Format axes
+    tick_positions = list(range(len(times)))
+    tick_labels = times  # "17:00", "17:30", ..., "21:30"
+    for r in (1, 2):
+        if r == 1:
+            for c in (1, 2):
+                fig.update_xaxes(showgrid=False, tickfont=dict(size=10, color=MUTED),
+                                 tickmode="array", tickvals=tick_positions, ticktext=tick_labels,
+                                 row=r, col=c)
+                fig.update_yaxes(showgrid=False, tickfont=dict(size=10, color=MUTED),
+                                 title=dict(text="GW", font=dict(size=10, color=MUTED)),
+                                 range=[0, y_cap_gw], row=r, col=c)
+    fig.update_xaxes(showgrid=False, tickfont=dict(size=10, color=MUTED),
+                     tickmode="array", tickvals=tick_positions, ticktext=tick_labels,
+                     row=2, col=1)
+    fig.update_yaxes(showgrid=False, tickfont=dict(size=10, color=MUTED),
+                     title=dict(text="$/MWh", font=dict(size=10, color=MUTED)),
+                     row=2, col=1)
+    fig.update_xaxes(showgrid=False, tickfont=dict(size=10, color=MUTED),
+                     row=2, col=2)
+    fig.update_yaxes(showgrid=False, tickfont=dict(size=10, color=MUTED),
+                     title=dict(text="MW change", font=dict(size=10, color=MUTED)),
+                     zeroline=True, zerolinecolor=BORDER, zerolinewidth=1,
+                     range=wf_y_range,
+                     row=2, col=2)
+
+    # Add the avg-price labels NOW (after update_annotations) so their custom
+    # colours survive. Use data coords + row/col so Plotly resolves the right
+    # subplot. Production's matplotlib version puts the label at the last
+    # x-position with a small y offset so it sits ON the dashed reference line.
+    last_x = len(times) - 1
+    fig.add_annotation(
+        text=f"This year avg ${ty_avg:.0f}",
+        x=last_x, y=ty_avg,
+        xanchor="right", yanchor="top",   # below the TY line
+        font=dict(color="#205EA6", size=11, family=PLOTLY_FONT["family"]),
+        bgcolor=PAPER, showarrow=False,
+        row=2, col=1,
+    )
+    fig.add_annotation(
+        text=f"Prior year avg ${ly_avg:.0f}",
+        x=last_x, y=ly_avg,
+        xanchor="right", yanchor="bottom",  # above the LY line
+        font=dict(color="#A02F6F", size=11, family=PLOTLY_FONT["family"]),
+        bgcolor=PAPER, showarrow=False,
+        row=2, col=1,
+    )
+
+    title = f"Evening peak (17:00–22:00) · {rd} · {period_days} days"
+    div_id = f"plot-ep-{int(datetime.now().timestamp() * 1000)}"
+    fig_json = _plot_json(fig)
+
+    # ---- Second card: 100% stacked bar — one bar per period ---------------
+    # Aggregate the whole peak window into a single number per fuel per period,
+    # then express as % of positive-only total. Two bars side-by-side gives a
+    # cleaner at-a-glance comparison than two stacked-area charts.
+    def _fuel_pct(data_df):
+        pos = {f: float(data_df[f].clip(lower=0).mean())
+               for f in EP_FUEL_ORDER if f in data_df.columns}
+        tot = sum(pos.values())
+        return {f: (v / tot * 100 if tot > 0 else 0) for f, v in pos.items()}
+
+    ty_pct = _fuel_pct(ty_data)
+    ly_pct = _fuel_pct(ly_data)
+    pct_categories = ["This year", "Prior year"]
+
+    pct_fig = go.Figure()
+    for fuel in EP_FUEL_ORDER:
+        ty_v = ty_pct.get(fuel, 0)
+        ly_v = ly_pct.get(fuel, 0)
+        if ty_v == 0 and ly_v == 0:
+            continue
+        color = EP_FUEL_COLORS.get(fuel, MUTED)
+        # Label segment with % when it's wide enough to fit; otherwise leave blank
+        # and let the hover/legend identify it.
+        pct_fig.add_trace(go.Bar(
+            x=pct_categories, y=[ty_v, ly_v],
+            name=fuel,
+            marker=dict(color=color),
+            text=[(f"{ty_v:.0f}%" if ty_v >= 3 else ""),
+                  (f"{ly_v:.0f}%" if ly_v >= 3 else "")],
+            textposition="inside",
+            insidetextanchor="middle",
+            textfont=dict(color="white", size=11),
+            hovertemplate=f"{fuel}: %{{y:.1f}}%<extra></extra>",
+        ))
+
+    pct_fig.update_layout(
+        barmode="stack",
+        bargap=0.55,
+        paper_bgcolor=PAPER, plot_bgcolor=PAPER,
+        height=400, margin=dict(l=48, r=12, t=12, b=44),
+        legend=dict(orientation="h", yanchor="top", y=-0.06,
+                    xanchor="center", x=0.5, font=dict(size=10),
+                    bgcolor=PAPER),
+        xaxis=dict(showgrid=False, tickfont=dict(size=13, color=INK)),
+        yaxis=dict(showgrid=False, tickfont=dict(size=10, color=MUTED),
+                   range=[0, 100], ticksuffix="%",
+                   title=dict(text="% of generation",
+                              font=dict(size=10, color=MUTED))),
+    )
+    pct_div = f"plot-eppct-{int(datetime.now().timestamp() * 1000)}-2"
+    pct_json = _plot_json(pct_fig)
+
+    return (
+        '<div class="prices-stack">'
+        + '<div class="card">'
+        + _card_h3(title)
+        + f'<div id="{div_id}" style="height:820px"></div>'
+        + f'<script>(function(){{var f={fig_json};'
+        f'Plotly.newPlot("{div_id}",f.data,f.layout,{PLOTLY_CFG});}})();</script>'
+        + f'<p style="color:{MUTED};font-size:11px;margin:8px 14px 0;line-height:1.5">'
+        + 'Top: average MW per fuel for each 30-min interval of the evening peak window. '
+        + 'Bottom left: demand-weighted price by time of day (this year vs the same window '
+        + 'one year ago, with dashed average-reference lines). Bottom right: change in '
+        + 'average MW per fuel (positive = more this year). All averages over the selected '
+        + 'number of days.'
+        + '</p>'
+        + '</div>'
+        + '<div class="card">'
+        + _card_h3(f"% composition · this year vs prior year")
+        + f'<div id="{pct_div}" style="height:400px"></div>'
+        + f'<script>(function(){{var f={pct_json};'
+        f'Plotly.newPlot("{pct_div}",f.data,f.layout,{PLOTLY_CFG});}})();</script>'
+        + f'<p style="color:{MUTED};font-size:11px;margin:8px 14px 0;line-height:1.5">'
+        + 'Each bar sums to 100% of positive generation across the whole evening peak '
+        + 'window. Segments labelled in-place when wide enough; hover for exact values.'
+        + '</p>'
+        + '</div>'
+        + '</div>'
+    )
+
+
+@app.get("/evening-peak", response_class=HTMLResponse)
+def evening_peak_page(request: Request,
+                      region: str = "NEM",
+                      range: str = "30d",
+                      start: str | None = None,
+                      end: str | None = None) -> HTMLResponse:
+    if region not in EVENING_PEAK_REGION_LIST:
+        region = "NEM"
+    valid_ranges = {slug for slug, _ in RANGE_OPTIONS} | {"custom"}
+    if range not in valid_ranges:
+        range = "30d"
+
+    base_params = {"region": region, "range": range}
+    if start: base_params["start"] = start
+    if end:   base_params["end"] = end
+    base_url = "/evening-peak"
+    selectors = _render_selector_strip(
+        _render_region_pills(base_url, region,
+                             {k: v for k, v in base_params.items() if k != "region"},
+                             regions=EVENING_PEAK_REGION_LIST),
+        _render_range_pills(base_url, range,
+                            {k: v for k, v in base_params.items()
+                             if k not in ("range", "start", "end")},
+                            start=start or "", end=end or ""),
+    )
+    content = _evening_peak_content(region, range, start, end)
+    body = _render_tab_body("", selectors + content)
+    if _is_htmx(request):
+        return HTMLResponse(body)
+    return HTMLResponse(_render_shell(body))
+
+
+# ----------------------------------------------------------------------------
 # Flat placeholder routes for the remaining tabs (anything not Today or Prices)
 # ----------------------------------------------------------------------------
 
@@ -1274,7 +2984,7 @@ def _make_flat_route(slug: str, label: str):
 
 
 for _slug, _label, _subs in TABS:
-    if _slug in ("today", "prices") or _subs:
+    if _slug in ("today", "prices", "generation-mix", "evening-peak") or _subs:
         continue
     _make_flat_route(_slug, _label)
 
@@ -2230,15 +3940,14 @@ def _wrap_plot_with_extras(slug: str, title: str, fig: go.Figure,
                            extras: str = "", extras_before: str = "") -> HTMLResponse:
     # Unique div id per render so concurrent tiles never collide.
     div_id = f"plot-{slug}-{int(datetime.now().timestamp() * 1000)}"
-    fig_json = fig.to_json()
+    fig_json = _plot_json(fig)
     height = fig.layout.height or 200
     return HTMLResponse(_card_h3(title) + extras_before + f"""
       <div id="{div_id}" style="height:{height}px"></div>
       <script>
         (function() {{
           var f = {fig_json};
-          Plotly.newPlot("{div_id}", f.data, f.layout,
-                         {{displayModeBar: false, responsive: true}});
+          Plotly.newPlot("{div_id}", f.data, f.layout, {PLOTLY_CFG});
         }})();
       </script>
     """ + extras)
