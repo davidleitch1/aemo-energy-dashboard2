@@ -17,7 +17,8 @@ from aemo_dashboard.shared.smoothing import apply_ewm_smoothing
 from aemo_dashboard.shared.fuel_categories import (
     RENEWABLE_FUELS,
     THERMAL_FUELS,
-    EXCLUDED_FROM_GENERATION
+    EXCLUDED_FROM_GENERATION,
+    MAIN_ROOFTOP_REGIONS,
 )
 from aemo_dashboard.generation.generation_query_manager import GenerationQueryManager
 from aemo_dashboard.shared.config import Config
@@ -281,6 +282,12 @@ class PenetrationTab:
             df = df[(df['settlementdate'] >= start_date) & (df['settlementdate'] <= end_date)]
 
             if 'regionid' in df.columns:
+                # rooftop30 pre-2026 contained sub-region IDs
+                # (QLDC/QLDN/QLDS/TASN/TASS) alongside the 5 parents — pivoting
+                # then summing across columns for NEM aggregation double-counts
+                # QLD and TAS. Filter to MAIN_ROOFTOP_REGIONS first
+                # (single source of truth shared with rooftop_adapter.py).
+                df = df[df['regionid'].isin(MAIN_ROOFTOP_REGIONS)]
                 df_wide = df.pivot(
                     index='settlementdate',
                     columns='regionid',
