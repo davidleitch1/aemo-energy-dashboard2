@@ -4118,6 +4118,7 @@ def _pivot_content(g_dims: list[str], cols: list[str], range_slug: str,
     dataTreeExpandElement: '<span style="color:#24837b;cursor:pointer;margin-right:4px;font-weight:700">▸</span>',
     dataTreeChildIndent: 0,
     layout: "fitColumns",
+    layoutColumnsOnNewData: true,
     height: "calc(100vh - 280px)",
     columns: {col_defs_str},
     rowClick: function (e, row) {{
@@ -4152,6 +4153,20 @@ def _pivot_content(g_dims: list[str], cols: list[str], range_slug: str,
         + '&middot; ' + (d.n_items || 0) + ' DUIDs.</p>'
         + '</div>';
     }},
+  }});
+
+  // HTMX swaps the body into the DOM and then runs this <script> synchronously.
+  // At that moment the browser may not have done a layout pass yet, so
+  // Tabulator's fitColumns measures the wrong container width and the header
+  // row wraps. Forcing a redraw on the next animation frame fixes it.
+  table.on("tableBuilt", function () {{
+    requestAnimationFrame(function () {{
+      try {{ table.redraw(true); }} catch (e) {{ /* swallow */ }}
+    }});
+  }});
+  // Belt-and-braces: redraw again on window resize.
+  window.addEventListener("resize", function () {{
+    try {{ table.redraw(true); }} catch (e) {{}}
   }});
 }})();
 </script>
