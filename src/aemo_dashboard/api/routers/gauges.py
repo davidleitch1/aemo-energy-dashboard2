@@ -131,20 +131,27 @@ def _load_demand(conn) -> dict:
 def _load_renewable(conn) -> dict:
     regs = "('" + "','".join(REGIONS_5) + "')"
 
+    # Direct query on scada5 + duid_mapping rather than the
+    # generation_by_fuel_5min view. The view pre-aggregates across all
+    # history before the WHERE filter (~1.7 s on cold cache); the direct
+    # table query with the WHERE clause inside scada5 finishes in ~20 ms.
+    # Fuel labels come from duid_mapping.fuel and match the view's
+    # fuel_type strings (Water/Wind/Solar/Battery Storage/etc).
     rows = conn.execute(f"""
-        WITH latest AS (
-            SELECT MAX(settlementdate) AS ts FROM generation_by_fuel_5min
-            WHERE region IN {regs}
-        )
-        SELECT fuel_type, SUM(total_generation_mw)
-        FROM generation_by_fuel_5min, latest
-        WHERE settlementdate = latest.ts AND region IN {regs}
-        GROUP BY fuel_type
+        WITH latest AS (SELECT MAX(settlementdate) AS ts FROM scada5)
+        SELECT d.fuel, SUM(s.scadavalue)
+          FROM scada5 s
+          JOIN duid_mapping d ON s.duid = d.duid, latest
+         WHERE s.settlementdate = latest.ts
+           AND d.region IN {regs}
+         GROUP BY d.fuel
     """).fetchall()
 
     fuel_mw = {f: float(mw or 0.0) for f, mw in rows}
 
-    latest_ts_row = conn.execute("SELECT MAX(settlementdate) FROM generation_by_fuel_5min").fetchone()
+    latest_ts_row = conn.execute(
+        "SELECT MAX(settlementdate) FROM scada5"
+    ).fetchone()
     latest_ts = latest_ts_row[0] if latest_ts_row else None
 
     # Pull rooftop at the most-recent 30-min bucket on/before latest_ts.
