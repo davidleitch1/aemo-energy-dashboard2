@@ -165,8 +165,12 @@ TABS = [
                                               ("bands",    "Price Bands")]),
     ("batteries",        "Batteries",        []),  # moved
     ("futures",          "Futures",          []),  # moved
-    ("pivot-table",      "Pivot table",      []),
-    ("station-analysis", "Station Analysis", []),
+    ("generators",       "Generators",       []),
+    # Station Analysis is no longer in the top nav. The pivot table /
+    # Generators page is the directory; clicking a DUID/station drills
+    # into /station-analysis?duid=X — that URL still works as a deep
+    # link, bookmark, and share target, but it's not advertised as a
+    # standalone destination.
     # "Trends" removed from the top nav — it's now a subtab of Generation mix
     # at /generation-mix/trends. Bookmarks to /trends redirect via the
     # legacy_trends_redirect handler below.
@@ -362,6 +366,214 @@ h1 .brand { color: var(--teal); }
 """
 
 
+# Tabulator overrides for the pivot table. Loaded once in the shell so they
+# persist across HTMX body swaps. Scoped to #pivot-tabulator so they don't
+# bleed into any future Tabulator instance on other pages.
+PIVOT_TABULATOR_CSS = """
+#pivot-tabulator .tabulator {
+  background: #fffcf0; font-family: Inter, sans-serif;
+  border: 1px solid #e6e4d9; border-radius: 6px;
+}
+#pivot-tabulator .tabulator-header {
+  background: #e6e4d9; color: #100f0f;
+  border-bottom: 1px solid #e6e4d9;
+}
+#pivot-tabulator .tabulator-col {
+  background: #e6e4d9;
+  font-size: 11px; text-transform: uppercase;
+  letter-spacing: 0.4px; color: #100f0f; font-weight: 600;
+}
+#pivot-tabulator .tabulator-row {
+  background: #fffcf0; color: #100f0f;
+  border-bottom: 1px solid #f0eedf;
+  font-size: 13px;
+}
+#pivot-tabulator .tabulator-row.tabulator-row-even { background: #f7f5e8; }
+#pivot-tabulator .tabulator-row:hover { background: #ece9d5; cursor: pointer; }
+#pivot-tabulator .pivot-group-label { font-weight: 600; color: #100f0f; }
+#pivot-tabulator .pivot-station-label { color: #100f0f; }
+#pivot-tabulator .pivot-duid-label {
+  color: #878580; font-family: ui-monospace, Menlo, monospace; font-size: 12px;
+}
+/* Drill-down cue: underline + teal on hover for the anchors wrapped around
+   DUID, station, and group names. Soft chevron is appended in the cell
+   formatter. */
+#pivot-tabulator a.pivot-duid-label,
+#pivot-tabulator a.pivot-station-label,
+#pivot-tabulator a.pivot-group-label {
+  border-bottom: 1px solid transparent;
+  transition: color 0.1s, border-color 0.1s;
+}
+#pivot-tabulator a.pivot-duid-label:hover,
+#pivot-tabulator a.pivot-station-label:hover,
+#pivot-tabulator a.pivot-group-label:hover {
+  color: #24837b;
+  border-bottom-color: #24837b;
+}
+#pivot-tabulator .pivot-chev { color: #c7c5b8; font-size: 11px; margin-left: 4px; }
+#pivot-tabulator a:hover .pivot-chev { color: #24837b; }
+#pivot-tabulator .pivot-n { color: #878580; font-size: 11px; margin-left: 6px; }
+#pivot-selection-plot { margin-top: 12px; }
+"""
+
+# Pivot-table Tabulator builder. Lives in the shell so HTMX swaps just emit
+# a container + a pair of globals (window._pivotData, window._pivotCols).
+# The `htmx:afterSettle` event fires AFTER the browser has done layout
+# on the new body, so the container's measured width is real — fixing
+# the column-stacking bug that happened when Tabulator initialised
+# from an inline script in the still-being-laid-out swap.
+PIVOT_TABULATOR_JS = r"""
+(function () {
+  function _pivotLabelFmt(cell) {
+    var row = cell.getRow();
+    var d = row.getData();
+    var depth = 0;
+    var p = row.getTreeParent();
+    while (p) { depth++; p = p.getTreeParent(); }
+    var indent = (depth * 16) + "px";
+    var name = d.label || "";
+    var cls = d.kind === "duid" ? "pivot-duid-label"
+            : d.kind === "station" ? "pivot-station-label"
+            : "pivot-group-label";
+    var meta = (d.kind !== "duid" && d.n_items)
+             ? '<span class="pivot-n">(' + d.n_items + ')</span>'
+             : '';
+    // DUID + Station rows wrap the name in an <a> so the browser navigates
+    // natively. This sidesteps rowClick / dataTree event-handling quirks
+    // and gets middle-click / ctrl-click "open in new tab" for free. We
+    // append the pivot's current range so the station view shows the same
+    // window the user was inspecting.
+    var rangeQs = "";
+    if (window._pivotRange) {
+      rangeQs += "&range=" + encodeURIComponent(window._pivotRange);
+      if (window._pivotRange === "custom") {
+        if (window._pivotStart)
+          rangeQs += "&start=" + encodeURIComponent(window._pivotStart);
+        if (window._pivotEnd)
+          rangeQs += "&end=" + encodeURIComponent(window._pivotEnd);
+      }
+    }
+    var chev = '<span class="pivot-chev">›</span>';
+    if (d.kind === "duid") {
+      var key = (d.ctx && d.ctx.duid) || name;
+      return '<span style="padding-left:' + indent + '">'
+           + '<a href="/station-analysis?duid=' + encodeURIComponent(key)
+           +    rangeQs + '" '
+           +    'class="' + cls + '" style="text-decoration:none;'
+           +    'color:inherit">' + name + chev + '</a></span>';
+    }
+    if (d.kind === "station") {
+      var key = (d.ctx && d.ctx.station) || name;
+      return '<span style="padding-left:' + indent + '">'
+           + '<a href="/station-analysis?station=' + encodeURIComponent(key)
+           +    rangeQs + '" '
+           +    'class="' + cls + '" style="text-decoration:none;'
+           +    'color:inherit">' + name + chev + '</a>' + meta + '</span>';
+    }
+    // Group rows (Coal, NSW1, Pacific Hydro, etc.): build a fleet filter
+    // URL from the row's context. ctx carries whichever dims are in scope
+    // at this depth — outer groups have one filter, inner groups have more.
+    if (d.kind === "group") {
+      var ctx = d.ctx || {};
+      var groupQs = "";
+      if (ctx.fuel)   groupQs += "&fuel="   + encodeURIComponent(ctx.fuel);
+      if (ctx.region) groupQs += "&region=" + encodeURIComponent(ctx.region);
+      if (ctx.owner)  groupQs += "&owner="  + encodeURIComponent(ctx.owner);
+      // Strip leading & — query string starts with "?".
+      if (groupQs) groupQs = "?" + groupQs.slice(1) + rangeQs;
+      return '<span style="padding-left:' + indent + '">'
+           + '<a href="/station-analysis' + groupQs + '" '
+           +    'class="' + cls + '" style="text-decoration:none;'
+           +    'color:inherit">' + name + chev + '</a>' + meta + '</span>';
+    }
+    return '<span style="padding-left:' + indent + '" class="' + cls + '">'
+         + name + meta + '</span>';
+  }
+  function _pivotIntDashFmt(cell) {
+    var v = cell.getValue();
+    if (v === null || v === undefined)
+      return '<span style="color:#878580">—</span>';
+    return Math.round(v).toLocaleString('en-AU');
+  }
+
+  function _buildPivotColumns(selectedCols) {
+    var num = {hozAlign: "right", headerHozAlign: "right"};
+    var intMoney = {formatter: "money",
+                    formatterParams: {precision: 0, thousand: ","}};
+    var cols = [{
+      title: "Name", field: "label", frozen: true,
+      minWidth: 260, widthGrow: 2, headerSort: false,
+      formatter: _pivotLabelFmt,
+    }];
+    if (selectedCols.indexOf("gwh") !== -1)
+      cols.push(Object.assign({title: "GWh", field: "gen_gwh", minWidth: 80,
+                               headerSort: true}, num, intMoney));
+    if (selectedCols.indexOf("rev") !== -1)
+      cols.push(Object.assign({title: "Rev $M", field: "rev_m", minWidth: 80,
+                               headerSort: true}, num, intMoney));
+    if (selectedCols.indexOf("price") !== -1)
+      cols.push(Object.assign({title: "$/MWh", field: "price", minWidth: 80,
+                               headerSort: true,
+                               formatter: _pivotIntDashFmt}, num));
+    if (selectedCols.indexOf("util") !== -1)
+      cols.push(Object.assign({title: "Util %", field: "util", minWidth: 80,
+                               headerSort: true,
+                               formatter: _pivotIntDashFmt}, num));
+    if (selectedCols.indexOf("cap") !== -1)
+      cols.push(Object.assign({title: "Cap MW", field: "cap_mw", minWidth: 80,
+                               headerSort: true}, num, intMoney));
+    return cols;
+  }
+
+  function buildPivotTable() {
+    var container = document.getElementById("pivot-tabulator");
+    if (!container) {
+      // Page is not the pivot tab; clean up any prior instance.
+      if (window._pivotTable) {
+        try { window._pivotTable.destroy(); } catch (e) {}
+        window._pivotTable = null;
+      }
+      return;
+    }
+    if (!window._pivotData || !window._pivotCols) return;
+    if (typeof Tabulator === "undefined") {
+      // Tabulator JS hasn't loaded yet — retry after one more frame.
+      requestAnimationFrame(buildPivotTable);
+      return;
+    }
+    if (window._pivotTable) {
+      try { window._pivotTable.destroy(); } catch (e) {}
+      window._pivotTable = null;
+    }
+    window._pivotTable = new Tabulator("#pivot-tabulator", {
+      data: window._pivotData,
+      dataTree: true,
+      dataTreeStartExpanded: false,
+      dataTreeBranchElement: '<span style="color:#878580;margin-right:4px">│</span>',
+      dataTreeCollapseElement: '<span style="color:#24837b;cursor:pointer;margin-right:4px;font-weight:700">▾</span>',
+      dataTreeExpandElement: '<span style="color:#24837b;cursor:pointer;margin-right:4px;font-weight:700">▸</span>',
+      dataTreeChildIndent: 0,
+      layout: "fitColumns",
+      layoutColumnsOnNewData: true,
+      height: "calc(100vh - 280px)",
+      columns: _buildPivotColumns(window._pivotCols),
+      // No rowClick handler — every clickable name (DUID, station, group)
+      // is an <a> in the cell formatter, so clicks navigate natively.
+    });
+  }
+
+  window._buildPivotTable = buildPivotTable;
+  document.addEventListener("htmx:afterSettle", buildPivotTable);
+  document.addEventListener("DOMContentLoaded", buildPivotTable);
+  window.addEventListener("resize", function () {
+    if (window._pivotTable) {
+      try { window._pivotTable.redraw(true); } catch (e) {}
+    }
+  });
+})();
+"""
+
+
 def _render_tab_nav() -> str:
     """Top-level nav. The .active class is applied client-side based on URL
     so the nav HTML itself doesn't change per tab — keeps it cacheable."""
@@ -403,7 +615,13 @@ def _render_tab_body(subtab_html: str, content_html: str) -> str:
 
 def _render_shell(body_html: str) -> str:
     """Full HTML doc for direct navigation / refresh. The tab-nav and the
-    tiny activate-on-URL JS handle the active state without server help."""
+    tiny activate-on-URL JS handle the active state without server help.
+
+    Tabulator CSS+JS load here (not inside swapped content) so they persist
+    across HTMX swaps. The Generators page only emits a container div + a
+    pair of globals; the shell-level builder runs on `htmx:afterSettle`
+    (i.e. AFTER the browser has done a layout pass), eliminating the
+    fitColumns-measures-zero-width bug that was wrapping the column titles."""
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -412,9 +630,12 @@ def _render_shell(body_html: str) -> str:
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://unpkg.com/tabulator-tables@6.3.1/dist/css/tabulator_simple.min.css" rel="stylesheet">
   <script src="https://unpkg.com/htmx.org@2.0.4"></script>
   <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+  <script src="https://unpkg.com/tabulator-tables@6.3.1/dist/js/tabulator.min.js"></script>
   <style>{SHELL_CSS}</style>
+  <style>{PIVOT_TABULATOR_CSS}</style>
 </head>
 <body>
   <header>
@@ -426,6 +647,7 @@ def _render_shell(body_html: str) -> str:
   </header>
   {_render_tab_nav()}
   <div id="tab-body">{body_html}</div>
+  <script>{PIVOT_TABULATOR_JS}</script>
   <script>
     function updateActiveTab() {{
       const path = window.location.pathname;
@@ -647,7 +869,7 @@ def _render_gas_range_pills(base_url: str, active: str,
             f'</div>')
 
 
-# ── Pivot table helpers ─────────────────────────────────────────────────────
+# ── Generators (pivot) helpers ──────────────────────────────────────────────
 # Three ordered group-slots over three dims (Region/Fuel/Owner). Station is
 # always implicit between innermost chosen group and DUID. Range pills lift
 # from the standard set but drop sub-day windows — 30-min data, daily totals.
@@ -837,11 +1059,17 @@ def _render_pivot_fuel_pills(base_url: str, active_fuels: list[str],
 
 
 def _render_range_pills(base_url: str, active: str, other_params: dict,
-                        start: str = "", end: str = "") -> str:
+                        start: str = "", end: str = "",
+                        options: list[tuple[str, str]] | None = None) -> str:
     """Preset range pills + a Custom pill. When range=custom, the date form
-    renders inline next to the pills so the user can refine the window."""
+    renders inline next to the pills so the user can refine the window.
+
+    `options` lets a caller override the default RANGE_OPTIONS list (used by
+    the station-analysis tab to expose 90D/5Y so its pills line up with the
+    pivot's range set)."""
     pills = []
-    for slug, label in RANGE_OPTIONS:
+    opts = options if options is not None else RANGE_OPTIONS
+    for slug, label in opts:
         # Preset click drops any custom start/end.
         params = {k: v for k, v in other_params.items() if k not in ("start", "end")}
         params["range"] = slug
@@ -3783,7 +4011,7 @@ def gas_page(request: Request,
 
 
 # ----------------------------------------------------------------------------
-# /pivot-table — multi-level grouped Tabulator over DUID aggregates
+# /generators — multi-level grouped Tabulator over DUID aggregates
 # ----------------------------------------------------------------------------
 #
 # Query goes always to 30-min data, joins generation_30min × prices_30min ×
@@ -3972,7 +4200,7 @@ def _pivot_content(g_dims: list[str], cols: list[str], range_slug: str,
     if not fuels_raw:
         # Empty fuel filter ⇒ no data; bail with a friendly card.
         return ('<div class="prices-stack"><div class="card">'
-                + _card_h3("Pivot table")
+                + _card_h3("Generators")
                 + '<p style="padding:14px;color:#878580">'
                   'No fuels selected.</p>'
                 + '</div></div>')
@@ -3980,7 +4208,7 @@ def _pivot_content(g_dims: list[str], cols: list[str], range_slug: str,
     df = _pivot_query(s_ts, e_ts, regions, fuels_raw)
     if df.empty:
         return ('<div class="prices-stack"><div class="card">'
-                + _card_h3(f"Pivot table &middot; {range_label}")
+                + _card_h3(f"Generators &middot; {range_label}")
                 + '<p style="padding:14px;color:#878580">'
                   f'No generation data for the selected window '
                   f'({s_ts:%d %b %Y} → {e_ts:%d %b %Y}).</p>'
@@ -3988,206 +4216,59 @@ def _pivot_content(g_dims: list[str], cols: list[str], range_slug: str,
 
     tree = _build_pivot_tree(df, g_dims, hours)
 
-    # Column definitions for Tabulator. Always show the Name column;
-    # remaining columns gated by the column-toggle pills. Units live in the
-    # header label so the cells stay plain numbers (whole, comma-grouped).
-    col_defs = [
-        '{title:"Name", field:"label", frozen:true, '
-        ' minWidth:260, widthGrow:2, headerSort:false,'
-        ' formatter:_pivotLabelFmt}',
-    ]
-    int_money = ('formatter:"money", '
-                 'formatterParams:{precision:0, thousand:","}')
-    # Numeric columns: cells AND header right-aligned (House style).
-    num_axes = 'hozAlign:"right", headerHozAlign:"right",'
-    if "gwh" in cols:
-        col_defs.append(
-            '{title:"GWh", field:"gen_gwh", '
-            f' {num_axes}'
-            ' minWidth:80, headerSort:true,'
-            f' {int_money}}}')
-    if "rev" in cols:
-        col_defs.append(
-            '{title:"Rev $M", field:"rev_m", '
-            f' {num_axes}'
-            ' minWidth:80, headerSort:true,'
-            f' {int_money}}}')
-    if "price" in cols:
-        col_defs.append(
-            '{title:"$/MWh", field:"price", '
-            f' {num_axes}'
-            ' minWidth:80, headerSort:true,'
-            ' formatter:_pivotIntDashFmt}')
-    if "util" in cols:
-        col_defs.append(
-            '{title:"Util %", field:"util", '
-            f' {num_axes}'
-            ' minWidth:80, headerSort:true,'
-            ' formatter:_pivotIntDashFmt}')
-    if "cap" in cols:
-        col_defs.append(
-            '{title:"Cap MW", field:"cap_mw", '
-            f' {num_axes}'
-            ' minWidth:80, headerSort:true,'
-            f' {int_money}}}')
-
-    col_defs_str = "[" + ",\n".join(col_defs) + "]"
-
     title_chain = " → ".join(
         dict(PIVOT_DIMS)[d] for d in g_dims) or "—"
-    n_rows = len(df)
     n_duids = df["duid"].nunique()
     n_stations = df["station_name"].nunique()
     subtitle = (f"{title_chain} → Station → DUID &middot; "
                 f"{n_stations:,} stations / {n_duids:,} DUIDs &middot; "
                 f"{range_label} ({s_ts:%d %b %Y} → {e_ts:%d %b %Y})")
 
+    # The shell's PIVOT_TABULATOR_JS owns the construction (timed off
+    # htmx:afterSettle so layout is done). We just stash the data + the
+    # column-toggle selection as globals and emit the container shells;
+    # the shell handler picks them up.
     tree_json = json.dumps(tree, default=lambda v: None)
+    cols_json = json.dumps(cols)
+
+    # Carry the current pivot range/start/end to the cell formatter so the
+    # anchors point at /station-analysis with the same window — the user
+    # doesn't lose their place when they drill in.
+    range_q = json.dumps(range_slug)
+    start_q = json.dumps(start or "")
+    end_q   = json.dumps(end or "")
 
     table_html = f"""
-<link href="https://unpkg.com/tabulator-tables@6.3.1/dist/css/tabulator_simple.min.css" rel="stylesheet">
-<script src="https://unpkg.com/tabulator-tables@6.3.1/dist/js/tabulator.min.js"></script>
-<style>
-  #pivot-tabulator .tabulator {{
-    background: {PAPER}; font-family: Inter, sans-serif;
-    border: 1px solid {BORDER}; border-radius: 6px;
-  }}
-  #pivot-tabulator .tabulator-header {{
-    background: {BORDER}; color: {INK};
-    border-bottom: 1px solid {BORDER};
-  }}
-  #pivot-tabulator .tabulator-col {{
-    background: {BORDER};
-    font-size: 11px; text-transform: uppercase;
-    letter-spacing: 0.4px; color: {INK}; font-weight: 600;
-  }}
-  #pivot-tabulator .tabulator-row {{
-    background: {PAPER}; color: {INK};
-    border-bottom: 1px solid #f0eedf;
-    font-size: 13px;
-  }}
-  #pivot-tabulator .tabulator-row.tabulator-row-even {{ background: #f7f5e8; }}
-  #pivot-tabulator .tabulator-row:hover {{ background: #ece9d5; cursor: pointer; }}
-  #pivot-tabulator .pivot-group-label {{ font-weight: 600; color: {INK}; }}
-  #pivot-tabulator .pivot-station-label {{ color: {INK}; }}
-  #pivot-tabulator .pivot-duid-label {{
-    color: {MUTED}; font-family: ui-monospace, Menlo, monospace;
-    font-size: 12px;
-  }}
-  #pivot-tabulator .pivot-n {{ color: {MUTED}; font-size: 11px; margin-left: 6px; }}
-  #pivot-selection-plot {{ margin-top: 12px; }}
-</style>
-
 <div id="pivot-tabulator" style="margin-top:8px"></div>
-<div id="pivot-selection-plot"></div>
-
 <script>
-(function () {{
-  var data = {tree_json};
-
-  function _pivotLabelFmt(cell, formatterParams, onRendered) {{
-    var row = cell.getRow();
-    var d = row.getData();
-    var depth = row.getTreeParent() ? 1 : 0;
-    var p = row.getTreeParent();
-    while (p) {{ depth++; p = p.getTreeParent(); }}
-    var indent = (depth * 16) + "px";
-    var name = d.label || "";
-    var cls = d.kind === "duid" ? "pivot-duid-label"
-            : d.kind === "station" ? "pivot-station-label"
-            : "pivot-group-label";
-    var meta = (d.kind !== "duid" && d.n_items)
-             ? '<span class="pivot-n">(' + d.n_items + ')</span>'
-             : '';
-    return '<span style="padding-left:' + indent + '" class="' + cls + '">'
-         + name + meta + '</span>';
+  window._pivotData = {tree_json};
+  window._pivotCols = {cols_json};
+  window._pivotRange = {range_q};
+  window._pivotStart = {start_q};
+  window._pivotEnd   = {end_q};
+  if (typeof window._buildPivotTable === "function") {{
+    requestAnimationFrame(window._buildPivotTable);
   }}
-  function _pivotIntDashFmt(cell) {{
-    var v = cell.getValue();
-    if (v === null || v === undefined)
-      return '<span style="color:#878580">—</span>';
-    return Math.round(v).toLocaleString('en-AU');
-  }}
-
-  var table = new Tabulator("#pivot-tabulator", {{
-    data: data,
-    dataTree: true,
-    dataTreeStartExpanded: false,
-    dataTreeBranchElement: '<span style="color:#878580;margin-right:4px">│</span>',
-    dataTreeCollapseElement: '<span style="color:#24837b;cursor:pointer;margin-right:4px;font-weight:700">▾</span>',
-    dataTreeExpandElement: '<span style="color:#24837b;cursor:pointer;margin-right:4px;font-weight:700">▸</span>',
-    dataTreeChildIndent: 0,
-    layout: "fitColumns",
-    layoutColumnsOnNewData: true,
-    height: "calc(100vh - 280px)",
-    columns: {col_defs_str},
-    rowClick: function (e, row) {{
-      var d = row.getData();
-      // Leaf row (DUID) → navigate to station-analysis with the DUID.
-      if (d.kind === "duid") {{
-        e.stopPropagation();
-        window.location.href = "/station-analysis?duid=" +
-          encodeURIComponent(d.ctx.duid || d.label);
-        return;
-      }}
-      // Otherwise (group / station) → update the selection-plot stub.
-      var ctx = d.ctx || {{}};
-      var plot = document.getElementById("pivot-selection-plot");
-      var ctxBits = [];
-      ["region", "fuel", "owner", "station"].forEach(function (k) {{
-        if (ctx[k]) ctxBits.push(k + " = " + ctx[k]);
-      }});
-      plot.innerHTML =
-        '<div class="card">'
-        + '<h3 style="margin:0 0 8px 0;font-size:12px;color:#24837b;'
-        + 'text-transform:uppercase;letter-spacing:0.5px;font-weight:600">'
-        + 'Selection plot (stub)</h3>'
-        + '<p style="margin:0;padding:8px 14px;color:#403e3c">'
-        + '<strong>' + d.label + '</strong> &middot; '
-        + ctxBits.join(' &middot; ')
-        + '</p>'
-        + '<p style="margin:0;padding:4px 14px 14px;color:#878580;font-size:12px">'
-        + 'Generation time-series chart will render here once the design is settled. '
-        + 'Aggregate stats: ' + (d.gen_gwh || 0).toLocaleString()
-        + ' GWh &middot; $' + (d.rev_m || 0).toLocaleString() + 'M revenue '
-        + '&middot; ' + (d.n_items || 0) + ' DUIDs.</p>'
-        + '</div>';
-    }},
-  }});
-
-  // HTMX swaps the body into the DOM and then runs this <script> synchronously.
-  // At that moment the browser may not have done a layout pass yet, so
-  // Tabulator's fitColumns measures the wrong container width and the header
-  // row wraps. Forcing a redraw on the next animation frame fixes it.
-  table.on("tableBuilt", function () {{
-    requestAnimationFrame(function () {{
-      try {{ table.redraw(true); }} catch (e) {{ /* swallow */ }}
-    }});
-  }});
-  // Belt-and-braces: redraw again on window resize.
-  window.addEventListener("resize", function () {{
-    try {{ table.redraw(true); }} catch (e) {{}}
-  }});
-}})();
 </script>
 """
 
     return ('<div class="prices-stack">'
             '<div class="card">'
-            + _card_h3(f"Pivot table &middot; {range_label}")
+            + _card_h3(f"Generators &middot; {range_label}")
             + f'<p style="color:{MUTED};font-size:12px;margin:0 0 8px 14px">'
               f'{subtitle}</p>'
             + table_html
             + f'<p style="color:{MUTED};font-size:11px;margin:10px 14px 0;'
-              f'line-height:1.5">Click a DUID to open it in Station Analysis '
-              f'(landing on placeholder for now). Click any group row to '
-              f'queue a selection plot below the table.</p>'
+              f'line-height:1.5">Click any name (underlined on hover) to '
+              f'open its charts and stats. Group rows open as fleet '
+              f'selections; multi-region fleets use a demand-weighted '
+              f'price reference.</p>'
             + '</div>'
             + '</div>')
 
 
-@app.get("/pivot-table", response_class=HTMLResponse)
-def pivot_page(request: Request,
+@app.get("/generators", response_class=HTMLResponse)
+def generators_page(request: Request,
                g1: str = "fuel", g2: str = "region", g3: str = "",
                cols: str = "gwh,rev,price,util,cap",
                range: str = "1y",
@@ -4238,7 +4319,7 @@ def pivot_page(request: Request,
     }
     if start: base_params["start"] = start
     if end:   base_params["end"] = end
-    base_url = "/pivot-table"
+    base_url = "/generators"
 
     def _other(*excl: str) -> dict:
         return {k: v for k, v in base_params.items() if k not in excl}
@@ -4273,6 +4354,748 @@ def pivot_page(request: Request,
 
 
 # ----------------------------------------------------------------------------
+# /station-analysis — single-DUID or whole-station time series + TOD
+# ----------------------------------------------------------------------------
+#
+# Production colors (kept verbatim so screenshots compare 1:1):
+#   Generation: #2ca02c (green)   Price: #d62728 (red)
+# Tier rule: 5-min for windows ≤7 days, 30-min otherwise — keeps the chart
+# under ~50k points without losing detail in the recent-week range that
+# operators look at most.
+
+STATION_GEN_COLOR = "#2ca02c"
+STATION_PRICE_COLOR = "#d62728"
+# Includes every pivot range slug so clicking through from the pivot table
+# carries the period over without translation. Adds 24H + All for station
+# convenience.
+STATION_RANGE_OPTIONS = [("24h", "24H"), ("7d", "7D"), ("30d", "30D"),
+                         ("90d", "90D"), ("ytd", "YTD"), ("1y", "1Y"),
+                         ("5y", "5Y"), ("all", "All")]
+
+
+def _station_range_window(range_slug: str, start: str | None,
+                          end: str | None
+                          ) -> tuple[pd.Timestamp, pd.Timestamp,
+                                     str, str, str, str]:
+    """Resolve (s_ts, e_ts, gen_table, price_table, label, resample).
+    Resolution tiering:
+      ≤7 days  → 5-min source, no resample          → ~2k points
+      7–30d    → 30-min source, no resample         → ~1.4k points
+      >30 days → 30-min source, resampled to daily  → 30–1,825 points
+    Keeps every chart under ~2k points per series; the 30-day cliff is where
+    the per-interval line starts looking like noise on a wide canvas."""
+    end_row = q("SELECT MAX(settlementdate) AS ts FROM generation_5min")
+    if end_row.empty or end_row["ts"].iloc[0] is None:
+        end_ts = pd.Timestamp(datetime.now(NEM_TZ).replace(tzinfo=None))
+    else:
+        end_ts = pd.Timestamp(end_row["ts"].iloc[0])
+
+    presets = {
+        "24h": (timedelta(hours=24),  "last 24h"),
+        "7d":  (timedelta(days=7),    "last 7 days"),
+        "30d": (timedelta(days=30),   "last 30 days"),
+        "90d": (timedelta(days=90),   "last 90 days"),
+        "1y":  (timedelta(days=365),  "last 12 months"),
+        "5y":  (timedelta(days=1825), "last 5 years"),
+    }
+    if range_slug in presets:
+        delta, label = presets[range_slug]
+        s_ts = end_ts - delta
+    elif range_slug == "ytd":
+        s_ts = pd.Timestamp(year=end_ts.year, month=1, day=1)
+        label = "year to date"
+    elif range_slug == "all":
+        start_row = q("SELECT MIN(settlementdate) AS ts FROM generation_30min")
+        s_ts = (pd.Timestamp(start_row["ts"].iloc[0])
+                if not start_row.empty else pd.Timestamp(2020, 2, 1))
+        label = "all data"
+    elif range_slug == "custom" and start and end:
+        s_ts = pd.Timestamp(start)
+        end_ts = pd.Timestamp(end) + timedelta(days=1)
+        label = f"{start} → {end}"
+    else:
+        s_ts = end_ts - timedelta(days=30)
+        label = "last 30 days"
+
+    span = end_ts - s_ts
+    if span <= timedelta(days=7):
+        return s_ts, end_ts, "generation_5min", "prices_5min", label, "none"
+    if span <= timedelta(days=30):
+        return s_ts, end_ts, "generation_30min", "prices_30min", label, "none"
+    return s_ts, end_ts, "generation_30min", "prices_30min", label, "day"
+
+
+def _resolve_station_subject(duid: str | None, station: str | None,
+                             fuel: str | None = None,
+                             region: str | None = None,
+                             owner: str | None = None
+                             ) -> tuple[list[str], str, str, dict]:
+    """Resolve URL params → (duid_list, kind, label, meta).
+    `kind` is 'duid' (single unit), 'station' (multi-unit station sum),
+    'fleet' (any fuel/region/owner combination), or 'none'.
+    `meta` carries: regions (list), is_multi_region, fuel, owner, station_name
+    (where applicable), capacity_mw (effective, summed), is_battery, label."""
+    if duid:
+        df = q("""SELECT duid, region, "site name" AS station_name,
+                         owner, fuel, capacity_mw, storage_mwh
+                  FROM duid_mapping
+                  WHERE duid = ?""", [duid])
+        if df.empty:
+            return [], "none", duid, {}
+        r = df.iloc[0]
+        is_battery = r["fuel"] == "Battery Storage"
+        cap = (float(r["storage_mwh"]) / 24.0
+               if is_battery and pd.notna(r["storage_mwh"])
+               else float(r["capacity_mw"] or 0))
+        meta = {
+            "regions": [r["region"]], "is_multi_region": False,
+            "region": r["region"], "fuel": r["fuel"],
+            "owner": r["owner"], "station_name": r["station_name"],
+            "capacity_mw": cap, "n_units": 1,
+            "is_battery": bool(is_battery),
+            "capacity_label": (
+                f"Effective capacity {cap:.0f} MW (storage/24h)"
+                if is_battery else f"Max capacity {cap:.0f} MW"),
+        }
+        return [duid], "duid", duid, meta
+    if station:
+        df = q("""SELECT duid, region, "site name" AS station_name,
+                         owner, fuel, capacity_mw, storage_mwh
+                  FROM duid_mapping
+                  WHERE "site name" = ?""", [station])
+        if df.empty:
+            return [], "none", station, {}
+        is_battery = (df["fuel"] == "Battery Storage").any()
+        if is_battery:
+            cap = float((df["storage_mwh"].fillna(0) / 24.0).sum())
+        else:
+            cap = float(df["capacity_mw"].fillna(0).sum())
+        regions = df["region"].dropna().unique().tolist()
+        meta = {
+            "regions": regions,
+            "is_multi_region": len(regions) > 1,
+            "region": regions[0] if regions else "",
+            "fuel": df["fuel"].iloc[0],
+            "owner": df["owner"].iloc[0],
+            "station_name": station,
+            "capacity_mw": cap, "n_units": int(len(df)),
+            "is_battery": bool(is_battery),
+            "capacity_label": (
+                f"Effective station capacity {cap:.0f} MW (storage/24h)"
+                if is_battery else f"Station capacity {cap:.0f} MW"),
+        }
+        return df["duid"].tolist(), "station", station, meta
+
+    # Fleet selection: any combination of fuel / region / owner.
+    if fuel or region or owner:
+        clauses = []
+        params: list = []
+        if fuel:
+            # Use the display-fuel grouping so "Gas" picks up CCGT/OCGT/Gas other,
+            # "Hydro" picks up "Water", etc. (Matches the Generators table.)
+            raw = PIVOT_FUEL_TO_RAW.get(fuel, [fuel])
+            placeholders = ",".join("?" * len(raw))
+            clauses.append(f"fuel IN ({placeholders})")
+            params.extend(raw)
+        if region:
+            regs = [r for r in region.split(",") if r]
+            placeholders = ",".join("?" * len(regs))
+            clauses.append(f"region IN ({placeholders})")
+            params.extend(regs)
+        if owner:
+            clauses.append("owner = ?")
+            params.append(owner)
+        sql = ('SELECT duid, region, "site name" AS station_name, '
+               'owner, fuel, capacity_mw, storage_mwh FROM duid_mapping '
+               'WHERE ' + " AND ".join(clauses))
+        df = q(sql, params)
+        if df.empty:
+            return [], "none", "", {}
+        is_battery = (df["fuel"] == "Battery Storage").any()
+        if is_battery:
+            cap = float((df["storage_mwh"].fillna(0) / 24.0).sum())
+        else:
+            cap = float(df["capacity_mw"].fillna(0).sum())
+        regions = sorted(df["region"].dropna().unique().tolist())
+
+        # Smart label: pick the most specific filter combination.
+        parts = []
+        if fuel:   parts.append(fuel)
+        if region: parts.append(region if "," not in region else "multi-region")
+        if owner:  parts.append(owner)
+        label = " · ".join(parts) if parts else "Fleet"
+        n_units = int(len(df))
+
+        meta = {
+            "regions": regions,
+            "is_multi_region": len(regions) > 1,
+            "region": regions[0] if regions else "",
+            "fuel": fuel or (df["fuel"].iloc[0] if not df.empty else ""),
+            "owner": owner or "",
+            "station_name": "",
+            "capacity_mw": cap, "n_units": n_units,
+            "is_battery": bool(is_battery),
+            "capacity_label": (
+                f"Fleet capacity {cap:.0f} MW"
+                + (" (storage/24h)" if is_battery else "")),
+            "fleet_filter_fuel": fuel,
+            "fleet_filter_region": region,
+            "fleet_filter_owner": owner,
+        }
+        return df["duid"].tolist(), "fleet", label, meta
+
+    return [], "none", "", {}
+
+
+def _price_join_sql(price_table: str, regions: list[str],
+                    demand_table: str = "demand30") -> tuple[str, str, list]:
+    """Build the per-interval price-source SQL for a selection of regions.
+
+    Returns (cte_sql, price_col_expr, params).
+      - cte_sql: a `price_src` CTE producing (settlementdate, price)
+      - price_col_expr: how the outer SELECT refers to the price
+      - params: bind values for the CTE
+
+    Single-region selections take the simple path (no demand join).
+    Multi-region selections compute the demand-weighted mean:
+        price = Σ(rrp × demand) / Σ(demand)
+    which is the standard NEM-wide reference price aggregation. The demand
+    weights come from demand30; for 5-min source data we keep the 30-min
+    demand weights since they're the only ones with the right cadence."""
+    if len(regions) == 1:
+        cte = f"""
+          price_src AS (
+            SELECT settlementdate, rrp AS price
+            FROM {price_table}
+            WHERE regionid = ?
+          )
+        """
+        return cte, "price_src.price", [regions[0]]
+
+    placeholders = ",".join("?" * len(regions))
+    cte = f"""
+      price_src AS (
+        SELECT p.settlementdate,
+               SUM(p.rrp * d.demand) / NULLIF(SUM(d.demand), 0) AS price
+        FROM {price_table} p
+        JOIN {demand_table} d
+          ON p.settlementdate = d.settlementdate
+          AND p.regionid = d.regionid
+        WHERE p.regionid IN ({placeholders})
+        GROUP BY p.settlementdate
+      )
+    """
+    return cte, "price_src.price", list(regions)
+
+
+def _load_station_series(duids: list[str], regions: list[str],
+                         s_ts: pd.Timestamp, e_ts: pd.Timestamp,
+                         gen_table: str, price_table: str,
+                         resample: str = "none") -> pd.DataFrame:
+    """Time-series rows for one DUID or summed across DUIDs of a station/fleet.
+    SUM(scadavalue) across the selection. Price column is demand-weighted
+    across `regions` when multi-region, else that region's RRP per interval.
+
+    resample='day' first sums per-interval across DUIDs, then averages those
+    per-interval MW values to a daily mean. Price aggregates as a simple mean
+    over the day (mean of demand-weighted regional prices)."""
+    if not duids:
+        return pd.DataFrame()
+    duid_in = ", ".join(f"'{d}'" for d in duids)
+    price_cte, price_col, price_params = _price_join_sql(
+        price_table, regions)
+
+    if resample == "day":
+        sql = f"""
+            WITH {price_cte},
+            per_int AS (
+              SELECT g.settlementdate,
+                     SUM(g.scadavalue) AS mw,
+                     FIRST({price_col}) AS price
+              FROM {gen_table} g
+              LEFT JOIN price_src
+                ON g.settlementdate = price_src.settlementdate
+              WHERE g.duid IN ({duid_in})
+                AND g.settlementdate >= ? AND g.settlementdate < ?
+              GROUP BY g.settlementdate
+            )
+            SELECT date_trunc('day', settlementdate) AS settlementdate,
+                   AVG(mw) AS scadavalue,
+                   AVG(price) AS price
+            FROM per_int
+            GROUP BY date_trunc('day', settlementdate)
+            ORDER BY settlementdate
+        """
+        return q(sql, price_params + [s_ts, e_ts])
+
+    sql = f"""
+        WITH {price_cte}
+        SELECT g.settlementdate,
+               SUM(g.scadavalue) AS scadavalue,
+               FIRST({price_col}) AS price
+        FROM {gen_table} g
+        LEFT JOIN price_src
+          ON g.settlementdate = price_src.settlementdate
+        WHERE g.duid IN ({duid_in})
+          AND g.settlementdate >= ? AND g.settlementdate < ?
+        GROUP BY g.settlementdate
+        ORDER BY g.settlementdate
+    """
+    return q(sql, price_params + [s_ts, e_ts])
+
+
+def _load_station_tod(duids: list[str], regions: list[str],
+                      s_ts: pd.Timestamp, e_ts: pd.Timestamp) -> pd.DataFrame:
+    """Hour-of-day aggregates for the TOD chart. Always sourced from 30-min
+    data (independent of whatever resolution the TS chart picked) so it stays
+    useful on long windows where the TS itself has been resampled to daily.
+    The hour-of-day buckets are computed in SQL — returns 24 rows. Price is
+    demand-weighted across regions when multi-region."""
+    if not duids:
+        return pd.DataFrame()
+    duid_in = ", ".join(f"'{d}'" for d in duids)
+    price_cte, price_col, price_params = _price_join_sql(
+        "prices_30min", regions)
+    sql = f"""
+        WITH {price_cte},
+        per_int AS (
+          SELECT g.settlementdate,
+                 SUM(g.scadavalue) AS mw,
+                 FIRST({price_col}) AS price
+          FROM generation_30min g
+          LEFT JOIN price_src
+            ON g.settlementdate = price_src.settlementdate
+          WHERE g.duid IN ({duid_in})
+            AND g.settlementdate >= ? AND g.settlementdate < ?
+          GROUP BY g.settlementdate
+        )
+        SELECT EXTRACT(HOUR FROM settlementdate)::INT AS hour,
+               AVG(mw) AS mw,
+               AVG(price) AS price
+        FROM per_int
+        GROUP BY EXTRACT(HOUR FROM settlementdate)
+        ORDER BY hour
+    """
+    return q(sql, price_params + [s_ts, e_ts])
+
+
+def _station_stats(duids: list[str], regions: list[str], is_battery: bool,
+                   cap_mw: float, s_ts: pd.Timestamp,
+                   e_ts: pd.Timestamp, gen_table: str,
+                   price_table: str) -> dict:
+    """Window aggregates matching the Generators table's convention exactly:
+    discharge-only for everything (GREATEST(scada, 0)), capacity = effective
+    capacity (storage/24 for batteries). Revenue uses the demand-weighted
+    price for multi-region selections so the $/MWh stat lines up with the
+    chart's price line."""
+    if not duids:
+        return {}
+    duid_in = ", ".join(f"'{d}'" for d in duids)
+    hours_factor = 0.5 if gen_table == "generation_30min" else 5.0 / 60.0
+    price_cte, price_col, price_params = _price_join_sql(
+        price_table, regions)
+    sql = f"""
+      WITH {price_cte}
+      SELECT
+        SUM(GREATEST(g.scadavalue, 0)) * {hours_factor}     AS gen_mwh,
+        SUM(GREATEST(g.scadavalue, 0)
+            * COALESCE({price_col}, 0) * {hours_factor})    AS revenue,
+        COUNT(*)                                            AS n_intervals
+      FROM {gen_table} g
+      LEFT JOIN price_src
+        ON g.settlementdate = price_src.settlementdate
+      WHERE g.duid IN ({duid_in})
+        AND g.settlementdate >= ? AND g.settlementdate < ?
+    """
+    row = q(sql, price_params + [s_ts, e_ts])
+    if row.empty:
+        return {}
+    gen_mwh = float(row["gen_mwh"].iloc[0] or 0)
+    revenue = float(row["revenue"].iloc[0] or 0)
+    hours = (e_ts - s_ts).total_seconds() / 3600.0
+    price = (revenue / gen_mwh) if gen_mwh > 0 else None
+    util = ((gen_mwh / (cap_mw * hours) * 100)
+            if cap_mw > 0 and hours > 0 else None)
+    return {
+        "gen_gwh": gen_mwh / 1000.0,
+        "rev_m":   revenue / 1_000_000.0,
+        "price":   price,
+        "util":    util,
+        "cap_mw":  cap_mw,
+        "is_battery": is_battery,
+    }
+
+
+def _render_station_stats(stats: dict, range_label: str) -> str:
+    """Stats strip: same metric set as the pivot row that brought the user
+    here, so they can keep their place without bouncing between tabs."""
+    if not stats:
+        return ""
+
+    def _fmt_int(v):
+        if v is None:
+            return '<span style="color:#878580">—</span>'
+        return f"{round(v):,}"
+
+    def _fmt_one(v, prefix=""):
+        if v is None:
+            return '<span style="color:#878580">—</span>'
+        return f"{prefix}{round(v):,}"
+
+    tiles = [
+        ("GWh",      _fmt_int(stats["gen_gwh"])),
+        ("Rev $M",   _fmt_int(stats["rev_m"])),
+        ("$/MWh",    _fmt_one(stats["price"])),
+        ("Util %",   _fmt_one(stats["util"])),
+        ("Cap MW",   _fmt_int(stats["cap_mw"])),
+    ]
+    if stats.get("is_battery"):
+        # Surface that this is an "effective" capacity so the util % is
+        # interpretable. One-cycle-per-day = MWh_storage / 24.
+        tiles[-1] = ("Cap MW (eff)", _fmt_int(stats["cap_mw"]))
+
+    tile_html = "".join(
+        f'<div style="background:{PAPER};border:1px solid {BORDER};'
+        f'border-radius:6px;padding:8px 14px;min-width:96px">'
+        f'<div style="font-size:10px;color:{MUTED};text-transform:uppercase;'
+        f'letter-spacing:0.4px;font-weight:600">{label}</div>'
+        f'<div style="font-size:18px;font-weight:600;color:{INK};'
+        f'margin-top:2px">{val}</div>'
+        f'</div>'
+        for label, val in tiles
+    )
+    return (f'<div style="display:flex;flex-wrap:wrap;gap:8px;'
+            f'margin:0 0 12px 0">{tile_html}</div>'
+            f'<div style="font-size:11px;color:{MUTED};margin:0 0 8px 0">'
+            f'{range_label} &middot; discharge-only convention for batteries '
+            f'(matches Generators table)</div>')
+
+
+def _price_axis_should_log(prices: pd.Series) -> bool:
+    """Spike detector for the price axis. Switch to log when:
+      - max > $1,000/MWh (genuine spike territory, well above normal $30–300),
+      - OR max > 5× the 95th percentile (i.e. a tail event distorting the rest),
+      - OR max > 20× the median (longer-window 'mostly cheap with a spike').
+    Negative prices aren't an issue here — log axis silently drops them, and
+    they're rare on a per-station time series anyway. Returns False on an
+    empty / all-NaN series so the linear default is kept."""
+    s = prices.dropna() if isinstance(prices, pd.Series) else pd.Series(prices)
+    s = s[s > 0]
+    if len(s) == 0:
+        return False
+    max_p = float(s.max())
+    if max_p > 1000:
+        return True
+    p95 = float(s.quantile(0.95))
+    if p95 > 0 and max_p / p95 > 5:
+        return True
+    med = float(s.median())
+    if med > 0 and max_p / med > 20:
+        return True
+    return False
+
+
+def _station_ts_chart(df: pd.DataFrame, meta: dict, label: str,
+                      range_label: str,
+                      resolution_label: str = "30-min") -> str:
+    """Dual-axis time series. Generation on left (green), price on right
+    (red), max-capacity reference line (dashed green) drawn across the
+    full window. Production-matching colors. Price axis auto-switches to
+    log when the window contains a spike (see _price_axis_should_log).
+    Hover format adapts: daily resampled data drops the time component."""
+    from plotly.subplots import make_subplots
+
+    is_daily = resolution_label == "daily mean"
+    hover_x_fmt = "%{x|%d %b %Y}" if is_daily else "%{x|%d %b %Y %H:%M}"
+    gen_name = ("Daily mean generation (MW)" if is_daily
+                else "Generation (MW)")
+    price_name = ("Daily mean price ($/MWh)" if is_daily
+                  else "Price ($/MWh)")
+
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+    if df.empty:
+        fig.add_annotation(
+            text="No data for this window", xref="paper", yref="paper",
+            x=0.5, y=0.5, showarrow=False,
+            font=dict(size=14, color=MUTED),
+        )
+    else:
+        fig.add_trace(go.Scatter(
+            x=df["settlementdate"], y=df["scadavalue"],
+            mode="lines", name=gen_name,
+            line=dict(width=1.5, color=STATION_GEN_COLOR),
+            hovertemplate=f"{hover_x_fmt}<br>%{{y:.1f}} MW<extra></extra>",
+        ), secondary_y=False)
+
+        # Capacity reference line only when the selection is a single region
+        # (the line is meaningful then). For multi-region fleets the summed
+        # cap dominates the y-axis and the chart loses shape — see the meta
+        # `is_multi_region` flag set by _resolve_station_subject.
+        cap = float(meta.get("capacity_mw") or 0)
+        if cap > 0 and not meta.get("is_multi_region"):
+            x_pad = [df["settlementdate"].iloc[0],
+                     df["settlementdate"].iloc[-1]]
+            fig.add_trace(go.Scatter(
+                x=x_pad, y=[cap, cap], mode="lines",
+                name=meta.get("capacity_label", f"Capacity {cap:.0f} MW"),
+                line=dict(width=1.5, color=STATION_GEN_COLOR, dash="dash"),
+                opacity=0.7,
+                hovertemplate=f"{cap:.0f} MW<extra></extra>",
+            ), secondary_y=False)
+
+        fig.add_trace(go.Scatter(
+            x=df["settlementdate"], y=df["price"],
+            mode="lines", name=price_name,
+            line=dict(width=1.2, color=STATION_PRICE_COLOR),
+            hovertemplate=f"{hover_x_fmt}<br>$%{{y:.1f}}/MWh<extra></extra>",
+        ), secondary_y=True)
+
+    fig.update_layout(
+        paper_bgcolor=PAPER, plot_bgcolor=PAPER,
+        height=500,
+        margin=dict(l=60, r=60, t=20, b=44),
+        legend=dict(orientation="h", yanchor="bottom", y=-0.18,
+                    xanchor="center", x=0.5, font=dict(size=11),
+                    bgcolor=PAPER),
+        showlegend=True,
+    )
+    fig.update_xaxes(gridcolor=BORDER, gridwidth=0.5, showspikes=False)
+    fig.update_yaxes(
+        title=dict(text="Generation (MW)",
+                   font=dict(size=11, color=STATION_GEN_COLOR)),
+        gridcolor=BORDER, gridwidth=0.5, zeroline=True,
+        zerolinecolor=BORDER, secondary_y=False,
+    )
+    use_log = (not df.empty) and _price_axis_should_log(df["price"])
+    fig.update_yaxes(
+        title=dict(
+            text="Price ($/MWh, log)" if use_log else "Price ($/MWh)",
+            font=dict(size=11, color=STATION_PRICE_COLOR)),
+        type="log" if use_log else "linear",
+        showgrid=False, zeroline=False, secondary_y=True,
+    )
+
+    div_id = f"plot-station-ts-{int(datetime.now().timestamp() * 1000)}"
+    fig_json = _plot_json(fig)
+    return (_card_h3(f"Output and price &middot; {range_label} "
+                     f"&middot; {resolution_label}")
+            + f'<div id="{div_id}" style="height:500px"></div>'
+            + f'<script>(function(){{var f={fig_json};'
+              f'Plotly.newPlot("{div_id}",f.data,f.layout,'
+              f'{PLOTLY_CFG});}})();</script>')
+
+
+def _station_tod_chart(tod: pd.DataFrame, meta: dict, label: str) -> str:
+    """Average MW + average $/MWh by hour of day (0–23). `tod` is the
+    pre-aggregated 24-row dataframe from _load_station_tod (always 30-min
+    source) so this chart stays useful even when the TS chart has been
+    resampled to daily."""
+    from plotly.subplots import make_subplots
+
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+    if tod.empty:
+        fig.add_annotation(
+            text="No data for this window", xref="paper", yref="paper",
+            x=0.5, y=0.5, showarrow=False,
+            font=dict(size=14, color=MUTED),
+        )
+    else:
+        fig.add_trace(go.Scatter(
+            x=tod["hour"], y=tod["mw"], mode="lines+markers",
+            name="Avg generation (MW)",
+            line=dict(width=2, color=STATION_GEN_COLOR),
+            marker=dict(size=7, color=STATION_GEN_COLOR),
+            hovertemplate="Hr %{x:02d}:00<br>%{y:.1f} MW<extra></extra>",
+        ), secondary_y=False)
+        # No capacity reference line on the TOD chart — averages can't reach
+        # the cap unless the unit is 100%-loaded every interval, so the line
+        # mostly just stretches the y-axis and flattens the data shape. The
+        # capacity is still shown in the subtitle and the stats strip.
+        fig.add_trace(go.Scatter(
+            x=tod["hour"], y=tod["price"], mode="lines+markers",
+            name="Avg price ($/MWh)",
+            line=dict(width=2, color=STATION_PRICE_COLOR),
+            marker=dict(size=7, color=STATION_PRICE_COLOR),
+            hovertemplate="Hr %{x:02d}:00<br>$%{y:.1f}/MWh<extra></extra>",
+        ), secondary_y=True)
+
+    fig.update_layout(
+        paper_bgcolor=PAPER, plot_bgcolor=PAPER,
+        height=420,
+        margin=dict(l=60, r=60, t=20, b=44),
+        legend=dict(orientation="h", yanchor="bottom", y=-0.20,
+                    xanchor="center", x=0.5, font=dict(size=11),
+                    bgcolor=PAPER),
+        showlegend=True,
+    )
+    fig.update_xaxes(
+        title=dict(text="Hour of day", font=dict(size=11, color=MUTED)),
+        tickvals=list(range(0, 24, 3)),
+        gridcolor=BORDER, gridwidth=0.5,
+    )
+    fig.update_yaxes(
+        title=dict(text="Average generation (MW)",
+                   font=dict(size=11, color=STATION_GEN_COLOR)),
+        gridcolor=BORDER, gridwidth=0.5, zeroline=True,
+        zerolinecolor=BORDER, secondary_y=False,
+    )
+    # TOD prices are *averages* per hour, so spikes are already smoothed.
+    # We only flip to log when the hourly means themselves blow out — which
+    # happens for stations exposed to recurring evening-peak spikes.
+    tod_prices = (tod["price"] if not tod.empty
+                  else pd.Series([], dtype=float))
+    use_log = _price_axis_should_log(tod_prices)
+    fig.update_yaxes(
+        title=dict(
+            text="Average price ($/MWh, log)" if use_log
+                 else "Average price ($/MWh)",
+            font=dict(size=11, color=STATION_PRICE_COLOR)),
+        type="log" if use_log else "linear",
+        showgrid=False, zeroline=False, secondary_y=True,
+    )
+
+    div_id = f"plot-station-tod-{int(datetime.now().timestamp() * 1000)}"
+    fig_json = _plot_json(fig)
+    return (_card_h3("Average performance by hour of day")
+            + f'<div id="{div_id}" style="height:420px"></div>'
+            + f'<script>(function(){{var f={fig_json};'
+              f'Plotly.newPlot("{div_id}",f.data,f.layout,'
+              f'{PLOTLY_CFG});}})();</script>')
+
+
+def _station_placeholder() -> str:
+    """Friendly empty state when no DUID/station is selected. Station
+    Analysis is no longer in the top nav, but direct-URL/bookmark hits with
+    no params still land here; this nudges the user to the Generators
+    table (the only entry point) and shows the deep-link URL pattern."""
+    return ('<div class="placeholder">'
+            '<p><strong>No station selected</strong></p>'
+            '<p>Open the <a href="/generators" '
+            'style="color:#24837b">Generators</a> table and click any '
+            'station or DUID name to land here. Direct URLs work too: '
+            '<code>?duid=BW01</code> or <code>?station=Bayswater</code>.</p>'
+            '</div>')
+
+
+def _station_content(duids: list[str], kind: str, label: str, meta: dict,
+                     range_slug: str, start: str | None,
+                     end: str | None) -> str:
+    if not duids:
+        return _station_placeholder()
+
+    s_ts, e_ts, gen_table, price_table, range_label, resample = (
+        _station_range_window(range_slug, start, end))
+    regions = meta.get("regions") or ([meta["region"]]
+                                      if meta.get("region") else [])
+    df = _load_station_series(duids, regions, s_ts, e_ts,
+                              gen_table, price_table, resample=resample)
+    resolution_label = ("daily mean" if resample == "day"
+                        else "5-min" if gen_table == "generation_5min"
+                        else "30-min")
+
+    cap = meta.get("capacity_mw", 0)
+    fuel = meta.get("fuel", "—")
+    owner = meta.get("owner", "—")
+    n_units = meta.get("n_units", len(duids))
+    if kind == "duid":
+        kind_chip = "DUID"
+    elif kind == "station":
+        kind_chip = f"Station &middot; {n_units} units"
+    else:
+        kind_chip = f"Fleet &middot; {n_units} units"
+    region_chip = ("multi-region" if meta.get("is_multi_region")
+                   else (regions[0][:-1] if regions else "—"))
+    subtitle_parts = [
+        f"<strong>{label}</strong>",
+        f"{kind_chip}",
+        f"{fuel}",
+        region_chip,
+        (f"{cap:.0f} MW" if not meta.get("is_battery")
+         else f"{cap:.0f} MW eff. ({float(cap)*24:.0f} MWh storage)"),
+        owner or "—",
+    ]
+    subtitle = " &middot; ".join(subtitle_parts)
+
+    stats = _station_stats(duids, regions, meta.get("is_battery", False),
+                           float(meta.get("capacity_mw") or 0),
+                           s_ts, e_ts, gen_table, price_table)
+    stats_html = _render_station_stats(stats, range_label)
+
+    ts_html = _station_ts_chart(df, meta, label, range_label, resolution_label)
+    # TOD always sources from 30-min data (independent of TS resolution).
+    tod_df = _load_station_tod(duids, regions, s_ts, e_ts)
+    tod_html = _station_tod_chart(tod_df, meta, label)
+
+    # Back link to Generators carries the current range so the user lands
+    # on the same window they came from.
+    back_q = f"?range={range_slug}" if range_slug else ""
+    if range_slug == "custom":
+        if start: back_q += f"&start={start}"
+        if end:   back_q += f"&end={end}"
+    back_link = (f'<a href="/generators{back_q}" '
+                 f'hx-get="/generators{back_q}" '
+                 f'hx-target="#tab-body" hx-push-url="true" '
+                 f'style="color:{TEAL};font-size:12px;text-decoration:none;'
+                 f'display:inline-block;margin:0 0 8px 0">'
+                 f'← Generators</a>')
+
+    return ('<div class="prices-stack">'
+            f'<div class="card">'
+            + back_link
+            + _card_h3(f"Station analysis &middot; {range_label}")
+            + f'<p style="color:{MUTED};font-size:12px;margin:0 0 8px 14px">'
+              f'{subtitle}</p>'
+            + stats_html
+            + ts_html
+            + '</div>'
+            f'<div class="card">' + tod_html + '</div>'
+            '</div>')
+
+
+@app.get("/station-analysis", response_class=HTMLResponse)
+def station_page(request: Request,
+                 duid: str | None = None,
+                 station: str | None = None,
+                 fuel: str | None = None,
+                 region: str | None = None,
+                 owner: str | None = None,
+                 range: str = "30d",
+                 start: str | None = None,
+                 end: str | None = None) -> HTMLResponse:
+    duids, kind, label, meta = _resolve_station_subject(
+        duid, station, fuel=fuel, region=region, owner=owner)
+
+    valid_ranges = {slug for slug, _ in STATION_RANGE_OPTIONS} | {"custom"}
+    if range not in valid_ranges:
+        range = "30d"
+
+    base_params = {}
+    if duid:    base_params["duid"]    = duid
+    if station: base_params["station"] = station
+    if fuel:    base_params["fuel"]    = fuel
+    if region:  base_params["region"]  = region
+    if owner:   base_params["owner"]   = owner
+    base_params["range"] = range
+    if start: base_params["start"] = start
+    if end:   base_params["end"] = end
+
+    base_url = "/station-analysis"
+    selectors = _render_selector_strip(
+        _render_range_pills(base_url, range,
+                            {k: v for k, v in base_params.items()
+                             if k not in ("range", "start", "end")},
+                            start=start or "", end=end or "",
+                            options=STATION_RANGE_OPTIONS),
+    ) if duids else ""
+
+    content = _station_content(duids, kind, label, meta, range, start, end)
+    body = _render_tab_body("", selectors + content)
+    if _is_htmx(request):
+        return HTMLResponse(body)
+    return HTMLResponse(_render_shell(body))
+
+
+# ----------------------------------------------------------------------------
 # Flat placeholder routes for the remaining tabs (anything not Today or Prices)
 # ----------------------------------------------------------------------------
 
@@ -4288,7 +5111,7 @@ def _make_flat_route(slug: str, label: str):
 
 for _slug, _label, _subs in TABS:
     if _slug in ("today", "prices", "generation-mix", "evening-peak",
-                 "gas", "pivot-table") or _subs:
+                 "gas", "generators") or _subs:
         continue
     _make_flat_route(_slug, _label)
 
