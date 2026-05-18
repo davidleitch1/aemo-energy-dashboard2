@@ -115,11 +115,21 @@ def _normalise_fuels(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _rooftop_latest_mw() -> float:
-    """Most-recent rooftop NEM-wide MW from rooftop30 (5-region sum)."""
+    """Most-recent rooftop NEM-wide MW from rooftop30 (5-region sum).
+
+    Filter to the 5 main NEM regions: rooftop30 historically (pre-2026)
+    also contained sub-region IDs (QLDC/QLDN/QLDS/TASN/TASS) that
+    double-count QLD+TAS when summed across all regions. See
+    [[rooftop-subregion-bug]] in MEMORY.md."""
     df = q("""
-        WITH latest AS (SELECT MAX(settlementdate) AS ts FROM rooftop30)
-        SELECT SUM(power) AS mw FROM rooftop30, latest
+        WITH latest AS (
+            SELECT MAX(settlementdate) AS ts FROM rooftop30
+            WHERE regionid IN ('NSW1','QLD1','VIC1','SA1','TAS1')
+        )
+        SELECT SUM(power) AS mw
+          FROM rooftop30, latest
          WHERE settlementdate = latest.ts
+           AND regionid IN ('NSW1','QLD1','VIC1','SA1','TAS1')
     """)
     if df.empty or df["mw"].iloc[0] is None:
         return 0.0
@@ -7392,14 +7402,23 @@ def _load_records() -> dict:
 
 @app.get("/tile/renewable-gauge", response_class=HTMLResponse)
 def renewable_gauge() -> HTMLResponse:
+    return _cached_tile("renewable-gauge", _build_renewable_gauge)
+
+
+def _build_renewable_gauge() -> HTMLResponse:
+    # Query scada5 + duid_mapping directly for the latest interval — the
+    # equivalent generation_by_fuel_5min VIEW costs ~1.7 s because it
+    # aggregates across all history before filtering. Direct table query
+    # with a tight WHERE clause: ~20 ms.
     df = q("""
-        WITH latest AS (
-            SELECT MAX(settlementdate) AS ts FROM generation_by_fuel_5min
-        )
-        SELECT settlementdate, fuel_type, SUM(total_generation_mw) AS mw
-          FROM generation_by_fuel_5min, latest
-         WHERE settlementdate = latest.ts
-         GROUP BY settlementdate, fuel_type
+        WITH latest AS (SELECT MAX(settlementdate) AS ts FROM scada5)
+        SELECT s.settlementdate,
+               d.fuel AS fuel_type,
+               SUM(s.scadavalue) AS mw
+          FROM scada5 s
+          JOIN duid_mapping d ON s.duid = d.duid, latest
+         WHERE s.settlementdate = latest.ts
+         GROUP BY s.settlementdate, d.fuel
     """)
     if df.empty:
         return HTMLResponse('<div style="color:%s">no data</div>' % MUTED)
@@ -7488,13 +7507,23 @@ def renewable_gauge() -> HTMLResponse:
 
 @app.get("/tile/generation-mix", response_class=HTMLResponse)
 def generation_mix() -> HTMLResponse:
+    return _cached_tile("generation-mix", _build_generation_mix)
+
+
+def _build_generation_mix() -> HTMLResponse:
+    # Direct scada5 + duid_mapping query for the past 24h. The view-based
+    # equivalent (generation_by_fuel_5min) is ~80× slower because it
+    # pre-aggregates across all history before the WHERE clause filters.
     df = q("""
-        WITH latest AS (SELECT MAX(settlementdate) AS ts FROM generation_by_fuel_5min)
-        SELECT settlementdate, fuel_type, SUM(total_generation_mw) AS mw
-          FROM generation_by_fuel_5min, latest
-         WHERE settlementdate >= latest.ts - INTERVAL 24 HOUR
-         GROUP BY settlementdate, fuel_type
-         ORDER BY settlementdate
+        WITH latest AS (SELECT MAX(settlementdate) AS ts FROM scada5)
+        SELECT s.settlementdate,
+               d.fuel AS fuel_type,
+               SUM(s.scadavalue) AS mw
+          FROM scada5 s
+          JOIN duid_mapping d ON s.duid = d.duid, latest
+         WHERE s.settlementdate >= latest.ts - INTERVAL 24 HOUR
+         GROUP BY s.settlementdate, d.fuel
+         ORDER BY s.settlementdate
     """)
     if df.empty:
         return HTMLResponse('<div style="color:%s">no data</div>' % MUTED)
@@ -7504,11 +7533,14 @@ def generation_mix() -> HTMLResponse:
     df = df.groupby(["settlementdate", "fuel_type"], as_index=False)["mw"].sum()
 
     # Merge rooftop (30-min, 5 regions → NEM total) onto the 5-min grid via ffill.
+    # Filter to NEM_PHYSICAL_REGIONS to avoid the rooftop sub-region double-
+    # counting bug (QLDC/QLDN/QLDS/TASN/TASS in pre-2026 data).
     roof = q("""
-        WITH latest AS (SELECT MAX(settlementdate) AS ts FROM generation_by_fuel_5min)
+        WITH latest AS (SELECT MAX(settlementdate) AS ts FROM scada5)
         SELECT settlementdate, SUM(power) AS mw
           FROM rooftop30, latest
          WHERE settlementdate >= latest.ts - INTERVAL 24 HOUR
+           AND regionid IN ('NSW1','QLD1','VIC1','SA1','TAS1')
          GROUP BY settlementdate
          ORDER BY settlementdate
     """)
@@ -8126,6 +8158,12 @@ def _badge_label(notice: dict) -> str:
 
 @app.get("/tile/market-notices", response_class=HTMLResponse)
 def market_notices() -> HTMLResponse:
+    # External AEMO fetch is the slow part; cache for 2 min since notices
+    # change at most a few times per day.
+    return _cached_tile("market-notices", _build_market_notices, ttl=120.0)
+
+
+def _build_market_notices() -> HTMLResponse:
     notices = _get_notices(limit=8)
     if not notices:
         return HTMLResponse(
@@ -8203,6 +8241,12 @@ def _get_outage_data() -> tuple[pd.DataFrame, pd.DataFrame] | None:
 
 @app.get("/tile/outages-summary", response_class=HTMLResponse)
 def outages_summary() -> HTMLResponse:
+    # PASA fetch + render is the slow part; cache for 2 min since outage
+    # schedules don't move minute-to-minute.
+    return _cached_tile("outages-summary", _build_outages_summary, ttl=120.0)
+
+
+def _build_outages_summary() -> HTMLResponse:
     """Horizontal stacked bar per fuel; segments per DUID coloured by region.
 
     Mirrors the production PASA tab's `create_generator_fuel_summary` —
@@ -8321,6 +8365,30 @@ def _attribution(source: str = "AEMO") -> str:
 
 def _wrap_plot(slug: str, title: str, fig: go.Figure) -> HTMLResponse:
     return _wrap_plot_with_extras(slug, title, fig)
+
+
+# ── Per-worker TTL cache for slow tile endpoints ─────────────────────────────
+# The user-visible slow tiles (renewable-gauge, generation-mix) read from
+# DuckDB *views* that scan large underlying tables; each request takes
+# ~2–10 s. The tiles refresh client-side every 5 min, so a server-side
+# cache with a short TTL collapses repeated visits within the same worker
+# to a single computation. Caches don't share across uvicorn workers
+# (each worker is its own process), but with 4 workers + 30-second TTL,
+# the worst case is ~4 cold computations every 30 s — well below the
+# every-5-min HTMX poll cadence.
+
+_TILE_CACHE: dict[str, tuple[float, HTMLResponse]] = {}
+
+
+def _cached_tile(key: str, builder, ttl: float = 30.0) -> HTMLResponse:
+    """Return a cached HTMLResponse if fresh; otherwise rebuild and cache."""
+    now = time.time()
+    cached = _TILE_CACHE.get(key)
+    if cached and (now - cached[0]) < ttl:
+        return cached[1]
+    fresh = builder()
+    _TILE_CACHE[key] = (now, fresh)
+    return fresh
 
 
 def _wrap_plot_with_extras(slug: str, title: str, fig: go.Figure,
