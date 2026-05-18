@@ -128,9 +128,17 @@ Tile-based grid (3×3). Page-level attribution sits below the grid in
 - [x] **Cal+2 forward vs trailing spot** — `Data: Global-Roam + AEMO`
 - [x] **Single contract (all regions)** — `Data: Global-Roam`
 
+## Curtailment
+
+- [x] **Stats strip** — total curt MWh, rate %, econ + grid split, peak MW, # DUIDs curtailed — `Data: AEMO`
+- [x] **Curtailment over time** — stacked area, Solar/Wind × Econ/Grid (4 traces). Auto resolution. — `Data: AEMO`
+- [x] **Regional comparison table** — per-region MWh + rate split by fuel and classification — `Data: AEMO`
+- [x] **Top curtailed DUIDs table** — top-N by MWh with click-through to Station Analysis — `Data: AEMO`
+
+Classification rule: regional RRP ≤ $0 → economic; > $0 → grid. Threshold lives in two `CASE WHEN` expressions in the SQL; easy to refine.
+
 ## Placeholders (not yet built)
 
-- Curtailment
 - PASA
 
 When these are built, add a section per tab with each card listed as above.

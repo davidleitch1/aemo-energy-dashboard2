@@ -6617,6 +6617,733 @@ def batteries_page(request: Request,
 
 
 # ----------------------------------------------------------------------------
+# /curtailment — UIGF-based curtailment with econ/grid classification
+# ----------------------------------------------------------------------------
+#
+# Data:
+#   curtailment_regional5 (settlementdate, regionid, solar_uigf, solar_cleared,
+#                          solar_curtailment, wind_uigf, wind_cleared,
+#                          wind_curtailment, total_curtailment) at 5-min cadence
+#   curtailment_duid5      (settlementdate, duid, uigf, totalcleared,
+#                          curtailment) at 5-min cadence
+#
+# Curtailment = UIGF (unconstrained intermittent generation forecast) −
+# cleared dispatch. Classified by joining each interval to that region's
+# RRP: rrp ≤ 0 → "economic" (oversupply/negative pricing made the plant
+# stop voluntarily or be wound down by the dispatch optimiser), rrp > 0 →
+# "grid" (forced curtailment despite a positive price, typically because
+# of transmission constraints).
+#
+# Replaces a broken production tab where curtailment_tab.py drifted out of
+# sync with the query manager API (calling renamed methods, missing args,
+# expecting renamed columns).
+
+CURTAIL_FUELS = [("Solar", "Solar"), ("Wind", "Wind")]
+CURTAIL_TOPN_OPTIONS = [("10", "10"), ("20", "20"), ("50", "50"),
+                        ("all", "All")]
+CURTAIL_ECON_COLOR = "#BC5215"   # Flexoki orange
+CURTAIL_GRID_COLOR = "#A02F6F"   # Flexoki magenta
+CURTAIL_SOLAR_COLOR = "#D4A000"
+CURTAIL_WIND_COLOR  = "#66800B"
+
+
+def _curtailment_resolution(span: timedelta) -> tuple[str, str, float, str]:
+    """(resolution_label, sql_truncation, hours_factor, time_expression).
+    Auto-pick based on span:
+      ≤7 days   → 5-min source, no rollup
+      ≤30 days  → 30-min via date_trunc('hour') + half-hour bucket
+      >30 days  → daily via date_trunc('day')
+
+    Returns (label, time_expr, hours_factor, sql_alias). time_expr is the
+    SQL expression that produces the bucket timestamp."""
+    if span <= timedelta(days=7):
+        return ("5-min", "settlementdate", 5.0 / 60.0, "settlementdate")
+    if span <= timedelta(days=30):
+        # 30-min buckets via half-hour floor on MINUTE
+        expr = (
+            "date_trunc('hour', settlementdate) + "
+            "INTERVAL '30 minutes' * "
+            "FLOOR(EXTRACT(MINUTE FROM settlementdate) / 30)"
+        )
+        return ("30-min", expr, 0.5, "bucket")
+    return ("daily", "date_trunc('day', settlementdate)", 24.0, "bucket")
+
+
+def _load_curtailment_timeseries(s_ts: pd.Timestamp, e_ts: pd.Timestamp,
+                                 regions: list[str], fuels: list[str]
+                                 ) -> tuple[pd.DataFrame, str]:
+    """Time series of curtailment MW broken down by fuel × classification.
+
+    Classification (econ vs grid) is decided per-interval per-region from
+    that region's RRP at the same timestamp. We join prices_5min for the
+    raw 5-min source and aggregate the curtailment alongside the price-
+    derived classification flag.
+    """
+    if not regions:
+        return pd.DataFrame(), "5-min"
+    span = e_ts - s_ts
+    res_label, time_expr, hours_factor, alias = _curtailment_resolution(span)
+    region_in = ", ".join(f"'{r}'" for r in regions)
+
+    # Build per-interval rows with classification, then aggregate to the
+    # chosen bucket. Each fuel keeps its own column so the chart can stack.
+    solar_in = "'Solar'" in [f"'{x}'" for x in fuels]
+    wind_in  = "'Wind'"  in [f"'{x}'" for x in fuels]
+    solar_expr = "c.solar_curtailment" if "Solar" in fuels else "0"
+    wind_expr  = "c.wind_curtailment"  if "Wind"  in fuels else "0"
+
+    sql = f"""
+      WITH paired AS (
+        SELECT
+          c.settlementdate, c.regionid,
+          {solar_expr} AS solar_curt,
+          {wind_expr}  AS wind_curt,
+          COALESCE(p.rrp, 0) AS rrp
+        FROM curtailment_regional5 c
+        LEFT JOIN prices_5min p
+          ON c.settlementdate = p.settlementdate
+          AND c.regionid = p.regionid
+        WHERE c.settlementdate >= ?
+          AND c.settlementdate < ?
+          AND c.regionid IN ({region_in})
+      )
+      SELECT
+        {time_expr} AS {alias},
+        SUM(CASE WHEN rrp <= 0 THEN solar_curt ELSE 0 END) AS solar_econ,
+        SUM(CASE WHEN rrp >  0 THEN solar_curt ELSE 0 END) AS solar_grid,
+        SUM(CASE WHEN rrp <= 0 THEN wind_curt  ELSE 0 END) AS wind_econ,
+        SUM(CASE WHEN rrp >  0 THEN wind_curt  ELSE 0 END) AS wind_grid,
+        COUNT(*) AS n_rows
+      FROM paired
+      GROUP BY {time_expr}
+      ORDER BY {alias}
+    """
+    df = q(sql, [s_ts, e_ts])
+    if df.empty:
+        return df, res_label
+    # Bucket counts intervals across regions; mean per-region MW is the sum
+    # divided by # regions present in the bucket. For an aggregation that
+    # represents *concurrent* curtailment, the AVG-style behaviour is what
+    # the chart should show. But for daily we want MWh (∑ MW × hours), and
+    # for sub-day we want mean MW. Keep the SUM here and let the chart
+    # function decide via the resolution flag.
+    return df, res_label
+
+
+def _curtailment_aggregate_to_chart(df: pd.DataFrame, resolution: str,
+                                    regions: list[str]) -> pd.DataFrame:
+    """Normalise SUM(curtailment) per bucket into a chart-ready series.
+
+    5-min and 30-min charts show mean MW per region (so the y-axis is in
+    MW units of curtailment summed across regions but representative of
+    typical co-incident curtailment). Daily charts show MWh per day —
+    the sum of MW × hours = SUM(MW) × (5/60) for 5-min source.
+    """
+    if df.empty:
+        return df
+    out = df.copy()
+    if resolution == "daily":
+        # SUM(MW) over 5-min intervals × (5/60 h/interval) = MWh
+        # Each settlementdate has one row per region — but our query SUMs
+        # across regions before the daily bucket, so SUM(MW) per day is
+        # the sum across (regions × intervals). To get total MWh for the
+        # day = SUM × (5/60). That's per-region-summed MWh — exactly what
+        # we want.
+        for col in ("solar_econ", "solar_grid", "wind_econ", "wind_grid"):
+            out[col] = out[col] * 5.0 / 60.0
+        out["unit"] = "MWh"
+    else:
+        # Mean MW: SUM(MW) / n_intervals (where n = # regions × intervals
+        # in the bucket). Since the regions param can pick a subset, we
+        # divide by row count which is n_intervals × n_regions.
+        n_regions = max(len(regions), 1)
+        intervals_per_bucket = 1 if resolution == "5-min" else 6  # 6×5min=30min
+        per_bucket = intervals_per_bucket * n_regions
+        for col in ("solar_econ", "solar_grid", "wind_econ", "wind_grid"):
+            out[col] = out[col] / per_bucket
+        out["unit"] = "MW"
+    return out
+
+
+def _curtailment_stats(s_ts: pd.Timestamp, e_ts: pd.Timestamp,
+                       regions: list[str], fuels: list[str]) -> dict:
+    """Headline stats: total curtailment MWh + rate vs UIGF + peak MW +
+    # of distinct DUIDs that experienced curtailment in the window."""
+    if not regions:
+        return {}
+    region_in = ", ".join(f"'{r}'" for r in regions)
+    solar_curt = "c.solar_curtailment" if "Solar" in fuels else "0"
+    solar_uigf = "c.solar_uigf"        if "Solar" in fuels else "0"
+    wind_curt  = "c.wind_curtailment"  if "Wind" in fuels else "0"
+    wind_uigf  = "c.wind_uigf"         if "Wind" in fuels else "0"
+
+    main = q(f"""
+      WITH paired AS (
+        SELECT
+          c.settlementdate, c.regionid,
+          {solar_curt} + {wind_curt} AS curt_mw,
+          {solar_uigf} + {wind_uigf} AS uigf_mw,
+          COALESCE(p.rrp, 0) AS rrp
+        FROM curtailment_regional5 c
+        LEFT JOIN prices_5min p
+          ON c.settlementdate = p.settlementdate
+          AND c.regionid = p.regionid
+        WHERE c.settlementdate >= ?
+          AND c.settlementdate < ?
+          AND c.regionid IN ({region_in})
+      )
+      SELECT
+        SUM(curt_mw) * 5.0/60.0 AS total_curt_mwh,
+        SUM(uigf_mw) * 5.0/60.0 AS total_uigf_mwh,
+        SUM(CASE WHEN rrp <= 0 THEN curt_mw ELSE 0 END) * 5.0/60.0
+          AS econ_mwh,
+        SUM(CASE WHEN rrp >  0 THEN curt_mw ELSE 0 END) * 5.0/60.0
+          AS grid_mwh,
+        MAX(curt_mw) AS peak_mw
+      FROM paired
+    """, [s_ts, e_ts])
+    if main.empty:
+        return {}
+    n_duids = q(f"""
+      SELECT COUNT(DISTINCT c.duid) AS n
+      FROM curtailment_duid5 c
+      LEFT JOIN duid_mapping d ON c.duid = d.duid
+      WHERE c.settlementdate >= ?
+        AND c.settlementdate < ?
+        AND COALESCE(NULLIF(d.region, ''), 'Unknown') IN ({region_in})
+        AND d.fuel IN ({", ".join(f"'{f}'" for f in fuels)})
+        AND c.curtailment > 0
+    """, [s_ts, e_ts])
+    row = main.iloc[0]
+    total = float(row["total_curt_mwh"] or 0)
+    uigf  = float(row["total_uigf_mwh"] or 0)
+    return {
+        "total_mwh":  total,
+        "rate_pct":   (total / uigf * 100) if uigf > 0 else None,
+        "econ_mwh":   float(row["econ_mwh"] or 0),
+        "grid_mwh":   float(row["grid_mwh"] or 0),
+        "peak_mw":    float(row["peak_mw"] or 0),
+        "n_duids":    int(n_duids["n"].iloc[0] or 0) if not n_duids.empty else 0,
+    }
+
+
+def _load_curtailment_regional_summary(s_ts: pd.Timestamp,
+                                       e_ts: pd.Timestamp,
+                                       regions: list[str]
+                                       ) -> pd.DataFrame:
+    """Per-region summary table: solar/wind curt + econ/grid split + rates."""
+    if not regions:
+        return pd.DataFrame()
+    region_in = ", ".join(f"'{r}'" for r in regions)
+    sql = f"""
+      WITH paired AS (
+        SELECT
+          c.settlementdate, c.regionid,
+          c.solar_curtailment, c.wind_curtailment,
+          c.solar_uigf, c.wind_uigf,
+          COALESCE(p.rrp, 0) AS rrp
+        FROM curtailment_regional5 c
+        LEFT JOIN prices_5min p
+          ON c.settlementdate = p.settlementdate
+          AND c.regionid = p.regionid
+        WHERE c.settlementdate >= ?
+          AND c.settlementdate < ?
+          AND c.regionid IN ({region_in})
+      )
+      SELECT
+        regionid AS region,
+        SUM(solar_curtailment + wind_curtailment) * 5.0/60.0 AS total_curt_mwh,
+        SUM(solar_curtailment) * 5.0/60.0 AS solar_curt_mwh,
+        SUM(wind_curtailment)  * 5.0/60.0 AS wind_curt_mwh,
+        SUM(CASE WHEN rrp <= 0
+                 THEN solar_curtailment + wind_curtailment
+                 ELSE 0 END) * 5.0/60.0 AS econ_mwh,
+        SUM(CASE WHEN rrp >  0
+                 THEN solar_curtailment + wind_curtailment
+                 ELSE 0 END) * 5.0/60.0 AS grid_mwh,
+        SUM(solar_uigf + wind_uigf) * 5.0/60.0 AS total_uigf_mwh,
+        SUM(solar_uigf) * 5.0/60.0 AS solar_uigf_mwh,
+        SUM(wind_uigf)  * 5.0/60.0 AS wind_uigf_mwh
+      FROM paired
+      GROUP BY regionid
+      ORDER BY total_curt_mwh DESC
+    """
+    df = q(sql, [s_ts, e_ts])
+    if df.empty:
+        return df
+    df["curt_rate_pct"] = np.where(
+        df["total_uigf_mwh"] > 0,
+        df["total_curt_mwh"] / df["total_uigf_mwh"] * 100, np.nan)
+    df["solar_rate_pct"] = np.where(
+        df["solar_uigf_mwh"] > 0,
+        df["solar_curt_mwh"] / df["solar_uigf_mwh"] * 100, np.nan)
+    df["wind_rate_pct"] = np.where(
+        df["wind_uigf_mwh"] > 0,
+        df["wind_curt_mwh"] / df["wind_uigf_mwh"] * 100, np.nan)
+    return df
+
+
+def _load_curtailment_top_duids(s_ts: pd.Timestamp, e_ts: pd.Timestamp,
+                                regions: list[str], fuels: list[str],
+                                top_n: int) -> pd.DataFrame:
+    """Top-N DUIDs by curtailment MWh in the window. Joins to duid_mapping
+    for station / region / fuel labels and to prices_5min for the
+    econ/grid split per DUID."""
+    if not regions or not fuels:
+        return pd.DataFrame()
+    region_in = ", ".join(f"'{r}'" for r in regions)
+    fuel_in = ", ".join(f"'{f}'" for f in fuels)
+    limit_clause = "" if top_n <= 0 else f"LIMIT {top_n}"
+    sql = f"""
+      WITH paired AS (
+        SELECT
+          c.duid,
+          c.curtailment AS curt_mw,
+          c.uigf,
+          COALESCE(p.rrp, 0) AS rrp,
+          d.region,
+          d.fuel,
+          d."site name" AS station_name
+        FROM curtailment_duid5 c
+        LEFT JOIN duid_mapping d ON c.duid = d.duid
+        LEFT JOIN prices_5min p
+          ON c.settlementdate = p.settlementdate
+          AND d.region = p.regionid
+        WHERE c.settlementdate >= ?
+          AND c.settlementdate < ?
+          AND COALESCE(NULLIF(d.region, ''), 'Unknown') IN ({region_in})
+          AND d.fuel IN ({fuel_in})
+      )
+      SELECT
+        duid, station_name, region, fuel,
+        SUM(curt_mw) * 5.0/60.0 AS total_curt_mwh,
+        SUM(uigf)   * 5.0/60.0 AS total_uigf_mwh,
+        SUM(CASE WHEN rrp <= 0 THEN curt_mw ELSE 0 END) * 5.0/60.0 AS econ_mwh,
+        SUM(CASE WHEN rrp >  0 THEN curt_mw ELSE 0 END) * 5.0/60.0 AS grid_mwh
+      FROM paired
+      GROUP BY duid, station_name, region, fuel
+      HAVING SUM(curt_mw) > 0
+      ORDER BY total_curt_mwh DESC
+      {limit_clause}
+    """
+    df = q(sql, [s_ts, e_ts])
+    if df.empty:
+        return df
+    df["curt_rate_pct"] = np.where(
+        df["total_uigf_mwh"] > 0,
+        df["total_curt_mwh"] / df["total_uigf_mwh"] * 100, np.nan)
+    return df
+
+
+# ── Rendering helpers ───────────────────────────────────────────────────────
+
+def _render_curtailment_stats_strip(stats: dict, range_label: str) -> str:
+    if not stats:
+        return ""
+    def _fmt(v, suffix=""):
+        if v is None:
+            return '<span style="color:#878580">—</span>'
+        return f"{round(v):,}{suffix}"
+    total_mwh = stats["total_mwh"]
+    econ = stats["econ_mwh"]
+    grid = stats["grid_mwh"]
+    econ_pct = (econ / total_mwh * 100) if total_mwh > 0 else None
+    grid_pct = (grid / total_mwh * 100) if total_mwh > 0 else None
+    tiles = [
+        ("Total curt MWh",   _fmt(total_mwh)),
+        ("Rate %",           _fmt(stats["rate_pct"], "%")),
+        ("Econ MWh",         _fmt(econ)),
+        ("Econ % of curt",   _fmt(econ_pct, "%")),
+        ("Grid MWh",         _fmt(grid)),
+        ("Grid % of curt",   _fmt(grid_pct, "%")),
+        ("Peak MW",          _fmt(stats["peak_mw"])),
+        ("# DUIDs curtailed", _fmt(stats["n_duids"])),
+    ]
+    tile_html = "".join(
+        f'<div style="background:{PAPER};border:1px solid {BORDER};'
+        f'border-radius:6px;padding:8px 14px;min-width:96px">'
+        f'<div style="font-size:10px;color:{MUTED};text-transform:uppercase;'
+        f'letter-spacing:0.4px;font-weight:600">{label}</div>'
+        f'<div style="font-size:18px;font-weight:600;color:{INK};'
+        f'margin-top:2px">{val}</div>'
+        f'</div>'
+        for label, val in tiles
+    )
+    return (f'<div style="display:flex;flex-wrap:wrap;gap:8px;'
+            f'margin:0 0 12px 0">{tile_html}</div>'
+            f'<div style="font-size:11px;color:{MUTED};margin:0 0 8px 0">'
+            f'{range_label} &middot; econ = curtailment when regional '
+            f'RRP &le; $0/MWh (oversupply/negative pricing); grid = '
+            f'curtailment when RRP &gt; $0/MWh (transmission or system '
+            f'constraint despite positive price).</div>')
+
+
+def _curtailment_ts_chart(df: pd.DataFrame, resolution: str,
+                          fuels: list[str], range_label: str) -> str:
+    """Stacked area chart. Up to 4 traces: solar_econ, solar_grid,
+    wind_econ, wind_grid. Filtered to the selected fuels."""
+    fig = go.Figure()
+    if df.empty:
+        fig.add_annotation(text="No curtailment data in this window",
+                           xref="paper", yref="paper", x=0.5, y=0.5,
+                           showarrow=False,
+                           font=dict(size=14, color=MUTED))
+    else:
+        x_col = "bucket" if "bucket" in df.columns else "settlementdate"
+        unit = "MWh" if resolution == "daily" else "MW"
+        traces = []
+        if "Solar" in fuels:
+            traces.append(("solar_econ", "Solar · economic",
+                           CURTAIL_SOLAR_COLOR, 0.5))
+            traces.append(("solar_grid", "Solar · grid",
+                           CURTAIL_SOLAR_COLOR, 1.0))
+        if "Wind" in fuels:
+            traces.append(("wind_econ", "Wind · economic",
+                           CURTAIL_WIND_COLOR, 0.5))
+            traces.append(("wind_grid", "Wind · grid",
+                           CURTAIL_WIND_COLOR, 1.0))
+        for col, name, color, alpha in traces:
+            if col not in df.columns:
+                continue
+            fig.add_trace(go.Scatter(
+                x=df[x_col], y=df[col],
+                stackgroup="curt", mode="lines",
+                line=dict(color=color, width=0.5),
+                name=name,
+                fillcolor=_rgba(color, alpha),
+                hovertemplate=(f"{name}<br>%{{x|%d %b %Y}}<br>"
+                               f"%{{y:.1f}} {unit}<extra></extra>"),
+            ))
+
+    fig.update_layout(
+        paper_bgcolor=PAPER, plot_bgcolor=PAPER,
+        height=440,
+        margin=dict(l=60, r=24, t=20, b=44),
+        legend=dict(orientation="h", yanchor="bottom", y=-0.18,
+                    xanchor="center", x=0.5, font=dict(size=11),
+                    bgcolor=PAPER),
+    )
+    unit = "MWh/day" if resolution == "daily" else "MW (mean per region)"
+    fig.update_xaxes(gridcolor=BORDER, gridwidth=0.5,
+                     tickfont=dict(color=INK))
+    fig.update_yaxes(
+        title=dict(text=unit, font=dict(size=11, color=MUTED)),
+        gridcolor=BORDER, gridwidth=0.5, zeroline=False,
+    )
+
+    div_id = f"plot-curt-ts-{int(datetime.now().timestamp() * 1000)}"
+    fig_json = _plot_json(fig)
+    return (_card_h3(f"Curtailment over time &middot; {range_label} "
+                     f"&middot; {resolution}")
+            + f'<div id="{div_id}" style="height:440px"></div>'
+            + f'<script>(function(){{var f={fig_json};'
+              f'Plotly.newPlot("{div_id}",f.data,f.layout,'
+              f'{PLOTLY_CFG});}})();</script>'
+            + f'<p style="color:{MUTED};font-size:11px;margin:8px 14px 0;'
+              f'line-height:1.5">Stacked by classification: economic (lighter '
+              f'fill, RRP &le; $0) on the bottom, grid-constrained (darker '
+              f'fill, RRP &gt; $0) on top. Solar = gold, Wind = green.</p>'
+            + _attribution())
+
+
+def _rgba(hex_color: str, alpha: float) -> str:
+    h = hex_color.lstrip("#")
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    return f"rgba({r},{g},{b},{alpha})"
+
+
+def _curtailment_regional_table(df: pd.DataFrame, range_label: str) -> str:
+    if df.empty:
+        return (_card_h3(f"Regional comparison &middot; {range_label}")
+                + '<p style="padding:14px;color:#878580">No data.</p>'
+                + _attribution())
+
+    def _fmt_int(v):
+        if v is None or pd.isna(v):
+            return '<span style="color:#878580">—</span>'
+        return f"{round(v):,}"
+
+    def _fmt_pct(v):
+        if v is None or pd.isna(v):
+            return '<span style="color:#878580">—</span>'
+        return f"{v:.1f}%"
+
+    header_cells = [
+        '<th style="text-align:left;padding:6px 12px">Region</th>',
+        '<th style="text-align:right;padding:6px 12px">Total MWh</th>',
+        '<th style="text-align:right;padding:6px 12px">Rate %</th>',
+        '<th style="text-align:right;padding:6px 12px">Solar MWh</th>',
+        '<th style="text-align:right;padding:6px 12px">Solar %</th>',
+        '<th style="text-align:right;padding:6px 12px">Wind MWh</th>',
+        '<th style="text-align:right;padding:6px 12px">Wind %</th>',
+        '<th style="text-align:right;padding:6px 12px">Econ MWh</th>',
+        '<th style="text-align:right;padding:6px 12px">Grid MWh</th>',
+    ]
+    rows = []
+    for _, r in df.iterrows():
+        rows.append(
+            f'<tr style="border-bottom:1px solid {BORDER}">'
+            f'<td style="padding:6px 12px;color:{INK};font-weight:500">'
+            f'{r["region"]}</td>'
+            f'<td style="text-align:right;padding:6px 12px">'
+            f'{_fmt_int(r["total_curt_mwh"])}</td>'
+            f'<td style="text-align:right;padding:6px 12px">'
+            f'{_fmt_pct(r["curt_rate_pct"])}</td>'
+            f'<td style="text-align:right;padding:6px 12px">'
+            f'{_fmt_int(r["solar_curt_mwh"])}</td>'
+            f'<td style="text-align:right;padding:6px 12px">'
+            f'{_fmt_pct(r["solar_rate_pct"])}</td>'
+            f'<td style="text-align:right;padding:6px 12px">'
+            f'{_fmt_int(r["wind_curt_mwh"])}</td>'
+            f'<td style="text-align:right;padding:6px 12px">'
+            f'{_fmt_pct(r["wind_rate_pct"])}</td>'
+            f'<td style="text-align:right;padding:6px 12px">'
+            f'{_fmt_int(r["econ_mwh"])}</td>'
+            f'<td style="text-align:right;padding:6px 12px">'
+            f'{_fmt_int(r["grid_mwh"])}</td>'
+            f'</tr>'
+        )
+    return (_card_h3(f"Regional comparison &middot; {range_label}")
+            + '<table style="width:100%;border-collapse:collapse;'
+              'font-size:13px">'
+            + f'<thead style="background:{BORDER};color:{INK};'
+              f'font-size:11px;text-transform:uppercase;letter-spacing:0.4px">'
+            + f'<tr>{"".join(header_cells)}</tr></thead>'
+            + f'<tbody>{"".join(rows)}</tbody></table>'
+            + _attribution())
+
+
+def _curtailment_topn_table(df: pd.DataFrame, range_label: str,
+                            top_n_slug: str, range_slug: str,
+                            start: str | None, end: str | None) -> str:
+    if df.empty:
+        return (_card_h3(f"Top curtailed DUIDs &middot; {range_label}")
+                + '<p style="padding:14px;color:#878580">'
+                  'No DUIDs were curtailed in this window.</p>'
+                + _attribution())
+
+    def _fmt_int(v):
+        if v is None or pd.isna(v):
+            return '<span style="color:#878580">—</span>'
+        return f"{round(v):,}"
+
+    def _fmt_pct(v):
+        if v is None or pd.isna(v):
+            return '<span style="color:#878580">—</span>'
+        return f"{v:.1f}%"
+
+    # Carry range through to station-analysis on click.
+    qs_base = f"range={range_slug}"
+    if range_slug == "custom":
+        if start: qs_base += f"&start={start}"
+        if end:   qs_base += f"&end={end}"
+
+    header = (
+        f'<tr style="background:{BORDER};color:{INK};font-size:11px;'
+        f'text-transform:uppercase;letter-spacing:0.4px">'
+        '<th style="text-align:left;padding:6px 12px">DUID</th>'
+        '<th style="text-align:left;padding:6px 12px">Station</th>'
+        '<th style="text-align:left;padding:6px 12px">Region</th>'
+        '<th style="text-align:left;padding:6px 12px">Fuel</th>'
+        '<th style="text-align:right;padding:6px 12px">Curt MWh</th>'
+        '<th style="text-align:right;padding:6px 12px">Rate %</th>'
+        '<th style="text-align:right;padding:6px 12px">Econ MWh</th>'
+        '<th style="text-align:right;padding:6px 12px">Grid MWh</th>'
+        '</tr>'
+    )
+    rows = []
+    for _, r in df.iterrows():
+        duid_link = (
+            f'<a href="/station-analysis?duid={r["duid"]}&{qs_base}" '
+            f'style="color:{TEAL};text-decoration:none;'
+            f'font-family:ui-monospace,Menlo,monospace;font-size:12px">'
+            f'{r["duid"]}</a>')
+        rows.append(
+            f'<tr style="border-bottom:1px solid {BORDER}">'
+            f'<td style="padding:6px 12px">{duid_link}</td>'
+            f'<td style="padding:6px 12px;color:{INK}">'
+            f'{r["station_name"] or ""}</td>'
+            f'<td style="padding:6px 12px;color:{MUTED}">'
+            f'{(r["region"] or "")[:-1]}</td>'
+            f'<td style="padding:6px 12px;color:{MUTED}">{r["fuel"] or ""}</td>'
+            f'<td style="text-align:right;padding:6px 12px">'
+            f'{_fmt_int(r["total_curt_mwh"])}</td>'
+            f'<td style="text-align:right;padding:6px 12px">'
+            f'{_fmt_pct(r["curt_rate_pct"])}</td>'
+            f'<td style="text-align:right;padding:6px 12px">'
+            f'{_fmt_int(r["econ_mwh"])}</td>'
+            f'<td style="text-align:right;padding:6px 12px">'
+            f'{_fmt_int(r["grid_mwh"])}</td>'
+            f'</tr>'
+        )
+    return (_card_h3(f"Top curtailed DUIDs &middot; {range_label} "
+                     f"&middot; top {top_n_slug}")
+            + '<table style="width:100%;border-collapse:collapse;'
+              'font-size:13px">'
+            + f'<thead>{header}</thead>'
+            + f'<tbody>{"".join(rows)}</tbody></table>'
+            + f'<p style="color:{MUTED};font-size:11px;margin:8px 14px 0;'
+              f'line-height:1.5">Click any DUID to open it in Station '
+              f'Analysis. Rate % = curtailment ÷ UIGF. Window covers all '
+              f'5-min intervals in the selected range.</p>'
+            + _attribution())
+
+
+# Pill helpers
+def _render_curtailment_fuel_pills(base_url: str, active_fuels: list[str],
+                                   other_params: dict) -> str:
+    selected = set(active_fuels)
+    pills = []
+    for code, label in CURTAIL_FUELS:
+        is_active = code in selected
+        if is_active and len(selected) > 1:
+            new_set = selected - {code}
+        elif is_active:
+            new_set = selected
+        else:
+            new_set = selected | {code}
+        new_param = ",".join(c for c, _ in CURTAIL_FUELS if c in new_set)
+        params = dict(other_params, fuel=new_param)
+        url = _build_url(base_url, **params)
+        cls = "pill active" if is_active else "pill"
+        pills.append(
+            f'<button class="{cls}" '
+            f'hx-get="{url}" hx-target="#tab-body" hx-push-url="true">'
+            f'{label}</button>'
+        )
+    return (f'<div class="pill-bar">'
+            f'<span class="pill-bar-label">Fuel</span>'
+            f'<div class="pill-toggles">{"".join(pills)}</div>'
+            f'</div>')
+
+
+def _render_curtailment_topn_pills(base_url: str, active: str,
+                                   other_params: dict) -> str:
+    pills = []
+    for slug, label in CURTAIL_TOPN_OPTIONS:
+        params = dict(other_params, topn=slug)
+        url = _build_url(base_url, **params)
+        cls = "pill active" if slug == active else "pill"
+        pills.append(
+            f'<button class="{cls}" '
+            f'hx-get="{url}" hx-target="#tab-body" hx-push-url="true">'
+            f'{label}</button>'
+        )
+    return (f'<div class="pill-bar">'
+            f'<span class="pill-bar-label">Top N</span>'
+            f'<div class="pill-group">{"".join(pills)}</div>'
+            f'</div>')
+
+
+def _curtailment_content(regions: list[str], fuels: list[str],
+                         range_slug: str, start: str | None,
+                         end: str | None, top_n_slug: str) -> str:
+    # Reuse the Generators range resolver (matching range slug semantics).
+    s_ts, e_ts, range_label = _pivot_range_window(range_slug, start, end)
+
+    # Clamp start to when curtailment data actually begins.
+    curt_min = q("SELECT MIN(settlementdate) AS ts FROM curtailment_regional5")
+    if not curt_min.empty and curt_min["ts"].iloc[0] is not None:
+        data_start = pd.Timestamp(curt_min["ts"].iloc[0])
+        if s_ts < data_start:
+            s_ts = data_start
+            range_label = (f"{range_label} (data from {data_start:%d %b %Y})")
+
+    if not fuels:
+        return ('<div class="prices-stack"><div class="card">'
+                + _card_h3("Curtailment")
+                + '<p style="padding:14px;color:#878580">No fuels selected.</p>'
+                + _attribution()
+                + '</div></div>')
+
+    stats = _curtailment_stats(s_ts, e_ts, regions, fuels)
+    stats_html = _render_curtailment_stats_strip(stats, range_label)
+
+    raw_ts, res_label = _load_curtailment_timeseries(s_ts, e_ts,
+                                                    regions, fuels)
+    chart_df = _curtailment_aggregate_to_chart(raw_ts, res_label, regions)
+    ts_html = _curtailment_ts_chart(chart_df, res_label, fuels, range_label)
+
+    regional_df = _load_curtailment_regional_summary(s_ts, e_ts, regions)
+    regional_html = _curtailment_regional_table(regional_df, range_label)
+
+    top_n = (10 if top_n_slug == "10"
+             else 50 if top_n_slug == "50"
+             else 0 if top_n_slug == "all"
+             else 20)
+    top_df = _load_curtailment_top_duids(s_ts, e_ts, regions, fuels, top_n)
+    top_html = _curtailment_topn_table(top_df, range_label, top_n_slug,
+                                        range_slug, start, end)
+
+    return ('<div class="prices-stack">'
+            '<div class="card">'
+            + _card_h3(f"Curtailment &middot; {range_label}")
+            + f'<p style="color:{MUTED};font-size:12px;margin:0 0 8px 14px">'
+              f'UIGF − cleared dispatch, classified by regional RRP.</p>'
+            + stats_html
+            + ts_html
+            + '</div>'
+            + f'<div class="card">{regional_html}</div>'
+            + f'<div class="card">{top_html}</div>'
+            + '</div>')
+
+
+@app.get("/curtailment", response_class=HTMLResponse)
+def curtailment_page(request: Request,
+                     range: str = "30d",
+                     start: str | None = None,
+                     end: str | None = None,
+                     region: str = "NSW1,QLD1,SA1,TAS1,VIC1",
+                     fuel: str = "Solar,Wind",
+                     topn: str = "20") -> HTMLResponse:
+    valid_ranges = {slug for slug, _ in PIVOT_RANGE_OPTIONS} | {"custom"}
+    if range not in valid_ranges:
+        range = "30d"
+
+    region_list = [r for r in (region or "").split(",") if r in REGION_ORDER]
+    if not region_list:
+        region_list = REGION_ORDER[:]
+    region_param = ",".join(r for r in REGION_ORDER if r in region_list)
+
+    valid_fuels = {code for code, _ in CURTAIL_FUELS}
+    fuel_list = [f for f in (fuel or "").split(",") if f in valid_fuels]
+    if not fuel_list:
+        fuel_list = [code for code, _ in CURTAIL_FUELS]
+    fuel_param = ",".join(c for c, _ in CURTAIL_FUELS if c in fuel_list)
+
+    valid_topn = {slug for slug, _ in CURTAIL_TOPN_OPTIONS}
+    if topn not in valid_topn:
+        topn = "20"
+
+    base_params = {
+        "range": range, "region": region_param,
+        "fuel": fuel_param, "topn": topn,
+    }
+    if start: base_params["start"] = start
+    if end:   base_params["end"] = end
+
+    base_url = "/curtailment"
+    def _other(*excl: str) -> dict:
+        return {k: v for k, v in base_params.items() if k not in excl}
+
+    selectors = _render_selector_strip(
+        _render_pivot_range_pills(base_url, range,
+                                  _other("range", "start", "end"),
+                                  start=start or "", end=end or ""),
+        _render_region_pills(base_url, region_param,
+                             _other("region"), multi=True),
+        _render_curtailment_fuel_pills(base_url, fuel_list, _other("fuel")),
+        _render_curtailment_topn_pills(base_url, topn, _other("topn")),
+    )
+    content = _curtailment_content(region_list, fuel_list, range, start, end,
+                                    topn)
+    body = _render_tab_body("", selectors + content)
+    if _is_htmx(request):
+        return HTMLResponse(body)
+    return HTMLResponse(_render_shell(body))
+
+
+# ----------------------------------------------------------------------------
 # Flat placeholder routes for the remaining tabs (anything not Today or Prices)
 # ----------------------------------------------------------------------------
 
@@ -6632,7 +7359,8 @@ def _make_flat_route(slug: str, label: str):
 
 for _slug, _label, _subs in TABS:
     if _slug in ("today", "prices", "generation-mix", "evening-peak",
-                 "gas", "generators", "futures", "batteries") or _subs:
+                 "gas", "generators", "futures", "batteries",
+                 "curtailment") or _subs:
         continue
     _make_flat_route(_slug, _label)
 
