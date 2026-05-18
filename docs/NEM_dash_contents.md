@@ -103,6 +103,18 @@ Tile-based grid (3×3). Page-level attribution sits below the grid in
 
 - [x] **Generators pivot table** — `Data: AEMO`
 
+## Batteries
+
+- [x] **Batteries pivot table** — full battery-economics column set:
+  Disch GWh / Chrg GWh / Disch $M / Chrg $M / Disch $/MWh / Chrg $/MWh /
+  Spread $/MWh / **$/MWh-cap/yr** (annualised spread revenue per MWh of
+  storage, the investment metric) / Util % / Cap MW / Storage MWh.
+  Group dims locked to Region / Owner; fuel pre-filtered to Battery Storage.
+  Row anchors link to /station-analysis. — `Data: AEMO`
+- [x] **Battery ranking lollipop** — horizontal lollipop, top-N batteries
+  by selected metric. Default metric = `$/MWh-cap/yr`. Marker colour = region.
+  Top-N selector (10/20/50/All). — `Data: AEMO`
+
 ## Station Analysis (deep-link only)
 
 - [x] **Output and price time series** — `Data: AEMO`
@@ -118,7 +130,6 @@ Tile-based grid (3×3). Page-level attribution sits below the grid in
 
 ## Placeholders (not yet built)
 
-- Batteries
 - Curtailment
 - PASA
 

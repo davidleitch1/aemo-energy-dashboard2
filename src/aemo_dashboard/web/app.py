@@ -500,28 +500,43 @@ PIVOT_TABULATOR_JS = r"""
     var num = {hozAlign: "right", headerHozAlign: "right"};
     var intMoney = {formatter: "money",
                     formatterParams: {precision: 0, thousand: ","}};
+    // Column registry. The pivot (Generators) and the /batteries page both
+    // request from this set via window._pivotCols (a list of slugs).
+    var registry = {
+      // Generators (existing)
+      gwh:        {title: "GWh",        field: "gen_gwh",  fmt: "int"},
+      rev:        {title: "Rev $M",     field: "rev_m",    fmt: "int"},
+      price:      {title: "$/MWh",      field: "price",    fmt: "dash"},
+      util:       {title: "Util %",     field: "util",     fmt: "dash"},
+      cap:        {title: "Cap MW",     field: "cap_mw",   fmt: "int"},
+      // Batteries (new)
+      disch_gwh:  {title: "Disch GWh",  field: "discharge_gwh", fmt: "int"},
+      ch_gwh:     {title: "Chrg GWh",   field: "charge_gwh",    fmt: "int"},
+      disch_rev:  {title: "Disch $M",   field: "discharge_rev_m", fmt: "int"},
+      ch_cost:    {title: "Chrg $M",    field: "charge_cost_m",   fmt: "int"},
+      disch_price:{title: "Disch $/MWh", field: "discharge_price", fmt: "dash"},
+      ch_price:   {title: "Chrg $/MWh", field: "charge_price",    fmt: "dash"},
+      spread:     {title: "Spread $/MWh", field: "spread_pmwh",   fmt: "dash"},
+      spread_yr:  {title: "$/MWh-cap/yr", field: "spread_per_mwh_yr",
+                   fmt: "int", minWidth: 110},
+      storage:    {title: "Storage MWh", field: "storage_mwh",   fmt: "int"},
+    };
     var cols = [{
       title: "Name", field: "label", frozen: true,
       minWidth: 260, widthGrow: 2, headerSort: false,
       formatter: _pivotLabelFmt,
     }];
-    if (selectedCols.indexOf("gwh") !== -1)
-      cols.push(Object.assign({title: "GWh", field: "gen_gwh", minWidth: 80,
-                               headerSort: true}, num, intMoney));
-    if (selectedCols.indexOf("rev") !== -1)
-      cols.push(Object.assign({title: "Rev $M", field: "rev_m", minWidth: 80,
-                               headerSort: true}, num, intMoney));
-    if (selectedCols.indexOf("price") !== -1)
-      cols.push(Object.assign({title: "$/MWh", field: "price", minWidth: 80,
-                               headerSort: true,
-                               formatter: _pivotIntDashFmt}, num));
-    if (selectedCols.indexOf("util") !== -1)
-      cols.push(Object.assign({title: "Util %", field: "util", minWidth: 80,
-                               headerSort: true,
-                               formatter: _pivotIntDashFmt}, num));
-    if (selectedCols.indexOf("cap") !== -1)
-      cols.push(Object.assign({title: "Cap MW", field: "cap_mw", minWidth: 80,
-                               headerSort: true}, num, intMoney));
+    for (var i = 0; i < selectedCols.length; i++) {
+      var spec = registry[selectedCols[i]];
+      if (!spec) continue;
+      var entry = {
+        title: spec.title, field: spec.field,
+        minWidth: spec.minWidth || 80, headerSort: true,
+      };
+      if (spec.fmt === "int") Object.assign(entry, intMoney);
+      else if (spec.fmt === "dash") entry.formatter = _pivotIntDashFmt;
+      cols.push(Object.assign(entry, num));
+    }
     return cols;
   }
 
@@ -555,7 +570,11 @@ PIVOT_TABULATOR_JS = r"""
       dataTreeChildIndent: 0,
       layout: "fitColumns",
       layoutColumnsOnNewData: true,
-      height: "calc(100vh - 280px)",
+      // maxHeight (not height) so the table shrinks to fit its rows when
+      // collapsed and only scrolls internally when the expanded tree would
+      // overflow the viewport. Avoids the big empty card that was hiding
+      // the lollipop / other content below the pivot.
+      maxHeight: "calc(100vh - 280px)",
       columns: _buildPivotColumns(window._pivotCols),
       // No rowClick handler — every clickable name (DUID, station, group)
       // is an <a> in the cell formatter, so clicks navigate natively.
@@ -4810,6 +4829,119 @@ def _render_station_stats(stats: dict, range_label: str) -> str:
             f'(matches Generators table)</div>')
 
 
+def _battery_subject_stats(duids: list[str], storage_mwh: float,
+                           s_ts: pd.Timestamp, e_ts: pd.Timestamp,
+                           gen_table: str, price_table: str) -> dict:
+    """Battery-specific window aggregates: discharge AND charge sides
+    separately (the standard _station_stats applies discharge-only).
+    Each DUID is priced at its OWN region's RRP so the math stays correct
+    for multi-region fleet selections."""
+    if not duids:
+        return {}
+    duid_in = ", ".join(f"'{d}'" for d in duids)
+    hours_factor = 0.5 if gen_table == "generation_30min" else 5.0 / 60.0
+    sql = f"""
+      SELECT
+        SUM(GREATEST(g.scadavalue, 0)) * {hours_factor}     AS discharge_mwh,
+        SUM(GREATEST(-g.scadavalue, 0)) * {hours_factor}    AS charge_mwh,
+        SUM(GREATEST(g.scadavalue, 0)
+            * COALESCE(p.rrp, 0) * {hours_factor})          AS discharge_rev,
+        SUM(GREATEST(-g.scadavalue, 0)
+            * COALESCE(p.rrp, 0) * {hours_factor})          AS charge_cost
+      FROM {gen_table} g
+      LEFT JOIN duid_mapping d ON g.duid = d.duid
+      LEFT JOIN {price_table} p
+        ON g.settlementdate = p.settlementdate
+        AND d.region = p.regionid
+      WHERE g.duid IN ({duid_in})
+        AND g.settlementdate >= ? AND g.settlementdate < ?
+    """
+    row = q(sql, [s_ts, e_ts])
+    if row.empty:
+        return {}
+    disch_mwh = float(row["discharge_mwh"].iloc[0] or 0)
+    ch_mwh    = float(row["charge_mwh"].iloc[0] or 0)
+    disch_rev = float(row["discharge_rev"].iloc[0] or 0)
+    ch_cost   = float(row["charge_cost"].iloc[0] or 0)
+    hours = (e_ts - s_ts).total_seconds() / 3600.0
+    year_hours = 365.0 * 24.0
+    disch_price = (disch_rev / disch_mwh) if disch_mwh > 0 else None
+    ch_price = (ch_cost / ch_mwh) if ch_mwh > 0 else None
+    spread = ((disch_price - ch_price)
+              if (disch_price is not None and ch_price is not None) else None)
+    spread_rev = disch_rev - ch_cost
+    annual_spread = (spread_rev * year_hours / hours) if hours > 0 else 0
+    spread_per_mwh_yr = (annual_spread / storage_mwh) if storage_mwh > 0 else None
+    eff_cap = storage_mwh / 24.0
+    util = ((disch_mwh / (eff_cap * hours) * 100)
+            if eff_cap > 0 and hours > 0 else None)
+    rt_eff = ((disch_mwh / ch_mwh * 100) if ch_mwh > 0 else None)
+    return {
+        "discharge_gwh":   disch_mwh / 1000.0,
+        "charge_gwh":      ch_mwh / 1000.0,
+        "discharge_rev_m": disch_rev / 1_000_000.0,
+        "charge_cost_m":   ch_cost / 1_000_000.0,
+        "discharge_price": disch_price,
+        "charge_price":    ch_price,
+        "spread":          spread,
+        "spread_per_mwh_yr": spread_per_mwh_yr,
+        "util":             util,
+        "cap_mw_eff":       eff_cap,
+        "storage_mwh":      storage_mwh,
+        "rt_efficiency":    rt_eff,
+    }
+
+
+def _render_battery_subject_stats(stats: dict, range_label: str) -> str:
+    """Battery stats strip — the full economics surface. Includes the
+    headline investment metric ($/MWh-cap/yr) and the round-trip
+    efficiency derived from the discharge/charge MWh ratio."""
+    if not stats:
+        return ""
+
+    def _fmt_int(v, prefix=""):
+        if v is None:
+            return '<span style="color:#878580">—</span>'
+        return f"{prefix}{round(v):,}"
+
+    def _fmt(v, suffix=""):
+        if v is None:
+            return '<span style="color:#878580">—</span>'
+        return f"{round(v):,}{suffix}"
+
+    tiles = [
+        ("Disch GWh",       _fmt(stats["discharge_gwh"])),
+        ("Chrg GWh",        _fmt(stats["charge_gwh"])),
+        ("Disch $M",        _fmt(stats["discharge_rev_m"])),
+        ("Chrg $M",         _fmt(stats["charge_cost_m"])),
+        ("Disch $/MWh",     _fmt(stats["discharge_price"])),
+        ("Chrg $/MWh",      _fmt(stats["charge_price"])),
+        ("Spread $/MWh",    _fmt(stats["spread"])),
+        ("$/MWh-cap/yr",    _fmt(stats["spread_per_mwh_yr"])),
+        ("Util %",          _fmt(stats["util"], "%")),
+        ("RT eff %",        _fmt(stats["rt_efficiency"], "%")),
+        ("Cap MW (eff)",    _fmt(stats["cap_mw_eff"])),
+        ("Storage MWh",     _fmt(stats["storage_mwh"])),
+    ]
+    tile_html = "".join(
+        f'<div style="background:{PAPER};border:1px solid {BORDER};'
+        f'border-radius:6px;padding:8px 14px;min-width:96px">'
+        f'<div style="font-size:10px;color:{MUTED};text-transform:uppercase;'
+        f'letter-spacing:0.4px;font-weight:600">{label}</div>'
+        f'<div style="font-size:18px;font-weight:600;color:{INK};'
+        f'margin-top:2px">{val}</div>'
+        f'</div>'
+        for label, val in tiles
+    )
+    return (f'<div style="display:flex;flex-wrap:wrap;gap:8px;'
+            f'margin:0 0 12px 0">{tile_html}</div>'
+            f'<div style="font-size:11px;color:{MUTED};margin:0 0 8px 0">'
+            f'{range_label} &middot; battery economics — discharge / charge '
+            f'sides separately. <strong>$/MWh-cap/yr</strong> = annualised '
+            f'(disch rev − chrg cost) ÷ storage MWh, the investment metric. '
+            f'RT eff = round-trip efficiency (disch MWh ÷ chrg MWh).</div>')
+
+
 def _price_axis_should_log(prices: pd.Series) -> bool:
     """Spike detector for the price axis. Switch to log when:
       - max > $1,000/MWh (genuine spike territory, well above normal $30–300),
@@ -5018,9 +5150,306 @@ def _station_placeholder() -> str:
             '</div>')
 
 
+# ── Battery daily-trend card ────────────────────────────────────────────────
+# Third chart on the Station Analysis page when the subject is a battery.
+# Lets the user pick one or two daily-aggregated metrics and watch them
+# evolve over the page's selected window. Use case: "spread shrinks as more
+# batteries come online", "round-trip efficiency drift over time", etc.
+
+_BATTERY_TREND_METRICS = [
+    ("spread",      "Spread $/MWh",     "$/MWh"),
+    ("cycles",      "Cycles/day",       "/day"),
+    ("disch_gwh",   "Disch GWh/day",    "GWh"),
+    ("ch_gwh",      "Chrg GWh/day",     "GWh"),
+    ("disch_price", "Disch $/MWh",      "$/MWh"),
+    ("ch_price",    "Chrg $/MWh",       "$/MWh"),
+    ("net_rev_k",   "Net rev $K/day",   "$K"),
+    ("rt_eff",      "RT efficiency %",  "%"),
+    ("util_pct",    "Util % daily",     "%"),
+]
+_BATTERY_TREND_SMOOTHING = [
+    ("raw",  "Raw"),
+    ("7d",   "7-day"),
+    ("30d",  "30-day"),
+    ("90d",  "90-day"),
+]
+
+
+def _load_battery_daily_trend(duids: list[str],
+                              s_ts: pd.Timestamp, e_ts: pd.Timestamp
+                              ) -> pd.DataFrame:
+    """Daily aggregates for battery trend charts. SUMs are over both DUIDs
+    and intervals (one row per calendar day). Each DUID is priced at its
+    own region's RRP via the duid_mapping join."""
+    if not duids:
+        return pd.DataFrame()
+    duid_in = ", ".join(f"'{d}'" for d in duids)
+    sql = f"""
+      SELECT
+        date_trunc('day', g.settlementdate) AS day,
+        SUM(GREATEST(g.scadavalue, 0)) * 0.5  AS disch_mwh,
+        SUM(GREATEST(-g.scadavalue, 0)) * 0.5 AS chrg_mwh,
+        SUM(GREATEST(g.scadavalue, 0)
+            * COALESCE(p.rrp, 0) * 0.5)        AS disch_rev,
+        SUM(GREATEST(-g.scadavalue, 0)
+            * COALESCE(p.rrp, 0) * 0.5)        AS chrg_cost,
+        COUNT(*)                               AS n_rows
+      FROM generation_30min g
+      LEFT JOIN duid_mapping d ON g.duid = d.duid
+      LEFT JOIN prices_30min p
+        ON g.settlementdate = p.settlementdate
+        AND d.region = p.regionid
+      WHERE g.duid IN ({duid_in})
+        AND g.settlementdate >= ? AND g.settlementdate < ?
+      GROUP BY date_trunc('day', g.settlementdate)
+      ORDER BY day
+    """
+    return q(sql, [s_ts, e_ts])
+
+
+def _battery_trend_compute(df: pd.DataFrame, storage_mwh: float
+                           ) -> pd.DataFrame:
+    """Derive the daily metrics that the trend chart can plot."""
+    if df.empty:
+        return df
+    out = df.copy()
+    out["day"] = pd.to_datetime(out["day"])
+    out["disch_price"] = np.where(
+        out["disch_mwh"] > 0, out["disch_rev"] / out["disch_mwh"], np.nan)
+    out["ch_price"] = np.where(
+        out["chrg_mwh"] > 0, out["chrg_cost"] / out["chrg_mwh"], np.nan)
+    out["spread"] = out["disch_price"] - out["ch_price"]
+    out["disch_gwh"] = out["disch_mwh"] / 1000.0
+    out["ch_gwh"] = out["chrg_mwh"] / 1000.0
+    out["net_rev_k"] = (out["disch_rev"] - out["chrg_cost"]) / 1000.0
+    out["rt_eff"] = np.where(
+        out["chrg_mwh"] > 0, out["disch_mwh"] / out["chrg_mwh"] * 100,
+        np.nan)
+    if storage_mwh > 0:
+        out["cycles"] = out["disch_mwh"] / storage_mwh
+        # Daily util %: fraction of a "one-cycle-per-day" baseline used.
+        out["util_pct"] = out["cycles"] * 100
+    else:
+        out["cycles"] = np.nan
+        out["util_pct"] = np.nan
+    return out
+
+
+def _battery_trend_apply_smoothing(s: pd.Series, smoothing: str) -> pd.Series:
+    if smoothing == "raw" or s.empty:
+        return s
+    win = {"7d": 7, "30d": 30, "90d": 90}.get(smoothing, 0)
+    if win <= 0:
+        return s
+    return s.rolling(win, min_periods=max(1, win // 3)).mean()
+
+
+def _render_battery_trend_metric_pills(base_url: str, label: str,
+                                       param_name: str, active: str,
+                                       other_params: dict,
+                                       include_none: bool) -> str:
+    pills = []
+    if include_none:
+        params = dict(other_params, **{param_name: ""})
+        url = _build_url(base_url, **params)
+        cls = "pill active" if not active else "pill"
+        pills.append(
+            f'<button class="{cls}" '
+            f'hx-get="{url}" hx-target="#tab-body" hx-push-url="true">'
+            f'(none)</button>'
+        )
+    for slug, mlabel, _unit in _BATTERY_TREND_METRICS:
+        params = dict(other_params, **{param_name: slug})
+        url = _build_url(base_url, **params)
+        cls = "pill active" if slug == active else "pill"
+        pills.append(
+            f'<button class="{cls}" '
+            f'hx-get="{url}" hx-target="#tab-body" hx-push-url="true">'
+            f'{mlabel}</button>'
+        )
+    return (f'<div class="pill-bar">'
+            f'<span class="pill-bar-label">{label}</span>'
+            f'<div class="pill-group">{"".join(pills)}</div>'
+            f'</div>')
+
+
+def _render_battery_trend_smoothing_pills(base_url: str, active: str,
+                                          other_params: dict) -> str:
+    pills = []
+    for slug, mlabel in _BATTERY_TREND_SMOOTHING:
+        params = dict(other_params, tsm=slug)
+        url = _build_url(base_url, **params)
+        cls = "pill active" if slug == active else "pill"
+        pills.append(
+            f'<button class="{cls}" '
+            f'hx-get="{url}" hx-target="#tab-body" hx-push-url="true">'
+            f'{mlabel}</button>'
+        )
+    return (f'<div class="pill-bar">'
+            f'<span class="pill-bar-label">Smoothing</span>'
+            f'<div class="pill-group">{"".join(pills)}</div>'
+            f'</div>')
+
+
+def _build_battery_trend_chart(df: pd.DataFrame, primary: str,
+                               secondary: str, smoothing: str) -> str:
+    """Dual-axis trend chart. Primary on the left axis (blue), optional
+    secondary on the right axis (orange). Smoothing overlays a rolling
+    mean on the raw daily line."""
+    from plotly.subplots import make_subplots
+
+    metric_lookup = {slug: (label, unit)
+                     for slug, label, unit in _BATTERY_TREND_METRICS}
+    primary_label, primary_unit = metric_lookup.get(primary,
+                                                    (primary, ""))
+    secondary_label = None
+    if secondary:
+        secondary_label, _ = metric_lookup.get(secondary, (secondary, ""))
+
+    fig = make_subplots(specs=[[{"secondary_y": bool(secondary)}]])
+    if df.empty or primary not in df.columns:
+        fig.add_annotation(
+            text="No daily data for this window",
+            xref="paper", yref="paper", x=0.5, y=0.5,
+            showarrow=False, font=dict(size=14, color=MUTED))
+    else:
+        # Primary series (blue)
+        primary_color = "#205EA6"
+        secondary_color = "#BC5215"
+        y = df[primary]
+        y_smooth = _battery_trend_apply_smoothing(y, smoothing)
+        if smoothing == "raw":
+            fig.add_trace(go.Scatter(
+                x=df["day"], y=y, mode="lines", name=primary_label,
+                line=dict(color=primary_color, width=1.5),
+                hovertemplate=(f"{primary_label}: %{{y:.2f}}"
+                               "<br>%{x|%d %b %Y}<extra></extra>"),
+            ), secondary_y=False)
+        else:
+            # Raw lighter, smoothed bold
+            fig.add_trace(go.Scatter(
+                x=df["day"], y=y, mode="lines",
+                name=f"{primary_label} (raw)",
+                line=dict(color=primary_color, width=0.8),
+                opacity=0.35,
+                hovertemplate=(f"{primary_label} raw: %{{y:.2f}}"
+                               "<br>%{x|%d %b %Y}<extra></extra>"),
+            ), secondary_y=False)
+            fig.add_trace(go.Scatter(
+                x=df["day"], y=y_smooth, mode="lines",
+                name=f"{primary_label} ({smoothing})",
+                line=dict(color=primary_color, width=2.2),
+                hovertemplate=(f"{primary_label} {smoothing}: %{{y:.2f}}"
+                               "<br>%{x|%d %b %Y}<extra></extra>"),
+            ), secondary_y=False)
+
+        if secondary and secondary in df.columns:
+            y2 = df[secondary]
+            y2_smooth = _battery_trend_apply_smoothing(y2, smoothing)
+            if smoothing == "raw":
+                fig.add_trace(go.Scatter(
+                    x=df["day"], y=y2, mode="lines", name=secondary_label,
+                    line=dict(color=secondary_color, width=1.5),
+                    hovertemplate=(f"{secondary_label}: %{{y:.2f}}"
+                                   "<br>%{x|%d %b %Y}<extra></extra>"),
+                ), secondary_y=True)
+            else:
+                fig.add_trace(go.Scatter(
+                    x=df["day"], y=y2, mode="lines",
+                    name=f"{secondary_label} (raw)",
+                    line=dict(color=secondary_color, width=0.8),
+                    opacity=0.35,
+                    hovertemplate=(f"{secondary_label} raw: %{{y:.2f}}"
+                                   "<br>%{x|%d %b %Y}<extra></extra>"),
+                ), secondary_y=True)
+                fig.add_trace(go.Scatter(
+                    x=df["day"], y=y2_smooth, mode="lines",
+                    name=f"{secondary_label} ({smoothing})",
+                    line=dict(color=secondary_color, width=2.2),
+                    hovertemplate=(f"{secondary_label} {smoothing}: "
+                                   "%{y:.2f}<br>%{x|%d %b %Y}<extra></extra>"),
+                ), secondary_y=True)
+
+    fig.update_layout(
+        paper_bgcolor=PAPER, plot_bgcolor=PAPER,
+        height=420,
+        margin=dict(l=60, r=60, t=20, b=44),
+        legend=dict(orientation="h", yanchor="bottom", y=-0.18,
+                    xanchor="center", x=0.5, font=dict(size=11),
+                    bgcolor=PAPER),
+        showlegend=True,
+    )
+    fig.update_xaxes(gridcolor=BORDER, gridwidth=0.5,
+                     title=dict(text="", font=dict(color=MUTED)))
+    fig.update_yaxes(
+        title=dict(text=primary_label, font=dict(size=11, color="#205EA6")),
+        gridcolor=BORDER, gridwidth=0.5, zeroline=False, secondary_y=False,
+    )
+    if secondary:
+        fig.update_yaxes(
+            title=dict(text=secondary_label,
+                       font=dict(size=11, color="#BC5215")),
+            showgrid=False, zeroline=False, secondary_y=True,
+        )
+
+    div_id = f"plot-batt-trend-{int(datetime.now().timestamp() * 1000)}"
+    fig_json = _plot_json(fig)
+    return (f'<div id="{div_id}" style="height:420px"></div>'
+            + f'<script>(function(){{var f={fig_json};'
+              f'Plotly.newPlot("{div_id}",f.data,f.layout,'
+              f'{PLOTLY_CFG});}})();</script>')
+
+
+def _battery_trend_card(duids: list[str], meta: dict,
+                        s_ts: pd.Timestamp, e_ts: pd.Timestamp,
+                        primary: str, secondary: str,
+                        smoothing: str, base_url: str,
+                        other_params: dict) -> str:
+    """Daily-trend card content: inline metric/smoothing pills + chart.
+
+    Selectors live inside the card (not in the global selector strip) so
+    they only appear for battery subjects and don't clutter the main bar."""
+    raw_df = _load_battery_daily_trend(duids, s_ts, e_ts)
+    storage_mwh = float(meta.get("capacity_mw") or 0) * 24.0
+    df = _battery_trend_compute(raw_df, storage_mwh)
+
+    # Pill bars; we strip trend1/trend2/tsm from "other params" per bar so
+    # only the relevant param is in scope when clicking.
+    pill_html = (
+        '<div class="selector-strip" style="margin:0 0 12px 0">'
+        + _render_battery_trend_metric_pills(
+            base_url, "Primary", "trend1", primary,
+            {k: v for k, v in other_params.items() if k != "trend1"},
+            include_none=False)
+        + _render_battery_trend_metric_pills(
+            base_url, "Secondary", "trend2", secondary,
+            {k: v for k, v in other_params.items() if k != "trend2"},
+            include_none=True)
+        + _render_battery_trend_smoothing_pills(
+            base_url, smoothing,
+            {k: v for k, v in other_params.items() if k != "tsm"})
+        + '</div>'
+    )
+
+    chart_html = _build_battery_trend_chart(df, primary, secondary, smoothing)
+    return (_card_h3("Daily trend")
+            + pill_html
+            + chart_html
+            + f'<p style="color:{MUTED};font-size:11px;margin:8px 14px 0;'
+              f'line-height:1.5">Daily aggregates from 30-min data. Pick a '
+              f'primary metric for the left axis and optionally a secondary '
+              f'for the right axis (e.g. <strong>Spread $/MWh</strong> vs '
+              f'<strong>Cycles/day</strong>). Smoothing overlays a rolling '
+              f'mean; raw stays visible as a faint line.</p>'
+            + _attribution())
+
+
 def _station_content(duids: list[str], kind: str, label: str, meta: dict,
                      range_slug: str, start: str | None,
-                     end: str | None) -> str:
+                     end: str | None,
+                     trend1: str = "spread", trend2: str = "",
+                     tsm: str = "30d",
+                     carry_params: dict | None = None) -> str:
     if not duids:
         return _station_placeholder()
 
@@ -5057,28 +5486,58 @@ def _station_content(duids: list[str], kind: str, label: str, meta: dict,
     ]
     subtitle = " &middot; ".join(subtitle_parts)
 
-    stats = _station_stats(duids, regions, meta.get("is_battery", False),
-                           float(meta.get("capacity_mw") or 0),
-                           s_ts, e_ts, gen_table, price_table)
-    stats_html = _render_station_stats(stats, range_label)
+    # Battery selections get the full economics surface (charge + discharge
+    # sides separately, plus $/MWh-cap/yr) — the discharge-only convention
+    # from Generators glosses over what people actually care about on the
+    # battery detail page.
+    if meta.get("is_battery"):
+        # capacity_mw is the effective (storage/24) MW for batteries; we
+        # need the underlying storage in MWh for $/MWh-cap/yr.
+        storage_mwh = float(meta.get("capacity_mw") or 0) * 24.0
+        batt_stats = _battery_subject_stats(
+            duids, storage_mwh, s_ts, e_ts, gen_table, price_table)
+        stats_html = _render_battery_subject_stats(batt_stats, range_label)
+    else:
+        stats = _station_stats(duids, regions,
+                               meta.get("is_battery", False),
+                               float(meta.get("capacity_mw") or 0),
+                               s_ts, e_ts, gen_table, price_table)
+        stats_html = _render_station_stats(stats, range_label)
 
     ts_html = _station_ts_chart(df, meta, label, range_label, resolution_label)
     # TOD always sources from 30-min data (independent of TS resolution).
     tod_df = _load_station_tod(duids, regions, s_ts, e_ts)
     tod_html = _station_tod_chart(tod_df, meta, label)
 
-    # Back link to Generators carries the current range so the user lands
-    # on the same window they came from.
+    # Back link carries the current range. Routes to /batteries for
+    # battery selections (the lollipop + ranking is where you came from)
+    # and /generators otherwise.
     back_q = f"?range={range_slug}" if range_slug else ""
     if range_slug == "custom":
         if start: back_q += f"&start={start}"
         if end:   back_q += f"&end={end}"
-    back_link = (f'<a href="/generators{back_q}" '
-                 f'hx-get="/generators{back_q}" '
+    if meta.get("is_battery"):
+        back_url = f"/batteries{back_q}"
+        back_label = "← Batteries"
+    else:
+        back_url = f"/generators{back_q}"
+        back_label = "← Generators"
+    back_link = (f'<a href="{back_url}" '
+                 f'hx-get="{back_url}" '
                  f'hx-target="#tab-body" hx-push-url="true" '
                  f'style="color:{TEAL};font-size:12px;text-decoration:none;'
                  f'display:inline-block;margin:0 0 8px 0">'
-                 f'← Generators</a>')
+                 f'{back_label}</a>')
+
+    # Battery-only third card: daily-trend chart with metric pickers.
+    # carry_params from the route preserves every other URL param so the
+    # trend pills don't reset region/range/etc. when clicked.
+    trend_card_html = ""
+    if meta.get("is_battery"):
+        trend_inner = _battery_trend_card(
+            duids, meta, s_ts, e_ts, trend1, trend2, tsm,
+            "/station-analysis", carry_params or {})
+        trend_card_html = f'<div class="card">{trend_inner}</div>'
 
     return ('<div class="prices-stack">'
             f'<div class="card">'
@@ -5090,7 +5549,8 @@ def _station_content(duids: list[str], kind: str, label: str, meta: dict,
             + ts_html
             + '</div>'
             f'<div class="card">' + tod_html + '</div>'
-            '</div>')
+            + trend_card_html
+            + '</div>')
 
 
 @app.get("/station-analysis", response_class=HTMLResponse)
@@ -5102,13 +5562,25 @@ def station_page(request: Request,
                  owner: str | None = None,
                  range: str = "30d",
                  start: str | None = None,
-                 end: str | None = None) -> HTMLResponse:
+                 end: str | None = None,
+                 trend1: str = "spread",
+                 trend2: str = "",
+                 tsm: str = "30d") -> HTMLResponse:
     duids, kind, label, meta = _resolve_station_subject(
         duid, station, fuel=fuel, region=region, owner=owner)
 
     valid_ranges = {slug for slug, _ in STATION_RANGE_OPTIONS} | {"custom"}
     if range not in valid_ranges:
         range = "30d"
+
+    valid_trend_metrics = {s for s, _, _ in _BATTERY_TREND_METRICS}
+    if trend1 not in valid_trend_metrics:
+        trend1 = "spread"
+    if trend2 and trend2 not in valid_trend_metrics:
+        trend2 = ""
+    valid_smoothing = {s for s, _ in _BATTERY_TREND_SMOOTHING}
+    if tsm not in valid_smoothing:
+        tsm = "30d"
 
     base_params = {}
     if duid:    base_params["duid"]    = duid
@@ -5119,6 +5591,11 @@ def station_page(request: Request,
     base_params["range"] = range
     if start: base_params["start"] = start
     if end:   base_params["end"] = end
+    # Trend pills round-trip via URL; include them in the carry dict so
+    # other pills don't drop them on click.
+    base_params["trend1"] = trend1
+    if trend2: base_params["trend2"] = trend2
+    base_params["tsm"] = tsm
 
     base_url = "/station-analysis"
     selectors = _render_selector_strip(
@@ -5129,7 +5606,9 @@ def station_page(request: Request,
                             options=STATION_RANGE_OPTIONS),
     ) if duids else ""
 
-    content = _station_content(duids, kind, label, meta, range, start, end)
+    content = _station_content(duids, kind, label, meta, range, start, end,
+                               trend1=trend1, trend2=trend2, tsm=tsm,
+                               carry_params=base_params)
     body = _render_tab_body("", selectors + content)
     if _is_htmx(request):
         return HTMLResponse(body)
@@ -5593,6 +6072,551 @@ def futures_page(request: Request,
 
 
 # ----------------------------------------------------------------------------
+# /batteries — pivot + lollipop with battery-specific economics
+# ----------------------------------------------------------------------------
+#
+# Reuses the Generators pivot infrastructure (Tabulator dataTree in the
+# shell) but with a battery-extended column set and a lollipop card below
+# the table. Fleet view is delivered by the existing /station-analysis
+# drill-down — clicking a battery name or group navigates there.
+#
+# Battery columns split the discharge/charge sides that the standard
+# pivot collapses:
+#   Discharge GWh / Charge GWh
+#   Discharge Rev $M / Charge Cost $M
+#   $/MWh Disch / $/MWh Chrg (volume-weighted)
+#   Spread $/MWh  (discharge price - charge price; price-arbitrage delta)
+#   $/MWh-cap/yr  (annualised spread revenue per MWh of storage — the
+#                  investment metric: capex per MWh ÷ this number = years
+#                  to payback before opex / degradation)
+#
+# Lollipop ranks individual batteries by the selected metric. Default
+# metric is the per-MWh-storage annualised spread because that's the
+# number an analyst sizes a build decision against.
+
+BATTERY_COLUMNS_ALL = [
+    "disch_gwh", "ch_gwh",
+    "disch_rev", "ch_cost",
+    "disch_price", "ch_price",
+    "spread", "spread_yr",
+    "util", "cap", "storage",
+]
+BATTERY_METRICS = [
+    ("spread_yr",    "$/MWh-cap/yr"),
+    ("spread",       "Spread $/MWh"),
+    ("disch_rev",    "Disch Rev $M"),
+    ("ch_cost",      "Charge Cost $M"),
+    ("disch_price",  "Disch $/MWh"),
+    ("ch_price",     "Charge $/MWh"),
+    ("disch_gwh",    "Discharge GWh"),
+    ("ch_gwh",       "Charge GWh"),
+    ("util",         "Util %"),
+]
+BATTERY_TOPN_OPTIONS = [("10", "10"), ("20", "20"), ("50", "50"),
+                        ("all", "All")]
+# Field name on each row (matches the dict keys produced by _battery_agg_node).
+BATTERY_METRIC_FIELD = {
+    "spread_yr":   "spread_per_mwh_yr",
+    "spread":      "spread_pmwh",
+    "disch_rev":   "discharge_rev_m",
+    "ch_cost":     "charge_cost_m",
+    "disch_price": "discharge_price",
+    "ch_price":    "charge_price",
+    "disch_gwh":   "discharge_gwh",
+    "ch_gwh":      "charge_gwh",
+    "util":        "util",
+}
+BATTERY_METRIC_FMT = {
+    "spread_yr":   "$",
+    "spread":      "$",
+    "disch_rev":   "$M",
+    "ch_cost":     "$M",
+    "disch_price": "$",
+    "ch_price":    "$",
+    "disch_gwh":   "GWh",
+    "ch_gwh":      "GWh",
+    "util":        "%",
+}
+
+
+def _battery_query(s_ts: pd.Timestamp, e_ts: pd.Timestamp,
+                   regions: list[str]) -> pd.DataFrame:
+    """DUID-level battery aggregates for the window. Splits scada into
+    discharge (>0) and charge (<0) sides so we can compute the asymmetric
+    economics (revenue from selling, cost of buying)."""
+    if not regions:
+        return pd.DataFrame()
+    region_in = ", ".join(f"'{r}'" for r in regions)
+    sql = f"""
+      WITH price_src AS (
+        SELECT settlementdate, regionid, rrp
+        FROM prices_30min
+        WHERE regionid IN ({region_in})
+      )
+      SELECT
+        COALESCE(NULLIF(d.region, ''), 'Unknown')        AS region,
+        COALESCE(NULLIF(d.owner, ''), 'Unknown')         AS owner,
+        COALESCE(NULLIF(d."site name", ''), g.duid)      AS station_name,
+        g.duid                                           AS duid,
+        FIRST(d.capacity_mw)                             AS capacity_mw,
+        FIRST(d.storage_mwh)                             AS storage_mwh,
+        SUM(GREATEST(g.scadavalue, 0)) * 0.5             AS discharge_mwh,
+        SUM(GREATEST(-g.scadavalue, 0)) * 0.5            AS charge_mwh,
+        SUM(GREATEST(g.scadavalue, 0)
+            * COALESCE(p.rrp, 0) * 0.5)                  AS discharge_rev,
+        SUM(GREATEST(-g.scadavalue, 0)
+            * COALESCE(p.rrp, 0) * 0.5)                  AS charge_cost,
+        COUNT(*)                                         AS n_intervals
+      FROM generation_30min g
+      LEFT JOIN duid_mapping d ON g.duid = d.duid
+      LEFT JOIN price_src p
+        ON g.settlementdate = p.settlementdate
+        AND d.region = p.regionid
+      WHERE g.settlementdate >= ? AND g.settlementdate < ?
+        AND d.fuel = 'Battery Storage'
+        AND COALESCE(NULLIF(d.region, ''), 'Unknown') IN ({region_in})
+      GROUP BY d.region, d.owner, d."site name", g.duid
+    """
+    return q(sql, [s_ts, e_ts])
+
+
+def _battery_agg_node(rows: pd.DataFrame, hours: float, label: str,
+                      kind: str, ctx: dict) -> dict:
+    """Aggregate one set of battery leaf rows into a tree node.
+
+    Pricing: pool discharge_rev / charge_cost / mwh first, then derive
+    per-MWh prices (volume-weighted). Spread is disch_price − chrg_price.
+    Spread per MWh of storage per year is the investment-relevant metric;
+    we annualise from the window length (window_hours / (365 * 24))."""
+    disch_mwh = float(rows["discharge_mwh"].sum())
+    ch_mwh    = float(rows["charge_mwh"].sum())
+    disch_rev = float(rows["discharge_rev"].sum())
+    ch_cost   = float(rows["charge_cost"].sum())
+    storage   = float(rows["storage_mwh"].fillna(0).sum()) if kind != "duid" \
+                else float(rows["storage_mwh"].iloc[0] or 0)
+    cap_mw    = float(rows["capacity_mw"].fillna(0).sum()) if kind != "duid" \
+                else float(rows["capacity_mw"].iloc[0] or 0)
+    effective_cap = storage / 24.0  # one cycle/day equivalent MW
+    disch_price = (disch_rev / disch_mwh) if disch_mwh > 0 else None
+    ch_price = (ch_cost / ch_mwh) if ch_mwh > 0 else None
+    spread = ((disch_price - ch_price)
+              if (disch_price is not None and ch_price is not None) else None)
+    spread_rev = disch_rev - ch_cost
+    # Annualise: window_hours / (365 * 24) tells you what fraction of a year
+    # this window covers; divide by that to scale up.
+    year_hours = 365.0 * 24.0
+    annual_spread_rev = (spread_rev * year_hours / hours) if hours > 0 else 0
+    spread_per_mwh_yr = (annual_spread_rev / storage) if storage > 0 else None
+    util_denom = effective_cap * hours
+    util_pct = ((disch_mwh / util_denom * 100)
+                if util_denom > 0 else None)
+    n_duids = int(rows["duid"].nunique()) if kind != "duid" else 1
+    return {
+        "label":   label,
+        "kind":    kind,
+        "ctx":     ctx,
+        "discharge_gwh":    round(disch_mwh / 1000.0),
+        "charge_gwh":       round(ch_mwh / 1000.0),
+        "discharge_rev_m":  round(disch_rev / 1_000_000.0),
+        "charge_cost_m":    round(ch_cost / 1_000_000.0),
+        "discharge_price":  round(disch_price) if disch_price is not None else None,
+        "charge_price":     round(ch_price) if ch_price is not None else None,
+        "spread_pmwh":      round(spread) if spread is not None else None,
+        "spread_per_mwh_yr":(round(spread_per_mwh_yr)
+                             if spread_per_mwh_yr is not None else None),
+        "util":             round(util_pct) if util_pct is not None else None,
+        "cap_mw":           round(effective_cap),
+        "storage_mwh":      round(storage),
+        # Mirror generic field names so the generic shell formatter can
+        # still display generic metrics if requested.
+        "gen_gwh":          round(disch_mwh / 1000.0),
+        "rev_m":            round(disch_rev / 1_000_000.0),
+        "price":            round(disch_price) if disch_price is not None else None,
+        "n_items":          n_duids,
+    }
+
+
+def _build_battery_tree(df: pd.DataFrame, group_dims: list[str],
+                        hours: float) -> list[dict]:
+    """Like _build_pivot_tree but using the battery aggregator. Group dims
+    are picked from Region / Owner (no Fuel since locked to Battery)."""
+    if df.empty:
+        return []
+    def recurse(sub, remaining, ctx, depth):
+        if not remaining:
+            nodes = []
+            for station, srows in sub.groupby("station_name", sort=False):
+                station_ctx = dict(ctx, station=station)
+                duid_children = []
+                for _, drow in srows.sort_values(
+                        "discharge_rev", ascending=False).iterrows():
+                    duid_ctx = dict(station_ctx, duid=drow["duid"])
+                    one = pd.DataFrame([drow])
+                    duid_children.append(_battery_agg_node(
+                        one, hours, drow["duid"], "duid", duid_ctx))
+                node = _battery_agg_node(srows, hours, station, "station",
+                                         station_ctx)
+                node["_children"] = duid_children
+                nodes.append(node)
+            nodes.sort(key=lambda n: n["discharge_rev_m"], reverse=True)
+            return nodes
+        dim = remaining[0]
+        rest = remaining[1:]
+        nodes = []
+        for key, grp in sub.groupby(dim, sort=False):
+            sub_ctx = dict(ctx, **{dim: key})
+            children = recurse(grp, rest, sub_ctx, depth + 1)
+            node = _battery_agg_node(grp, hours, str(key), "group", sub_ctx)
+            node["_children"] = children
+            nodes.append(node)
+        nodes.sort(key=lambda n: n["discharge_rev_m"], reverse=True)
+        return nodes
+    return recurse(df, group_dims, {}, 0)
+
+
+def _battery_lollipop_chart(df: pd.DataFrame, hours: float, metric: str,
+                            top_n: int) -> str:
+    """Horizontal lollipop of individual batteries by selected metric.
+
+    Per-DUID aggregation (the leaf level — group dimensions don't affect
+    this chart). Sorted desc, top-N. Battery names on y-axis (horizontal
+    saves us name-rotation headaches with 20+ entries)."""
+    if df.empty:
+        return ('<div class="placeholder">'
+                'No battery data for the selected window / regions.</div>')
+
+    # Aggregate each DUID into a node so we can read the chosen metric
+    # field directly.
+    nodes = []
+    for _, drow in df.iterrows():
+        node = _battery_agg_node(
+            pd.DataFrame([drow]), hours, drow["station_name"], "duid",
+            {"duid": drow["duid"], "region": drow["region"],
+             "owner": drow["owner"]})
+        node["duid"] = drow["duid"]
+        node["region"] = drow["region"]
+        node["station_name"] = drow["station_name"]
+        nodes.append(node)
+
+    field = BATTERY_METRIC_FIELD.get(metric, "spread_per_mwh_yr")
+    label_lookup = dict(BATTERY_METRICS)
+    metric_label = label_lookup.get(metric, metric)
+    fmt = BATTERY_METRIC_FMT.get(metric, "")
+
+    valued = [n for n in nodes if n.get(field) is not None]
+    valued.sort(key=lambda n: n[field], reverse=True)
+    if top_n > 0:
+        valued = valued[:top_n]
+    if not valued:
+        return ('<div class="placeholder">'
+                'No data for the selected metric.</div>')
+
+    # Display name = station name (more readable than DUID code), but
+    # tooltip carries both.
+    names = [n["station_name"] for n in valued]
+    duids = [n["duid"] for n in valued]
+    values = [n[field] for n in valued]
+    regions_arr = [n["region"] for n in valued]
+    region_colors = {
+        "NSW1": "#205EA6", "QLD1": "#BC5215", "VIC1": "#66800B",
+        "SA1": "#24837B", "TAS1": "#5E409D",
+    }
+    bar_colors = [region_colors.get(r, "#878580") for r in regions_arr]
+
+    # Plot in reverse so the largest is at the top (Plotly's y-axis grows
+    # upward by default).
+    names = names[::-1]
+    duids = duids[::-1]
+    values = values[::-1]
+    bar_colors = bar_colors[::-1]
+    regions_arr = regions_arr[::-1]
+
+    fig = go.Figure()
+    # Stems (lollipop line)
+    for i, v in enumerate(values):
+        fig.add_shape(
+            type="line", x0=0, x1=v, y0=i, y1=i,
+            line=dict(color="#c7c5b8", width=2),
+        )
+    # Dots
+    fig.add_trace(go.Scatter(
+        x=values, y=list(range(len(values))),
+        mode="markers",
+        marker=dict(size=14, color=bar_colors,
+                    line=dict(color="#100F0F", width=0.5)),
+        customdata=list(zip(duids, regions_arr)),
+        hovertemplate=("<b>%{y}</b><br>DUID: %{customdata[0]}<br>"
+                       "Region: %{customdata[1]}<br>"
+                       f"{metric_label}: %{{x:,.0f}}<extra></extra>"),
+    ))
+    # Value labels
+    for i, (v, n) in enumerate(zip(values, valued[::-1])):
+        if fmt == "$":
+            txt = f"${round(v):,}"
+        elif fmt == "$M":
+            txt = f"${round(v):,}M"
+        elif fmt == "GWh":
+            txt = f"{round(v):,}"
+        elif fmt == "%":
+            txt = f"{round(v)}%"
+        else:
+            txt = f"{round(v):,}"
+        fig.add_annotation(
+            x=v, y=i, text=txt, showarrow=False,
+            xanchor="left", xshift=10,
+            font=dict(size=10, color=INK),
+        )
+
+    fig.update_layout(
+        paper_bgcolor=PAPER, plot_bgcolor=PAPER,
+        height=max(280, 22 * len(values) + 80),
+        margin=dict(l=200, r=80, t=20, b=44),
+        xaxis=dict(
+            title=dict(text=metric_label, font=dict(size=11, color=MUTED)),
+            gridcolor=BORDER, gridwidth=0.5, zeroline=True,
+            zerolinecolor=BORDER,
+        ),
+        yaxis=dict(
+            tickmode="array", tickvals=list(range(len(values))),
+            ticktext=names,
+            tickfont=dict(size=11, color=INK), showgrid=False,
+            range=[-0.5, len(values) - 0.5],
+        ),
+        showlegend=False,
+    )
+
+    div_id = f"plot-batt-lolli-{int(datetime.now().timestamp() * 1000)}"
+    fig_json = _plot_json(fig)
+    return (_card_h3(f"Battery ranking &middot; {metric_label} "
+                     f"&middot; top {len(values)}")
+            + f'<div id="{div_id}" style="height:{fig.layout.height}px"></div>'
+            + f'<script>(function(){{var f={fig_json};'
+              f'Plotly.newPlot("{div_id}",f.data,f.layout,'
+              f'{PLOTLY_CFG});}})();</script>'
+            + f'<p style="color:{MUTED};font-size:11px;margin:8px 14px 0;'
+              f'line-height:1.5"><strong>$/MWh-cap/yr</strong> = annualised '
+              f'(discharge revenue − charge cost) ÷ storage MWh. Compare to '
+              f'capex per MWh to size payback: e.g. a $500/kWh battery '
+              f'($500,000/MWh) wanting a 10% return needs $50,000/MWh-cap/yr. '
+              f'Marker colour = region.</p>'
+            + _attribution())
+
+
+# Pill helpers (Region multi-filter is reused from the generic helper).
+
+def _render_battery_metric_pills(base_url: str, active: str,
+                                 other_params: dict) -> str:
+    pills = []
+    for slug, label in BATTERY_METRICS:
+        params = dict(other_params, metric=slug)
+        url = _build_url(base_url, **params)
+        cls = "pill active" if slug == active else "pill"
+        pills.append(
+            f'<button class="{cls}" '
+            f'hx-get="{url}" hx-target="#tab-body" hx-push-url="true">'
+            f'{label}</button>'
+        )
+    return (f'<div class="pill-bar">'
+            f'<span class="pill-bar-label">Metric</span>'
+            f'<div class="pill-group">{"".join(pills)}</div>'
+            f'</div>')
+
+
+def _render_battery_topn_pills(base_url: str, active: str,
+                               other_params: dict) -> str:
+    pills = []
+    for slug, label in BATTERY_TOPN_OPTIONS:
+        params = dict(other_params, topn=slug)
+        url = _build_url(base_url, **params)
+        cls = "pill active" if slug == active else "pill"
+        pills.append(
+            f'<button class="{cls}" '
+            f'hx-get="{url}" hx-target="#tab-body" hx-push-url="true">'
+            f'{label}</button>'
+        )
+    return (f'<div class="pill-bar">'
+            f'<span class="pill-bar-label">Top N</span>'
+            f'<div class="pill-group">{"".join(pills)}</div>'
+            f'</div>')
+
+
+def _batteries_content(g_dims: list[str], regions: list[str],
+                       range_slug: str, start: str | None, end: str | None,
+                       metric: str, top_n_slug: str) -> str:
+    # Reuse the Generators range resolver (same window semantics).
+    s_ts, e_ts, range_label = _pivot_range_window(range_slug, start, end)
+    hours = max((e_ts - s_ts).total_seconds() / 3600.0, 1e-9)
+
+    df = _battery_query(s_ts, e_ts, regions)
+    if df.empty:
+        return ('<div class="prices-stack"><div class="card">'
+                + _card_h3(f"Batteries &middot; {range_label}")
+                + '<p style="padding:14px;color:#878580">'
+                  f'No battery data for the selected window / regions.</p>'
+                + _attribution()
+                + '</div></div>')
+
+    tree = _build_battery_tree(df, g_dims, hours)
+    tree_json = json.dumps(tree, default=lambda v: None)
+
+    cols_for_pivot = BATTERY_COLUMNS_ALL  # always show every battery column
+    cols_json = json.dumps(cols_for_pivot)
+    range_q = json.dumps(range_slug)
+    start_q = json.dumps(start or "")
+    end_q   = json.dumps(end or "")
+
+    title_chain = " → ".join(
+        dict(PIVOT_DIMS)[d] for d in g_dims) or "—"
+    n_duids = df["duid"].nunique()
+    n_stations = df["station_name"].nunique()
+    total_storage = float(df["storage_mwh"].fillna(0).sum())
+    subtitle = (f"{title_chain} → Station → DUID &middot; "
+                f"{n_stations:,} stations / {n_duids:,} battery DUIDs "
+                f"&middot; {total_storage:,.0f} MWh total storage "
+                f"&middot; {range_label} "
+                f"({s_ts:%d %b %Y} → {e_ts:%d %b %Y})")
+
+    pivot_html = f"""
+<div id="pivot-tabulator" style="margin-top:8px"></div>
+<script>
+  window._pivotData = {tree_json};
+  window._pivotCols = {cols_json};
+  window._pivotRange = {range_q};
+  window._pivotStart = {start_q};
+  window._pivotEnd   = {end_q};
+  if (typeof window._buildPivotTable === "function") {{
+    requestAnimationFrame(window._buildPivotTable);
+  }}
+</script>
+"""
+
+    # Lollipop card uses the leaf-level df (per DUID), independent of the
+    # pivot's group hierarchy.
+    top_n = (10 if top_n_slug == "10"
+             else 50 if top_n_slug == "50"
+             else 0 if top_n_slug == "all"
+             else 20)
+    lollipop_html = _battery_lollipop_chart(df, hours, metric, top_n)
+
+    return ('<div class="prices-stack">'
+            '<div class="card">'
+            + _card_h3(f"Batteries &middot; {range_label}")
+            + f'<p style="color:{MUTED};font-size:12px;margin:0 0 8px 14px">'
+              f'{subtitle}</p>'
+            + pivot_html
+            + f'<p style="color:{MUTED};font-size:11px;margin:10px 14px 0;'
+              f'line-height:1.5">Click any name to drill into the time '
+              f'series and TOD on Station Analysis. <strong>Spread '
+              f'$/MWh-cap/yr</strong> is the headline economic metric — '
+              f'annualised arbitrage revenue per MWh of storage capacity.'
+              f'</p>'
+            + _attribution()
+            + '</div>'
+            + '<div class="card">' + lollipop_html + '</div>'
+            '</div>')
+
+
+@app.get("/batteries", response_class=HTMLResponse)
+def batteries_page(request: Request,
+                   g1: str = "region", g2: str = "owner", g3: str = "",
+                   range: str = "1y",
+                   start: str | None = None, end: str | None = None,
+                   region: str = "NSW1,QLD1,SA1,TAS1,VIC1",
+                   metric: str = "spread_yr",
+                   topn: str = "20") -> HTMLResponse:
+    # Group dims: only Region / Owner (Fuel is locked).
+    valid_dims = {"region", "owner"}
+    g_dims: list[str] = []
+    for slot in (g1, g2, g3):
+        if slot in valid_dims and slot not in g_dims:
+            g_dims.append(slot)
+    if not g_dims:
+        g_dims = ["region"]
+
+    valid_ranges = {slug for slug, _ in PIVOT_RANGE_OPTIONS} | {"custom"}
+    if range not in valid_ranges:
+        range = "1y"
+
+    region_list = [r for r in (region or "").split(",") if r in REGION_ORDER]
+    if not region_list:
+        region_list = REGION_ORDER[:]
+    region_param = ",".join(r for r in REGION_ORDER if r in region_list)
+
+    valid_metrics = {slug for slug, _ in BATTERY_METRICS}
+    if metric not in valid_metrics:
+        metric = "spread_yr"
+
+    valid_topn = {slug for slug, _ in BATTERY_TOPN_OPTIONS}
+    if topn not in valid_topn:
+        topn = "20"
+
+    base_params = {
+        "g1": g_dims[0] if len(g_dims) > 0 else "",
+        "g2": g_dims[1] if len(g_dims) > 1 else "",
+        "g3": g_dims[2] if len(g_dims) > 2 else "",
+        "range": range,
+        "region": region_param,
+        "metric": metric,
+        "topn":   topn,
+    }
+    if start: base_params["start"] = start
+    if end:   base_params["end"] = end
+
+    base_url = "/batteries"
+    # Limit grouping pills to Region/Owner only (fuel locked to Battery).
+    batt_dims = [d for d in PIVOT_DIMS if d[0] != "fuel"]
+
+    def _other(*excl: str) -> dict:
+        return {k: v for k, v in base_params.items() if k not in excl}
+
+    # Lightweight grouping pill: just Region / Owner / (none).
+    def _battery_group_pill(slot, active, disabled):
+        pills = []
+        if slot >= 2:
+            params = dict(_other(f"g{slot}"), **{f"g{slot}": ""})
+            url = _build_url(base_url, **params)
+            cls = "pill active" if not active else "pill"
+            pills.append(f'<button class="{cls}" hx-get="{url}" '
+                         f'hx-target="#tab-body" hx-push-url="true">(none)</button>')
+        for slug, label in batt_dims:
+            is_active = slug == active
+            is_disabled = slug in disabled and not is_active
+            if is_disabled:
+                pills.append(f'<button class="pill disabled" disabled>'
+                             f'{label}</button>')
+                continue
+            params = dict(_other(f"g{slot}"), **{f"g{slot}": slug})
+            url = _build_url(base_url, **params)
+            cls = "pill active" if is_active else "pill"
+            pills.append(f'<button class="{cls}" hx-get="{url}" '
+                         f'hx-target="#tab-body" hx-push-url="true">'
+                         f'{label}</button>')
+        return (f'<div class="pill-bar">'
+                f'<span class="pill-bar-label">Group {slot}</span>'
+                f'<div class="pill-group">{"".join(pills)}</div>'
+                f'</div>')
+
+    selectors = _render_selector_strip(
+        _battery_group_pill(1, g_dims[0] if g_dims else None, set()),
+        _battery_group_pill(2, g_dims[1] if len(g_dims) > 1 else None,
+                            {g_dims[0]} if g_dims else set()),
+        _render_pivot_range_pills(base_url, range,
+                                  _other("range", "start", "end"),
+                                  start=start or "", end=end or ""),
+        _render_region_pills(base_url, region_param,
+                             _other("region"), multi=True),
+        _render_battery_metric_pills(base_url, metric, _other("metric")),
+        _render_battery_topn_pills(base_url, topn, _other("topn")),
+    )
+    content = _batteries_content(g_dims, region_list, range, start, end,
+                                 metric, topn)
+    body = _render_tab_body("", selectors + content)
+    if _is_htmx(request):
+        return HTMLResponse(body)
+    return HTMLResponse(_render_shell(body))
+
+
+# ----------------------------------------------------------------------------
 # Flat placeholder routes for the remaining tabs (anything not Today or Prices)
 # ----------------------------------------------------------------------------
 
@@ -5608,7 +6632,7 @@ def _make_flat_route(slug: str, label: str):
 
 for _slug, _label, _subs in TABS:
     if _slug in ("today", "prices", "generation-mix", "evening-peak",
-                 "gas", "generators", "futures") or _subs:
+                 "gas", "generators", "futures", "batteries") or _subs:
         continue
     _make_flat_route(_slug, _label)
 
