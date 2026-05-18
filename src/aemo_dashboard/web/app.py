@@ -1317,7 +1317,8 @@ def _build_prices_stats_table(regions: list[str], prices_df: pd.DataFrame,
             + f'<tbody>{stat_rows_html}{vwap_rows_html}</tbody></table>'
             + f'<p style="color:{MUTED};font-size:11px;margin:10px 14px 0;'
               f'line-height:1.5">VWAPs are volume-weighted by 30-min generation; '
-              f'Mean is the time-weighted price average.</p>')
+              f'Mean is the time-weighted price average.</p>'
+            + _attribution())
 
 
 def _build_tod_chart(regions: list[str], s_ts, e_ts, range_label: str) -> str:
@@ -1389,6 +1390,7 @@ def _build_tod_chart(regions: list[str], s_ts, e_ts, range_label: str) -> str:
         + f'<p style="color:{MUTED};font-size:11px;margin:10px 14px 0;'
           f'line-height:1.5">Hourly means over the selected window. '
           f'Per-region means are in the stats table above.</p>'
+        + _attribution()
     )
 
 
@@ -1445,6 +1447,7 @@ def _prices_analysis_content(regions: list[str], range_slug: str, smooth: bool,
         + f'<script>(function(){{var f={fig_json};'
           f'Plotly.newPlot("{div_id}",f.data,f.layout,'
           f'{PLOTLY_CFG});}})();</script>'
+        + _attribution()
     )
 
     stats_html = _build_prices_stats_table(regions, df, s_ts, e_ts, range_label)
@@ -1680,6 +1683,7 @@ def _prices_bands_content(regions: list[str], range_slug: str,
           f'Left bars = % of time each band was active. Right bars = each band\'s '
           f'contribution to the flat-load average ($/MWh). Bar widths on both '
           f'sides are in percent so they\'re visually comparable.</p>'
+        + _attribution()
     )
 
     # Cross-region contribution stack — one bar per region, bands stacked
@@ -1736,6 +1740,7 @@ def _prices_bands_content(regions: list[str], range_slug: str,
             + f'<p style="color:{MUTED};font-size:11px;margin:10px 14px 0;'
               f'line-height:1.5">Total bar height = region\'s mean spot price. '
               f'Segments show how each band pulls the mean up or down.</p>'
+            + _attribution()
         )
 
     # Revenue calc upgraded vs production: per-interval Σ(price × demand × 0.5)
@@ -1751,7 +1756,8 @@ def _prices_bands_content(regions: list[str], range_slug: str,
                        + _band_detail_df_to_html(detail_df)
                        + f'<p style="color:{MUTED};font-size:11px;margin:10px 14px 0;'
                          f'line-height:1.5">Revenue = Σ(price × demand × interval) '
-                         f'paired at the 30-min level.</p>')
+                         f'paired at the 30-min level.</p>'
+                       + _attribution())
 
     return (f'<div class="prices-stack">'
             f'<div class="card">{butterfly_html}</div>'
@@ -2082,7 +2088,8 @@ def _generation_stack_content(region: str, range_slug: str,
         f'daily means above. Transmission imports/exports shown for single '
         f'regions only (interconnectors net to zero across NEM).'
         f'</p>'
-        f'</div>'
+        + _attribution()
+        + f'</div>'
         f'</div>'
     )
 
@@ -2394,6 +2401,7 @@ def _render_fuel_table(stats: list[dict], summary: dict, range_label: str) -> st
         f'For NEM, each region\'s output is priced at that region\'s RRP. '
         f'Flat load = simple time-weighted price.'
         f'</p>'
+        + _attribution()
     )
 
 
@@ -2461,6 +2469,7 @@ def _generation_price_chart(region: str, range_slug: str,
         + f'<script>(function(){{var f={fig_json};'
         f'Plotly.newPlot("{div_id}",f.data,f.layout,'
         f'{PLOTLY_CFG});}})();</script>'
+        + _attribution()
     )
 
 
@@ -2718,6 +2727,7 @@ def _generation_tod_content(region: str, range_slug: str,
         f'{"demand-weighted across regions" if is_nem else "regional RRP"}). '
         f'No smoothing — the hour-of-day averaging already collapses cross-day noise.'
         f'</p>'
+        + _attribution()
         + '</div></div>'
     )
 
@@ -2878,6 +2888,7 @@ def _generation_transmission_content(region: str, range_slug: str,
         + f'<p style="color:{MUTED};font-size:11px;margin:8px 14px 0;line-height:1.5">'
         + f'Positive = import to {rd}, negative = export. One line per '
         + 'interconnector. Zero-crossings mark direction changes.</p>'
+        + _attribution()
         + '</div>'
         + '<div class="card">'
         + _card_h3(tod_title)
@@ -2886,6 +2897,7 @@ def _generation_transmission_content(region: str, range_slug: str,
           f'Plotly.newPlot("{tod_div}",f.data,f.layout,{PLOTLY_CFG});}})();</script>'
         + f'<p style="color:{MUTED};font-size:11px;margin:8px 14px 0;line-height:1.5">'
         + 'Mean flow per hour of day across the selected window.</p>'
+        + _attribution()
         + '</div>'
         + '</div>'
     )
@@ -2980,6 +2992,7 @@ def _generation_trends_content(region: str, fuel: str = "vre") -> str:
                 + f'<div id="{div_id}" style="height:420px"></div>'
                 + f'<script>(function(){{var f={fig_json};'
                 f'Plotly.newPlot("{div_id}",f.data,f.layout,{PLOTLY_CFG});}})();</script>'
+                + _attribution()
                 + '</div>')
 
     rd = _region_display(region)
@@ -3025,15 +3038,22 @@ def _generation_yr_on_yr_content(region: str, range_slug: str,
     annualised-TWh + generation-weighted VWAP semantics, same Battery-spread
     metric, same TWAP for the total row. Renders as an HTML table with
     sign-coloured deltas (Flexoki green/red)."""
-    # The iOS endpoint only supports a fixed set of periods. Our pill slugs
-    # are broader; fold to the nearest supported period.
+    # The iOS endpoint only supports the named periods (7d/30d/ytd/1y).
+    # 24h is handled directly here as a sub-day window vs same-day-last-year
+    # — the comparison is mostly cosmetic at that scale but the summary
+    # table is still useful. 1h is dropped from the pill set above; any
+    # URL that still passes 1h gets treated as 24h.
     period_map = {
         "7d": "7d", "30d": "30d", "ytd": "ytd", "1y": "1y",
-        "1h": "7d", "24h": "7d", "all": "1y", "custom": "ytd",
+        "all": "1y", "custom": "ytd",
     }
-    period = period_map.get(range_slug, "ytd")
-    period_note = (f' &middot; range "{range_slug.upper()}" → "{period.upper()}"'
-                   if range_slug != period and range_slug not in ("custom",)
+    if range_slug in ("1h", "24h"):
+        effective = "24h"
+    else:
+        effective = period_map.get(range_slug, "ytd")
+    period_note = (f' &middot; range "{range_slug.upper()}" → '
+                   f'"{effective.upper()}"'
+                   if range_slug != effective and range_slug != "custom"
                    else "")
 
     try:
@@ -3053,7 +3073,11 @@ def _generation_yr_on_yr_content(region: str, range_slug: str,
             "SELECT MAX(settlementdate) FROM scada30").fetchone()[0]
         if end_curr is None:
             return '<div class="placeholder">No data.</div>'
-        start_curr, end_curr = _resolve_window(period, end_curr)
+        if effective == "24h":
+            # 24-hour window ending at the freshest scada30 timestamp.
+            start_curr = end_curr - timedelta(hours=24)
+        else:
+            start_curr, end_curr = _resolve_window(effective, end_curr)
         end_prev   = _safe_year_minus_one(end_curr)
         start_prev = _safe_year_minus_one(start_curr)
         days_curr  = _period_days(start_curr, end_curr)
@@ -3134,9 +3158,10 @@ def _generation_yr_on_yr_content(region: str, range_slug: str,
         f'</tr>'
     )
 
-    period_labels = {"7d": "Last 7 days", "30d": "Last 30 days",
-                     "ytd": "Year to date", "1y": "Last 12 months"}
-    period_label = period_labels.get(period, period)
+    period_labels = {"24h": "Last 24h", "7d": "Last 7 days",
+                     "30d": "Last 30 days", "ytd": "Year to date",
+                     "1y": "Last 12 months"}
+    period_label = period_labels.get(effective, effective)
     title = (f"{_region_display(region)} year on year &middot; "
              f"{period_label}{period_note}")
 
@@ -3154,6 +3179,7 @@ def _generation_yr_on_yr_content(region: str, range_slug: str,
         + '(*Battery row shows discharge − charge spread). Total row $/MWh is '
         + 'demand-weighted TWAP across all intervals. Δ in green when positive, red when negative.'
         + '</p>'
+        + _attribution()
         + '</div></div>'
     )
 
@@ -3232,6 +3258,12 @@ def generation_mix_sub(sub: str, request: Request,
                                 if k not in ("fuel",)}),
         )
     else:
+        # 1H is meaningless on the yr-on-yr subtab (annualised comparison
+        # against the same hour last year is just noise). Hide that pill;
+        # 24H stays and works as a real 24-hour window via the period
+        # handling in _generation_yr_on_yr_content.
+        range_options = ([o for o in RANGE_OPTIONS if o[0] != "1h"]
+                         if sub == "yr-on-yr" else RANGE_OPTIONS)
         selectors = _render_selector_strip(
             _render_region_pills(base_url, region,
                                  {k: v for k, v in base_params.items() if k != "region"},
@@ -3239,7 +3271,8 @@ def generation_mix_sub(sub: str, request: Request,
             _render_range_pills(base_url, range,
                                 {k: v for k, v in base_params.items()
                                  if k not in ("range", "start", "end")},
-                                start=start or "", end=end or ""),
+                                start=start or "", end=end or "",
+                                options=range_options),
         )
     subtab_html = _render_subtab_nav("generation-mix", subtabs, sub,
                                       carry_params=base_params)
@@ -3613,6 +3646,7 @@ def _evening_peak_content(region: str, range_slug: str,
         + 'average MW per fuel (positive = more this year). All averages over the selected '
         + 'number of days.'
         + '</p>'
+        + _attribution()
         + '</div>'
         + '<div class="card">'
         + _card_h3(f"% composition · this year vs prior year")
@@ -3623,6 +3657,7 @@ def _evening_peak_content(region: str, range_slug: str,
         + 'Each bar sums to 100% of positive generation across the whole evening peak '
         + 'window. Segments labelled in-place when wide enough; hover for exact values.'
         + '</p>'
+        + _attribution()
         + '</div>'
         + '</div>'
     )
@@ -3937,6 +3972,7 @@ def _gas_content(hubs: list[str], range_slug: str) -> str:
           f'line-height:1.5">Daily ex-post prices ($/GJ) for the AEMO Short '
           f'Term Trading Market hubs. STTM Avg is the unweighted mean of '
           f'SYD, BRI, ADL.</p>'
+        + _attribution("AEMO STTM")
     )
 
     # Volume cards — physical hubs only (AVG is synthetic, no meter).
@@ -3956,6 +3992,7 @@ def _gas_content(hubs: list[str], range_slug: str) -> str:
         + f'<p style="color:{MUTED};font-size:11px;margin:10px 14px 0;'
           f'line-height:1.5">Sum across all three hubs, 7-day rolling mean. '
           f'Years overlaid on day-of-year so seasonal shape is comparable.</p>'
+        + _attribution("AEMO STTM")
     )
 
     hub_fig = _build_gas_hub_demand_fig(vols, physical)
@@ -3970,6 +4007,7 @@ def _gas_content(hubs: list[str], range_slug: str) -> str:
         + f'<p style="color:{MUTED};font-size:11px;margin:10px 14px 0;'
           f'line-height:1.5">Hub selection above filters this chart '
           f'(physical hubs only). Colour = hub, line weight/dash = year age.</p>'
+        + _attribution("AEMO STTM")
     )
 
     return (f'<div class="prices-stack">'
@@ -4263,6 +4301,7 @@ def _pivot_content(g_dims: list[str], cols: list[str], range_slug: str,
               f'open its charts and stats. Group rows open as fleet '
               f'selections; multi-region fleets use a demand-weighted '
               f'price reference.</p>'
+            + _attribution()
             + '</div>'
             + '</div>')
 
@@ -4882,7 +4921,8 @@ def _station_ts_chart(df: pd.DataFrame, meta: dict, label: str,
             + f'<div id="{div_id}" style="height:500px"></div>'
             + f'<script>(function(){{var f={fig_json};'
               f'Plotly.newPlot("{div_id}",f.data,f.layout,'
-              f'{PLOTLY_CFG});}})();</script>')
+              f'{PLOTLY_CFG});}})();</script>'
+            + _attribution())
 
 
 def _station_tod_chart(tod: pd.DataFrame, meta: dict, label: str) -> str:
@@ -4960,7 +5000,8 @@ def _station_tod_chart(tod: pd.DataFrame, meta: dict, label: str) -> str:
             + f'<div id="{div_id}" style="height:420px"></div>'
             + f'<script>(function(){{var f={fig_json};'
               f'Plotly.newPlot("{div_id}",f.data,f.layout,'
-              f'{PLOTLY_CFG});}})();</script>')
+              f'{PLOTLY_CFG});}})();</script>'
+            + _attribution())
 
 
 def _station_placeholder() -> str:
@@ -5096,6 +5137,462 @@ def station_page(request: Request,
 
 
 # ----------------------------------------------------------------------------
+# /futures — ASX electricity base-load futures (weekly settlement)
+# ----------------------------------------------------------------------------
+#
+# Source: futures.csv (ASX Energy weekly base-load settlement prices). Four
+# region series — NSW / QLD / SA / VIC — across quarterly contracts. Mirrors
+# production's futures_tab.py with 4 chart cards on a single scrolling page
+# instead of subtabs (consistent with how Gas was built).
+
+import re as _re
+
+FUTURES_CSV = Path("/Users/davidleitch/aemo_production/data/futures.csv")
+FUTURES_REGIONS = ["NSW", "QLD", "SA", "VIC"]
+FUTURES_REGION_COLORS = {
+    "NSW": "#205EA6",   # FLEXOKI blue
+    "QLD": "#BC5215",   # FLEXOKI orange
+    "SA":  "#24837B",   # FLEXOKI cyan
+    "VIC": "#66800B",   # FLEXOKI green
+}
+_FUTURES_COL_RE = _re.compile(
+    r"(?:ASX Energy Contract\s+)?(\w+)\s+(\d{4})\s+Q(\d)"
+    r"(?:\s+Base Load Futures Price.*)?$"
+)
+
+
+def _futures_strip_col(col: str) -> str:
+    """Strip the long ASX header to the canonical short form 'NSW 2026 Q2'."""
+    m = _FUTURES_COL_RE.match(col)
+    return f"{m.group(1)} {m.group(2)} Q{m.group(3)}" if m else col
+
+
+def _load_futures_df() -> pd.DataFrame:
+    """Load futures.csv into a DataFrame indexed by date with short column
+    names. Returns empty df if the file is missing."""
+    if not FUTURES_CSV.exists():
+        return pd.DataFrame()
+    df = pd.read_csv(FUTURES_CSV, parse_dates=["Time (UTC+10)"])
+    df = df.rename(columns={"Time (UTC+10)": "date"}).set_index("date")
+    df.columns = [_futures_strip_col(c) for c in df.columns]
+    return df
+
+
+def _parse_futures_contracts(columns) -> dict:
+    """Return {region: {(year, quarter): canonical_column_name}}."""
+    mapping: dict = {}
+    pat = _re.compile(r"(\w+)\s+(\d{4})\s+Q(\d)")
+    for col in columns:
+        m = pat.match(col)
+        if m:
+            region, year, quarter = m.group(1), int(m.group(2)), int(m.group(3))
+            mapping.setdefault(region, {})[(year, quarter)] = col
+    return mapping
+
+
+def _load_futures_spot_weekly() -> dict:
+    """Weekly mean spot price per region for the 'futures vs spot' chart."""
+    df = q("""
+        SELECT date_trunc('week', settlementdate) AS week,
+               REPLACE(regionid, '1', '') AS region,
+               AVG(rrp) AS avg_price
+        FROM prices_30min
+        WHERE regionid IN ('NSW1','QLD1','SA1','VIC1')
+        GROUP BY 1, 2
+        ORDER BY 1
+    """)
+    if df.empty:
+        return {}
+    out = {}
+    for r in FUTURES_REGIONS:
+        sub = df[df["region"] == r].set_index("week")["avg_price"]
+        out[r] = sub
+    return out
+
+
+def _futures_quarter_label(year: int, q: int) -> str:
+    return f"{year} Q{q}"
+
+
+# ── Chart builders ──────────────────────────────────────────────────────────
+
+def _build_forward_curve(futures_df: pd.DataFrame,
+                         contracts: dict, region: str,
+                         range_label: str) -> str:
+    """Snapshot of {today, 3 months ago, 1 year ago} forward prices across
+    each quarterly contract in the future. Shows how the forward curve has
+    moved."""
+    today = futures_df.index[-1]
+    now_year, now_quarter = today.year, (today.month - 1) // 3 + 1
+    snapshots = [
+        ("Today",         today,                     "#205EA6", "solid"),
+        ("3 months ago",  today - timedelta(days=91), "#BC5215", "dash"),
+        ("1 year ago",    today - timedelta(days=365),"#24837B", "dot"),
+    ]
+    region_contracts = contracts.get(region, {})
+    future_keys = sorted(
+        [(y, qq) for y, qq in region_contracts
+         if (y, qq) >= (now_year, now_quarter)])
+
+    fig = go.Figure()
+    for label, snap_date, color, dash in snapshots:
+        idx = futures_df.index.searchsorted(snap_date)
+        idx = min(idx, len(futures_df) - 1)
+        row = futures_df.iloc[idx]
+        actual_date = futures_df.index[idx]
+        xs, ys = [], []
+        for y, qq in future_keys:
+            col = region_contracts[(y, qq)]
+            v = row.get(col)
+            if pd.notna(v):
+                xs.append(_futures_quarter_label(y, qq))
+                ys.append(v)
+        if not xs:
+            continue
+        fig.add_trace(go.Scatter(
+            x=xs, y=ys, mode="lines+markers",
+            name=f"{label} ({actual_date.strftime('%d %b %Y')})",
+            line=dict(color=color, width=2.5, dash=dash),
+            marker=dict(size=7),
+            hovertemplate="%{x}: $%{y:.1f}/MWh<extra></extra>",
+        ))
+
+    fig.update_layout(
+        paper_bgcolor=PAPER, plot_bgcolor=PAPER,
+        height=440,
+        margin=dict(l=60, r=24, t=20, b=60),
+        legend=dict(orientation="h", yanchor="bottom", y=-0.20,
+                    xanchor="center", x=0.5, font=dict(size=11),
+                    bgcolor=PAPER),
+        xaxis=dict(showgrid=False, tickfont=dict(color=INK)),
+        yaxis=dict(title=dict(text="$/MWh",
+                              font=dict(size=11, color=MUTED)),
+                   gridcolor=BORDER, gridwidth=0.5, zeroline=False),
+    )
+    div_id = f"plot-fwd-curve-{int(datetime.now().timestamp() * 1000)}"
+    fig_json = _plot_json(fig)
+    return (_card_h3(f"{region} forward curve")
+            + f'<div id="{div_id}" style="height:440px"></div>'
+            + f'<script>(function(){{var f={fig_json};'
+              f'Plotly.newPlot("{div_id}",f.data,f.layout,'
+              f'{PLOTLY_CFG});}})();</script>'
+            + f'<p style="color:{MUTED};font-size:11px;margin:8px 14px 0">'
+              f'Three snapshots of the {region} forward curve — today vs '
+              f'3 months ago vs 1 year ago. X-axis = contract quarter.</p>'
+            + _attribution("Global-Roam"))
+
+
+def _cal_year_average(df: pd.DataFrame, contracts: dict, year: int
+                      ) -> pd.Series:
+    """Average of Q1-Q4 forward prices for a given calendar year."""
+    cols = [contracts.get((year, qq)) for qq in range(1, 5)]
+    cols = [c for c in cols if c is not None and c in df.columns]
+    if not cols:
+        return pd.Series(np.nan, index=df.index)
+    return df[cols].mean(axis=1)
+
+
+def _build_forward_expectations(futures_df: pd.DataFrame,
+                                contracts: dict, region: str) -> str:
+    """Cal+1 and Cal+2 forward averages over time. Both lines share the
+    chart; endpoint markers carry the value as text."""
+    region_contracts = contracts.get(region, {})
+    today = futures_df.index[-1]
+    cal1_year = today.year + 1
+    cal2_year = today.year + 2
+    cal1 = _cal_year_average(futures_df, region_contracts, cal1_year)
+    cal2 = _cal_year_average(futures_df, region_contracts, cal2_year)
+    cutoff = pd.Timestamp("2024-01-01")
+    cal1 = cal1[cal1.index >= cutoff].dropna()
+    cal2 = cal2[cal2.index >= cutoff].dropna()
+
+    fig = go.Figure()
+    for series, label, color in [
+        (cal1, f"Cal {cal1_year} (Cal+1)", "#205EA6"),
+        (cal2, f"Cal {cal2_year} (Cal+2)", "#BC5215"),
+    ]:
+        if series.empty:
+            continue
+        fig.add_trace(go.Scatter(
+            x=series.index, y=series.values, mode="lines",
+            name=label, line=dict(color=color, width=2.5),
+            hovertemplate="%{x|%d %b %Y}: $%{y:.1f}/MWh<extra></extra>",
+        ))
+        for pt_idx in (0, -1):
+            fig.add_trace(go.Scatter(
+                x=[series.index[pt_idx]], y=[float(series.values[pt_idx])],
+                mode="markers+text",
+                marker=dict(size=8, color=color,
+                            line=dict(color="white", width=1.5)),
+                text=[f"${float(series.values[pt_idx]):.0f}"],
+                textposition=("middle right" if pt_idx == -1
+                              else "middle left"),
+                textfont=dict(color=color, size=11),
+                showlegend=False, hoverinfo="skip",
+            ))
+
+    fig.update_layout(
+        paper_bgcolor=PAPER, plot_bgcolor=PAPER,
+        height=420,
+        margin=dict(l=60, r=24, t=20, b=44),
+        legend=dict(orientation="h", yanchor="bottom", y=-0.18,
+                    xanchor="center", x=0.5, font=dict(size=11),
+                    bgcolor=PAPER),
+        xaxis=dict(gridcolor=BORDER, gridwidth=0.5,
+                   tickfont=dict(color=INK)),
+        yaxis=dict(title=dict(text="$/MWh",
+                              font=dict(size=11, color=MUTED)),
+                   gridcolor=BORDER, gridwidth=0.5, zeroline=False),
+    )
+    div_id = f"plot-fwd-exp-{int(datetime.now().timestamp() * 1000)}"
+    fig_json = _plot_json(fig)
+    return (_card_h3(f"{region} calendar-year forward averages")
+            + f'<div id="{div_id}" style="height:420px"></div>'
+            + f'<script>(function(){{var f={fig_json};'
+              f'Plotly.newPlot("{div_id}",f.data,f.layout,'
+              f'{PLOTLY_CFG});}})();</script>'
+            + f'<p style="color:{MUTED};font-size:11px;margin:8px 14px 0">'
+              f'Cal+1 = average of next calendar year\'s four quarterly '
+              f'contracts; Cal+2 = same for the year after. Tracks how the '
+              f'forward market reprices over time.</p>'
+            + _attribution("Global-Roam"))
+
+
+def _build_futures_vs_spot(futures_df: pd.DataFrame, contracts: dict,
+                           spot_weekly: dict, region: str) -> str:
+    """Cal+2 forward vs trailing 12-month average spot. Shows whether the
+    market is pricing forwards above or below recent realised."""
+    region_contracts = contracts.get(region, {})
+    today = futures_df.index[-1]
+    cal2_year = today.year + 2
+    cal2 = _cal_year_average(futures_df, region_contracts, cal2_year)
+    cutoff = pd.Timestamp("2024-01-01")
+    cal2 = cal2[cal2.index >= cutoff].dropna()
+
+    fig = go.Figure()
+    if not cal2.empty:
+        fig.add_trace(go.Scatter(
+            x=cal2.index, y=cal2.values, mode="lines",
+            name=f"Cal {cal2_year} forward",
+            line=dict(color="#205EA6", width=2.5),
+            hovertemplate="%{x|%d %b %Y}: $%{y:.1f}/MWh<extra></extra>",
+        ))
+    spot = spot_weekly.get(region)
+    if spot is not None and not spot.empty:
+        trail = spot.rolling(52, min_periods=26).mean()
+        trail = trail[trail.index >= cutoff].dropna()
+        if not trail.empty:
+            fig.add_trace(go.Scatter(
+                x=trail.index, y=trail.values, mode="lines",
+                name="Trailing 12-month spot",
+                line=dict(color="#BC5215", width=2.5),
+                hovertemplate="%{x|%d %b %Y}: $%{y:.1f}/MWh<extra></extra>",
+            ))
+
+    fig.update_layout(
+        paper_bgcolor=PAPER, plot_bgcolor=PAPER,
+        height=420,
+        margin=dict(l=60, r=24, t=20, b=44),
+        legend=dict(orientation="h", yanchor="bottom", y=-0.18,
+                    xanchor="center", x=0.5, font=dict(size=11),
+                    bgcolor=PAPER),
+        xaxis=dict(gridcolor=BORDER, gridwidth=0.5,
+                   tickfont=dict(color=INK)),
+        yaxis=dict(title=dict(text="$/MWh",
+                              font=dict(size=11, color=MUTED)),
+                   gridcolor=BORDER, gridwidth=0.5, zeroline=False),
+    )
+    div_id = f"plot-fvs-{int(datetime.now().timestamp() * 1000)}"
+    fig_json = _plot_json(fig)
+    return (_card_h3(f"{region} &middot; Cal+2 forward vs trailing spot")
+            + f'<div id="{div_id}" style="height:420px"></div>'
+            + f'<script>(function(){{var f={fig_json};'
+              f'Plotly.newPlot("{div_id}",f.data,f.layout,'
+              f'{PLOTLY_CFG});}})();</script>'
+            + f'<p style="color:{MUTED};font-size:11px;margin:8px 14px 0">'
+              f'Cal+2 forward (blue) is what the market expects two calendar '
+              f'years out. Trailing 12-month spot (orange) is the 52-week '
+              f'rolling realised. Spread = forward risk premium.</p>'
+            + _attribution("Global-Roam + AEMO"))
+
+
+def _build_single_contract(futures_df: pd.DataFrame, contracts: dict,
+                           year: int, quarter: int) -> str:
+    """All 4 regions on one chart for a specific contract. Shows regional
+    spread over time for that quarter."""
+    fig = go.Figure()
+    for r in FUTURES_REGIONS:
+        region_contracts = contracts.get(r, {})
+        col = region_contracts.get((year, quarter))
+        if col is None or col not in futures_df.columns:
+            continue
+        series = futures_df[col].dropna()
+        if series.empty:
+            continue
+        fig.add_trace(go.Scatter(
+            x=series.index, y=series.values, mode="lines",
+            name=r,
+            line=dict(color=FUTURES_REGION_COLORS[r], width=2.5),
+            hovertemplate=f"{r}: $%{{y:.1f}}/MWh<extra></extra>",
+        ))
+
+    fig.update_layout(
+        paper_bgcolor=PAPER, plot_bgcolor=PAPER,
+        height=440,
+        margin=dict(l=60, r=24, t=20, b=44),
+        legend=dict(orientation="h", yanchor="bottom", y=-0.18,
+                    xanchor="center", x=0.5, font=dict(size=11),
+                    bgcolor=PAPER),
+        xaxis=dict(gridcolor=BORDER, gridwidth=0.5,
+                   tickfont=dict(color=INK)),
+        yaxis=dict(title=dict(text="$/MWh",
+                              font=dict(size=11, color=MUTED)),
+                   gridcolor=BORDER, gridwidth=0.5, zeroline=False),
+    )
+    div_id = f"plot-single-{int(datetime.now().timestamp() * 1000)}"
+    fig_json = _plot_json(fig)
+    return (_card_h3(f"{year} Q{quarter} base load &middot; all regions")
+            + f'<div id="{div_id}" style="height:440px"></div>'
+            + f'<script>(function(){{var f={fig_json};'
+              f'Plotly.newPlot("{div_id}",f.data,f.layout,'
+              f'{PLOTLY_CFG});}})();</script>'
+            + f'<p style="color:{MUTED};font-size:11px;margin:8px 14px 0">'
+              f'How NSW/QLD/SA/VIC traded for the {year} Q{quarter} contract '
+              f'as it approached delivery. Spread between regions reflects '
+              f'interconnector capacity + dispatch expectations.</p>'
+            + _attribution("Global-Roam"))
+
+
+# ── Selectors ───────────────────────────────────────────────────────────────
+
+def _render_futures_region_pills(base_url: str, active: str,
+                                 other_params: dict) -> str:
+    pills = []
+    for r in FUTURES_REGIONS:
+        params = dict(other_params, region=r)
+        url = _build_url(base_url, **params)
+        cls = "pill active" if r == active else "pill"
+        pills.append(
+            f'<button class="{cls}" '
+            f'hx-get="{url}" hx-target="#tab-body" hx-push-url="true">'
+            f'{r}</button>'
+        )
+    return (f'<div class="pill-bar">'
+            f'<span class="pill-bar-label">Region</span>'
+            f'<div class="pill-group">{"".join(pills)}</div>'
+            f'</div>')
+
+
+def _render_futures_contract_select(base_url: str, active: str,
+                                    contracts_sorted: list,
+                                    other_params: dict) -> str:
+    """Native <select> wrapped in a form. Too many quarterly contracts
+    (~20) for a pill bar; dropdown is the right control. requestSubmit()
+    fires HTMX on change so the swap happens without a button click."""
+    hidden = "".join(
+        f'<input type="hidden" name="{k}" value="{v}">'
+        for k, v in other_params.items() if v
+    )
+    options = []
+    for y, qq in contracts_sorted:
+        slug = f"{y}-{qq}"
+        sel = " selected" if slug == active else ""
+        options.append(
+            f'<option value="{slug}"{sel}>{y} Q{qq}</option>')
+    return (
+        f'<form class="pill-bar" hx-get="{base_url}" '
+        f'hx-target="#tab-body" hx-push-url="true">'
+        f'  {hidden}'
+        f'  <span class="pill-bar-label">Contract</span>'
+        f'  <select name="contract" class="contract-select" '
+        f'          onchange="this.form.requestSubmit()" '
+        f'          style="border:1px solid {BORDER};border-radius:14px;'
+        f'                 padding:4px 12px;font-size:12px;'
+        f'                 background:{PAPER};color:{INK};'
+        f'                 font-family:inherit;cursor:pointer">'
+        f'{"".join(options)}'
+        f'  </select>'
+        f'</form>'
+    )
+
+
+# ── Content + route ─────────────────────────────────────────────────────────
+
+def _futures_content(region: str, contract: tuple) -> str:
+    df = _load_futures_df()
+    if df.empty:
+        return ('<div class="placeholder"><p><strong>'
+                'Futures data unavailable</strong></p>'
+                '<p>futures.csv not found at the configured path.</p>'
+                '</div>')
+    contracts = _parse_futures_contracts(df.columns)
+    spot = _load_futures_spot_weekly()
+    range_label = (f"data through {df.index[-1].strftime('%d %b %Y')}")
+
+    y, qq = contract
+    fwd_curve_html = _build_forward_curve(df, contracts, region, range_label)
+    fwd_exp_html = _build_forward_expectations(df, contracts, region)
+    fvs_html = _build_futures_vs_spot(df, contracts, spot, region)
+    single_html = _build_single_contract(df, contracts, y, qq)
+
+    return ('<div class="prices-stack">'
+            f'<div class="card">{fwd_curve_html}</div>'
+            f'<div class="card">{fwd_exp_html}</div>'
+            f'<div class="card">{fvs_html}</div>'
+            f'<div class="card">{single_html}</div>'
+            '</div>')
+
+
+@app.get("/futures", response_class=HTMLResponse)
+def futures_page(request: Request,
+                 region: str = "NSW",
+                 contract: str | None = None) -> HTMLResponse:
+    if region not in FUTURES_REGIONS:
+        region = "NSW"
+
+    df = _load_futures_df()
+    contracts = _parse_futures_contracts(df.columns) if not df.empty else {}
+    all_keys = set()
+    for rc in contracts.values():
+        all_keys.update(rc.keys())
+    contracts_sorted = sorted(all_keys)
+
+    # Pick the default contract: ~1 year out (index -4 if we have enough).
+    default_idx = max(0, len(contracts_sorted) - 4)
+    default_key = (contracts_sorted[default_idx] if contracts_sorted
+                   else (datetime.now().year, 1))
+
+    # Parse the URL ?contract=YYYY-Q value.
+    parsed_key = default_key
+    if contract:
+        try:
+            y_str, q_str = contract.split("-")
+            parsed_key = (int(y_str), int(q_str))
+        except ValueError:
+            parsed_key = default_key
+        if parsed_key not in contracts_sorted and contracts_sorted:
+            parsed_key = default_key
+
+    contract_slug = f"{parsed_key[0]}-{parsed_key[1]}"
+
+    base_params = {"region": region, "contract": contract_slug}
+    base_url = "/futures"
+    selectors = _render_selector_strip(
+        _render_futures_region_pills(
+            base_url, region,
+            {k: v for k, v in base_params.items() if k != "region"}),
+        _render_futures_contract_select(
+            base_url, contract_slug, contracts_sorted,
+            {k: v for k, v in base_params.items() if k != "contract"}),
+    )
+    content = _futures_content(region, parsed_key)
+    body = _render_tab_body("", selectors + content)
+    if _is_htmx(request):
+        return HTMLResponse(body)
+    return HTMLResponse(_render_shell(body))
+
+
+# ----------------------------------------------------------------------------
 # Flat placeholder routes for the remaining tabs (anything not Today or Prices)
 # ----------------------------------------------------------------------------
 
@@ -5111,7 +5608,7 @@ def _make_flat_route(slug: str, label: str):
 
 for _slug, _label, _subs in TABS:
     if _slug in ("today", "prices", "generation-mix", "evening-peak",
-                 "gas", "generators") or _subs:
+                 "gas", "generators", "futures") or _subs:
         continue
     _make_flat_route(_slug, _label)
 
@@ -6057,6 +6554,17 @@ def _card_h3(title: str) -> str:
     return (f'<h3 style="margin:0 0 8px 0;font-size:12px;color:{TEAL};'
             f'text-transform:uppercase;letter-spacing:0.5px;font-weight:600">'
             f'{title}</h3>')
+
+
+def _attribution(source: str = "AEMO") -> str:
+    """Card footer: 'Data: <source> · plot: ITK'. Italic, muted, right-
+    aligned, small — sits at the bottom of a card without competing with
+    the chart. Use 'Global-Roam' for futures, 'AEMO STTM' for the gas tab,
+    'AEMO' (default) elsewhere. See docs/NEM_dash_contents.md for the
+    per-card data source inventory."""
+    return (f'<div style="color:{MUTED};font-size:10px;font-style:italic;'
+            f'margin:6px 14px 0;text-align:right">'
+            f'Data: {source} &middot; plot: ITK</div>')
 
 
 def _wrap_plot(slug: str, title: str, fig: go.Figure) -> HTMLResponse:
