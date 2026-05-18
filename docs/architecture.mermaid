@@ -1,0 +1,65 @@
+flowchart LR
+
+  subgraph SRC[AEMO NEMWeb public ZIPs, 5 min cadence]
+    direction TB
+    scada[scada5 / scada30 - per-DUID MW]
+    prices[prices5 / prices30 - regional RRP]
+    trans[transmission5 / 30 - interconnector flows]
+    rooftop[rooftop30 - rooftop PV by region]
+    demand[demand30 - operational demand]
+    bdu[bdu5 - battery SoC]
+    curt[curtailment - regional + DUID UIGF/cleared]
+    pred[predispatch - 36h forecast]
+    sttm[sttm_expost - gas hub prices daily]
+    fut[futures.csv - ASX base-load via Global-Roam weekly]
+  end
+
+  COL[aemo-data-updater - unified_collector_duckdb.py - tmux services:0 - 4.5 min loop]
+
+  subgraph DB[DuckDB on .71]
+    direction TB
+    DBW[aemo_test.duckdb - writable, collector only]
+    DBR[aemo_readonly.duckdb - read replica]
+    DBW -->|copy 0.5s each cycle| DBR
+  end
+
+  subgraph APPS[Consumer apps - all read aemo_readonly.duckdb]
+    direction TB
+    DASH[Dashboard - FastAPI HTMX Plotly - port 5008 - 4 workers - services:1]
+    IOS[iOS API - FastAPI Pydantic bearer auth - port 8002 - services:11]
+    PANEL[Standalone Panel apps - renewable_gauge 5009 - spot_prices 8081]
+  end
+
+  ALERTS[Alerts dispatcher - SMS email APNs log - 6 plugins 4 sinks]
+
+  subgraph EXT[Public exposure via Cloudflare tunnels]
+    direction TB
+    WEB[web users - dashboard URL]
+    IPHONE[iPhone app - Swift aemo-mobile-ios]
+    QUARTO[itkservices3.com Quarto site - gauge and spot widgets]
+  end
+
+  scada --> COL
+  prices --> COL
+  trans --> COL
+  rooftop --> COL
+  demand --> COL
+  bdu --> COL
+  curt --> COL
+  pred --> COL
+  sttm --> COL
+  fut --> COL
+
+  COL --> DBW
+  COL -.-> ALERTS
+
+  DBR --> DASH
+  DBR --> IOS
+  DBR --> PANEL
+
+  DASH --> WEB
+  IOS --> IPHONE
+  PANEL --> QUARTO
+
+  ALERTS -.-> IPHONE
+  ALERTS -.->|SMS| WEB
