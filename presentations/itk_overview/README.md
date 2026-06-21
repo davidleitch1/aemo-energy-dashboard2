@@ -30,3 +30,18 @@ python build_deck.py
 
 Edit `itk_overview.md` (one `##` heading per slide, `-` for bullets) and rerun
 `build_deck.py` to refresh both outputs.
+
+## Slides
+
+1. Title — ITK wordmark, tagline, section chips
+2. Services
+3. About ITK
+4. Specific skills
+5. **How the spot-price forecast works** — a four-stage block diagram
+   (Inputs → Build the fleet / LRMC → Dispatch LP → Price forecasts) with a
+   callout that prices are the dual/shadow prices of the regional supply =
+   demand balance, the same mechanism as AEMO's NEMDE. Distilled from the ITK
+   NEM Price Forecasting System technical overview; the stage content is the
+   `PROCESS_STAGES` list near the top of `build_deck.py` — edit there to
+   change wording.
+6. Let's talk — contact details
