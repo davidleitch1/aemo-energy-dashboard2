@@ -172,7 +172,8 @@ TABS = [
                                               ("transmission",  "Transmission")]),
     ("evening-peak",     "Evening peak",     []),
     ("prices",           "Prices",           [("analysis", "Price Analysis"),
-                                              ("bands",    "Price Bands")]),
+                                              ("bands",    "Price Bands"),
+                                              ("compare",  "Period Compare")]),
     ("batteries",        "Batteries",        []),  # moved
     ("futures",          "Futures",          []),  # moved
     ("generators",       "Generators",       []),
@@ -1818,6 +1819,336 @@ def prices_root(region: str = "", range: str = "", smooth: str = "",
     if end:    params["end"]    = end
     target = _build_url("/prices/analysis", **params)
     return RedirectResponse(url=target)
+
+
+# ----------------------------------------------------------------------------
+# /prices/compare — period-on-period time-of-day comparison (single region)
+# ----------------------------------------------------------------------------
+#
+# One region (incl. NEM) and two equal-length windows overlaid as 48-point
+# half-hour-of-day price profiles. The primary window anchors to the latest
+# data (or a chosen start); the comparison window is the SAME length, placed by
+# mode: PCP (same window one calendar year earlier), Preceding (contiguous
+# prior window), or Custom (user-picked start). Both the per-bucket line and
+# the reference-line means are demand-weighted — for NEM, across the five
+# regions; for a single region, across days within each half-hour bucket.
+
+COMPARE_REGIONS = ["NEM", "NSW1", "QLD1", "SA1", "TAS1", "VIC1"]
+COMPARE_PERIODS = [("1d", "1D"), ("7d", "7D"), ("30d", "30D"),
+                   ("90d", "90D"), ("1y", "Yr")]
+COMPARE_PERIOD_DAYS = {"1d": 1, "7d": 7, "30d": 30, "90d": 90, "1y": 365}
+COMPARE_MODES = [("pcp", "PCP"), ("prev", "Preceding"), ("custom", "Custom")]
+COMPARE_MODE_SLUGS = {m for m, _ in COMPARE_MODES}
+COMPARE_MODE_DESC = {
+    "pcp":    "prior corresponding period (same window one year earlier)",
+    "prev":   "immediately preceding window",
+    "custom": "custom comparison start",
+}
+COMPARE_PRIMARY_COLOR = "#205EA6"   # Flexoki blue — the primary window
+COMPARE_CMP_COLOR = "#BC5215"       # Flexoki orange — the comparison window
+
+
+def _compare_windows(period: str, primary_start: str | None,
+                     cmp_mode: str, cmp_start: str | None):
+    """Resolve (p_start, p_end, c_start, c_end). Both windows share the same
+    length; the comparison is positioned by mode. Primary anchors to now unless
+    primary_start is given."""
+    delta = timedelta(days=COMPARE_PERIOD_DAYS.get(period, 30))
+    now_ts = pd.Timestamp(datetime.now(NEM_TZ).replace(tzinfo=None))
+
+    if primary_start:
+        p_start = pd.Timestamp(primary_start)
+        p_end = p_start + delta
+    else:
+        p_end = now_ts
+        p_start = p_end - delta
+
+    if cmp_mode == "prev":
+        c_start = p_start - delta
+    elif cmp_mode == "custom" and cmp_start:
+        c_start = pd.Timestamp(cmp_start)
+    else:  # pcp, or custom before a date is picked → default to PCP
+        c_start = p_start - pd.DateOffset(years=1)
+    return p_start, p_end, c_start, c_start + delta
+
+
+def _compare_tod_profile(region: str, s_ts, e_ts):
+    """48-point half-hour-of-day demand-weighted price profile for one window.
+
+    Returns (profile: Series indexed 0..47 of $/MWh with gaps as NaN,
+    mean: demand-weighted period mean $/MWh or None). Accumulating
+    Σ(rrp×demand) and Σ(demand) per bucket gives the demand-weighted price at
+    each half-hour; summing the same numerator/denominator across all buckets
+    gives the window mean. For NEM the region clause spans the five regions, so
+    the ratio is the demand-weighted NEM price in one pass."""
+    if region == "NEM":
+        region_clause = "p.regionid IN ('NSW1','QLD1','VIC1','SA1','TAS1')"
+    else:
+        region_clause = f"p.regionid = '{region}'"
+    df = q(
+        f"""SELECT (EXTRACT(HOUR FROM p.settlementdate) * 2
+                    + CASE WHEN EXTRACT(MINUTE FROM p.settlementdate) >= 30
+                           THEN 1 ELSE 0 END)          AS hh,
+                   SUM(p.rrp * d.demand)               AS num,
+                   SUM(d.demand)                       AS den
+              FROM prices30 p
+              JOIN demand30 d
+                ON p.settlementdate = d.settlementdate
+               AND p.regionid       = d.regionid
+             WHERE {region_clause}
+               AND p.settlementdate >= ? AND p.settlementdate < ?
+             GROUP BY hh
+             ORDER BY hh""",
+        [s_ts, e_ts],
+    )
+    if df.empty:
+        return pd.Series(dtype=float), None
+    df["hh"] = df["hh"].astype(int)
+    df = df[df["den"] > 0]
+    if df.empty:
+        return pd.Series(dtype=float), None
+    profile = (df.set_index("hh")["num"] / df.set_index("hh")["den"]).reindex(range(48))
+    total_den = float(df["den"].sum())
+    mean = float(df["num"].sum()) / total_den if total_den else None
+    return profile, mean
+
+
+def _hh_label(h: int) -> str:
+    """Half-hour-of-day index 0..47 → 'HH:MM' (NEM time)."""
+    return f"{h // 2:02d}:{'30' if h % 2 else '00'}"
+
+
+def _build_compare_chart(region, p_start, p_end, c_start, c_end,
+                         p_profile, p_mean, c_profile, c_mean,
+                         period_label) -> str:
+    hours = [_hh_label(h) for h in range(48)]
+    x = list(range(48))
+
+    def _dates(a, b):
+        return (f"{pd.Timestamp(a).strftime('%-d %b %Y')} – "
+                f"{pd.Timestamp(b - timedelta(days=1)).strftime('%-d %b %Y')}")
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=x, y=[p_profile.get(i) for i in x], customdata=hours,
+        name=f"Primary · {_dates(p_start, p_end)}", mode="lines",
+        line=dict(color=COMPARE_PRIMARY_COLOR, width=2), connectgaps=False,
+        hovertemplate="%{customdata} · $%{y:.0f}/MWh<extra>Primary</extra>",
+    ))
+    fig.add_trace(go.Scatter(
+        x=x, y=[c_profile.get(i) for i in x], customdata=hours,
+        name=f"Comparison · {_dates(c_start, c_end)}", mode="lines",
+        line=dict(color=COMPARE_CMP_COLOR, width=2, dash="dot"), connectgaps=False,
+        hovertemplate="%{customdata} · $%{y:.0f}/MWh<extra>Comparison</extra>",
+    ))
+    if p_mean is not None:
+        fig.add_hline(y=p_mean, line_dash="dash", line_width=1,
+                      line_color=COMPARE_PRIMARY_COLOR,
+                      annotation_text=f"primary mean ${p_mean:,.0f}",
+                      annotation_position="top left",
+                      annotation_font_size=10,
+                      annotation_font_color=COMPARE_PRIMARY_COLOR)
+    if c_mean is not None:
+        fig.add_hline(y=c_mean, line_dash="dash", line_width=1,
+                      line_color=COMPARE_CMP_COLOR,
+                      annotation_text=f"comparison mean ${c_mean:,.0f}",
+                      annotation_position="bottom left",
+                      annotation_font_size=10,
+                      annotation_font_color=COMPARE_CMP_COLOR)
+
+    fig.update_layout(
+        paper_bgcolor=PAPER, plot_bgcolor=PAPER,
+        height=380, margin=dict(l=52, r=12, t=8, b=64),
+        legend=dict(orientation="h", yanchor="top", y=-0.16,
+                    xanchor="center", x=0.5, font=dict(size=10),
+                    bgcolor="rgba(0,0,0,0)"),
+        xaxis=dict(showgrid=False, tickfont=dict(size=10, color=MUTED),
+                   tickmode="array", tickvals=list(range(0, 48, 6)),
+                   ticktext=[hours[i] for i in range(0, 48, 6)],
+                   title=dict(text="Time of day (NEM time, 30-min)",
+                              font=dict(size=10, color=MUTED))),
+        yaxis=dict(showgrid=False, tickfont=dict(size=10, color=MUTED),
+                   autorange=True,
+                   title=dict(text="$/MWh", font=dict(size=10, color=MUTED))),
+    )
+    title = (f"{_region_display(region)} price by time of day &middot; "
+             f"{period_label} windows")
+    div_id = f"plot-cmp-{int(datetime.now().timestamp() * 1000)}"
+    fig_json = _plot_json(fig)
+    return (
+        _card_h3(title)
+        + f'<div id="{div_id}" style="height:380px"></div>'
+        + f'<script>(function(){{var f={fig_json};'
+          f'Plotly.newPlot("{div_id}",f.data,f.layout,'
+          f'{PLOTLY_CFG});}})();</script>'
+        + f'<p style="color:{MUTED};font-size:11px;margin:10px 14px 0;'
+          f'line-height:1.5">Each point is the demand-weighted mean price at '
+          f'that half-hour across all days in the window'
+          f'{" (demand-weighted across the five regions)" if region == "NEM" else ""}. '
+          f'Dashed lines mark each window&rsquo;s demand-weighted average.</p>'
+        + _attribution()
+    )
+
+
+def _compare_summary(region, p_start, p_end, c_start, c_end,
+                     p_mean, c_mean, cmp_mode) -> str:
+    def dates(a, b):
+        return (f"{pd.Timestamp(a).strftime('%-d %b %Y')} – "
+                f"{pd.Timestamp(b - timedelta(days=1)).strftime('%-d %b %Y')}")
+
+    def dol(v):
+        return "&mdash;" if v is None else f"${v:,.0f}"
+
+    delta_cell = "&mdash;"
+    if p_mean is not None and c_mean is not None:
+        d = p_mean - c_mean
+        up = d >= 0
+        sign = "+" if up else "−"
+        color = "#af3029" if up else "#66800b"   # dearer = red, cheaper = green
+        pct = f" ({sign}{abs(d) / c_mean * 100:.0f}%)" if c_mean else ""
+        delta_cell = (f'<span style="color:{color};font-weight:700">'
+                      f'{sign}${abs(d):,.0f}/MWh{pct}</span>')
+
+    def row(swatch, label, dates_txt, mean):
+        dot = (f'<span style="display:inline-block;width:10px;height:10px;'
+               f'border-radius:2px;background:{swatch};margin-right:8px"></span>'
+               if swatch else "")
+        return (f'<tr style="border-bottom:1px solid {BORDER}">'
+                f'<td style="padding:8px 14px;color:{INK};font-size:14px">{dot}{label}</td>'
+                f'<td style="padding:8px 14px;color:{MUTED};font-size:13px">{dates_txt}</td>'
+                f'<td style="padding:8px 14px;text-align:right;color:{INK};'
+                f'font-weight:600;font-size:14px">{mean}</td></tr>')
+
+    body = (
+        row(COMPARE_PRIMARY_COLOR, "Primary", dates(p_start, p_end), dol(p_mean))
+        + row(COMPARE_CMP_COLOR, "Comparison", dates(c_start, c_end), dol(c_mean))
+        + (f'<tr><td style="padding:8px 14px;color:{INK};font-size:14px;'
+           f'font-weight:600">Difference</td><td></td>'
+           f'<td style="padding:8px 14px;text-align:right;font-size:14px">'
+           f'{delta_cell}</td></tr>')
+    )
+    return (_card_h3(f"{_region_display(region)} &middot; demand-weighted mean price")
+            + f'<table style="width:100%;border-collapse:collapse">{body}</table>'
+            + f'<p style="color:{MUTED};font-size:11px;margin:10px 14px 0;'
+              f'line-height:1.5">Comparison window = {COMPARE_MODE_DESC[cmp_mode]}. '
+              f'Difference is primary minus comparison (red = dearer, green = cheaper).</p>')
+
+
+def _compare_content(region, period, cmp_mode, p_start, p_end, c_start, c_end,
+                     p_profile, p_mean, c_profile, c_mean) -> str:
+    if p_mean is None and c_mean is None:
+        return ('<div class="placeholder"><p><strong>No price data for the '
+                'selected windows.</strong></p><p>Try a different region, '
+                'period, or comparison start date.</p></div>')
+    period_label = dict(COMPARE_PERIODS).get(period, period)
+    summary = _compare_summary(region, p_start, p_end, c_start, c_end,
+                               p_mean, c_mean, cmp_mode)
+    chart = _build_compare_chart(region, p_start, p_end, c_start, c_end,
+                                 p_profile, p_mean, c_profile, c_mean,
+                                 period_label)
+    return (f'<div class="prices-stack">'
+            f'<div class="card">{summary}</div>'
+            f'<div class="card">{chart}</div>'
+            f'</div>')
+
+
+def _render_compare_period_pills(base_url, active, other_params) -> str:
+    pills = []
+    for slug, label in COMPARE_PERIODS:
+        url = _build_url(base_url, **dict(other_params, period=slug))
+        cls = "pill active" if slug == active else "pill"
+        pills.append(f'<button class="{cls}" hx-get="{url}" '
+                     f'hx-target="#tab-body" hx-push-url="true">{label}</button>')
+    return (f'<div class="pill-bar"><span class="pill-bar-label">Period</span>'
+            f'<div class="pill-group">{"".join(pills)}</div></div>')
+
+
+def _render_compare_mode_pills(base_url, active, other_params) -> str:
+    pills = []
+    for slug, label in COMPARE_MODES:
+        # Leaving custom drops any custom comparison start.
+        params = {k: v for k, v in other_params.items() if k != "cstart"}
+        params["cmp"] = slug
+        url = _build_url(base_url, **params)
+        cls = "pill active" if slug == active else "pill"
+        pills.append(f'<button class="{cls}" hx-get="{url}" '
+                     f'hx-target="#tab-body" hx-push-url="true">{label}</button>')
+    return (f'<div class="pill-bar"><span class="pill-bar-label">Compare to</span>'
+            f'<div class="pill-group">{"".join(pills)}</div></div>')
+
+
+def _render_compare_dates(base_url, region, period, cmp_mode, pstart, cstart) -> str:
+    today = datetime.now(NEM_TZ).date().isoformat()
+    hidden = (f'<input type="hidden" name="region" value="{region}">'
+              f'<input type="hidden" name="period" value="{period}">'
+              f'<input type="hidden" name="cmp" value="{cmp_mode}">')
+    cstart_input = ""
+    if cmp_mode == "custom":
+        cstart_input = (f'<span class="sep">vs from</span>'
+                        f'<input type="date" name="cstart" value="{cstart}" max="{today}">')
+    reset_url = _build_url(base_url, region=region, period=period, cmp=cmp_mode)
+    return (f'<div class="pill-bar"><span class="pill-bar-label">Dates</span>'
+            f'<form class="custom-form" hx-get="{base_url}" '
+            f'hx-target="#tab-body" hx-push-url="true">{hidden}'
+            f'<span class="sep">primary from</span>'
+            f'<input type="date" name="pstart" value="{pstart}" max="{today}">'
+            f'{cstart_input}'
+            f'<button type="submit">Apply</button></form>'
+            f'<button class="pill" hx-get="{reset_url}" hx-target="#tab-body" '
+            f'hx-push-url="true">Latest</button></div>')
+
+
+def _render_compare_selectors(base_url, region, period, cmp_mode,
+                              pstart, cstart, base_params) -> str:
+    return _render_selector_strip(
+        _render_region_pills(base_url, region,
+                             {k: v for k, v in base_params.items() if k != "region"},
+                             multi=False, regions=COMPARE_REGIONS),
+        _render_compare_period_pills(base_url, period,
+                             {k: v for k, v in base_params.items() if k != "period"}),
+        _render_compare_mode_pills(base_url, cmp_mode,
+                             {k: v for k, v in base_params.items() if k != "cmp"}),
+        _render_compare_dates(base_url, region, period, cmp_mode, pstart, cstart),
+    )
+
+
+@app.get("/prices/compare", response_class=HTMLResponse)
+def prices_compare(request: Request,
+                   region: str = "NEM",
+                   period: str = "30d",
+                   cmp: str = "pcp",
+                   pstart: str | None = None,
+                   cstart: str | None = None) -> HTMLResponse:
+    if region not in COMPARE_REGIONS:
+        region = "NEM"
+    if period not in COMPARE_PERIOD_DAYS:
+        period = "30d"
+    if cmp not in COMPARE_MODE_SLUGS:
+        cmp = "pcp"
+
+    _, subtabs = TAB_LOOKUP["prices"]
+    p_start, p_end, c_start, c_end = _compare_windows(period, pstart, cmp, cstart)
+    p_profile, p_mean = _compare_tod_profile(region, p_start, p_end)
+    c_profile, c_mean = _compare_tod_profile(region, c_start, c_end)
+
+    base_url = "/prices/compare"
+    base_params = {"region": region, "period": period, "cmp": cmp}
+    if pstart:
+        base_params["pstart"] = pstart
+    if cstart and cmp == "custom":
+        base_params["cstart"] = cstart
+
+    selectors = _render_compare_selectors(base_url, region, period, cmp,
+                                          pstart or "", cstart or "", base_params)
+    subtab_html = _render_subtab_nav("prices", subtabs, "compare",
+                                     carry_params=base_params)
+    content = _compare_content(region, period, cmp,
+                               p_start, p_end, c_start, c_end,
+                               p_profile, p_mean, c_profile, c_mean)
+    body = _render_tab_body(subtab_html, selectors + content)
+    if _is_htmx(request):
+        return HTMLResponse(body)
+    return HTMLResponse(_render_shell(body))
 
 
 @app.get("/prices/{sub}", response_class=HTMLResponse)
