@@ -665,6 +665,12 @@ def _render_shell(body_html: str) -> str:
   <script src="https://unpkg.com/tabulator-tables@6.3.1/dist/js/tabulator.min.js"></script>
   <style>{SHELL_CSS}</style>
   <style>{PIVOT_TABULATOR_CSS}</style>
+  <!-- Privacy-friendly analytics by Plausible -->
+  <script async src="https://plausible.io/js/pa-SHRLe35GBBWYcyXSqR7pc.js"></script>
+  <script>
+    window.plausible=window.plausible||function(){{(plausible.q=plausible.q||[]).push(arguments)}},plausible.init=plausible.init||function(i){{plausible.o=i||{{}}}};
+    plausible.init()
+  </script>
 </head>
 <body>
   <header>
