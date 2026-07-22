@@ -48,6 +48,8 @@ dependencies = [
     "plotly>=6.2.0",
     "scipy>=1.11.0",
     "statsmodels>=0.14.0",
+    # Oil futures curve data (Yahoo Finance NYMEX WTI contracts)
+    "yfinance>=0.2.40",
 ]
 
 [project.optional-dependencies]
@@ -69,6 +71,7 @@ aemo-gen-update = "aemo_dashboard.generation.update_generation:main"
 aemo-transmission-update = "aemo_dashboard.transmission.update_transmission:main"
 aemo-transmission-backfill = "aemo_dashboard.transmission.backfill_transmission:main"
 aemo-combined-update = "aemo_dashboard.combined.update_all:main"
+aemo-oil-update = "aemo_dashboard.oil.oil_data:main"
 aemo-manage-duids = "aemo_dashboard.scripts.manage_duid_exceptions:main"
 
 [project.urls]

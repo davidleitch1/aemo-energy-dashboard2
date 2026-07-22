@@ -3533,6 +3533,7 @@ class EnergyDashboard(param.Parameterized):
                 ("Batteries", pn.pane.HTML(loading_html)),  # Lazy
                 ("Gas", pn.pane.HTML(loading_html)),  # Lazy - STTM gas prices
                 ("Futures", pn.pane.HTML(loading_html)),  # Lazy - electricity futures
+                ("Oil", pn.pane.HTML(loading_html)),  # Lazy - WTI oil futures curve
                 dynamic=True,
                 closable=False,
                 sizing_mode='stretch_width'
@@ -3556,7 +3557,8 @@ class EnergyDashboard(param.Parameterized):
                 8: self._create_pasa_tab,  # PASA outage monitor
                 9: self._create_batteries_tab,
                 10: self._create_gas_tab,
-                11: self._create_futures_tab
+                11: self._create_futures_tab,
+                12: self._create_oil_tab
             }
             
             # Watch for tab changes
@@ -3879,6 +3881,22 @@ class EnergyDashboard(param.Parameterized):
             logger.error(f"Error creating futures tab: {e}")
             return pn.Column(
                 pn.pane.Markdown("# Electricity Futures"),
+                pn.pane.Markdown(f"**Error loading tab:** {e}"),
+                sizing_mode="stretch_width"
+            )
+
+    def _create_oil_tab(self):
+        """Create WTI oil futures curve tab"""
+        try:
+            logger.info("Creating oil tab...")
+            from aemo_dashboard.oil import create_oil_tab
+            oil_tab = create_oil_tab()
+            logger.info("Oil tab created successfully")
+            return oil_tab
+        except Exception as e:
+            logger.error(f"Error creating oil tab: {e}")
+            return pn.Column(
+                pn.pane.Markdown("# Oil Futures (WTI)"),
                 pn.pane.Markdown(f"**Error loading tab:** {e}"),
                 sizing_mode="stretch_width"
             )
