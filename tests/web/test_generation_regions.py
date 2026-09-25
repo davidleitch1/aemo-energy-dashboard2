@@ -135,3 +135,37 @@ def test_prices_compare_regions_constant_not_shadowed():
     Compare-regions subtab must not redefine that module-level name."""
     from aemo_dashboard.web import app as app_module
     assert "NEM" in app_module.COMPARE_REGIONS
+
+
+def test_renewable_shares_vre_excludes_hydro():
+    import pandas as pd
+    from aemo_dashboard.web.app import _renewable_shares
+    mix = pd.DataFrame(
+        {"Wind": [20.0], "Solar": [10.0], "Rooftop Solar": [10.0],
+         "Hydro": [10.0], "Battery": [5.0], "Gas": [5.0], "Coal": [40.0]},
+        index=["NSW1"])
+    out = _renewable_shares(mix)
+    assert abs(out.loc["NSW1", "vre"] - 40.0) < 1e-9
+    assert abs(out.loc["NSW1", "re"] - 50.0) < 1e-9
+
+
+def test_renewable_shares_missing_columns():
+    import pandas as pd
+    from aemo_dashboard.web.app import _renewable_shares
+    mix = pd.DataFrame({"Wind": [30.0], "Gas": [70.0]}, index=["SA1"])
+    out = _renewable_shares(mix)
+    assert abs(out.loc["SA1", "vre"] - 30.0) < 1e-9
+    assert abs(out.loc["SA1", "re"] - 30.0) < 1e-9
+
+
+def test_compare_fuel_order_puts_renewables_first():
+    from aemo_dashboard.web.app import COMPARE_FUEL_ORDER
+    assert COMPARE_FUEL_ORDER[:4] == ["Wind", "Solar", "Rooftop Solar", "Hydro"]
+
+
+def test_share_chart_has_re_labels():
+    from fastapi.testclient import TestClient
+    from aemo_dashboard.web.app import app
+    r = TestClient(app).get("/generation-mix/regions?range=7d")
+    assert r.status_code == 200
+    assert "VRE " in r.text and "RE " in r.text

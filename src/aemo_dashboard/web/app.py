@@ -3560,11 +3560,27 @@ def _generation_yr_on_yr_content(region: str, range_slug: str,
 # the query stays cheap (one GROUP BY over a bounded window) at any range.
 
 GENMIX_COMPARE_REGIONS = ["NSW1", "QLD1", "VIC1", "SA1", "TAS1"]
-COMPARE_FUEL_ORDER = ["Coal", "Hydro", "Wind", "Solar", "Rooftop Solar",
-                      "Battery", "Gas", "Other"]
+# Renewables first, VRE before hydro, so the VRE share and the renewable
+# share each fall on a segment boundary of the share chart and can be marked
+# with a tick. Storage and fossil follow.
+COMPARE_FUEL_ORDER = ["Wind", "Solar", "Rooftop Solar", "Hydro",
+                      "Battery", "Gas", "Coal", "Other"]
+COMPARE_VRE_FUELS = ["Wind", "Solar", "Rooftop Solar"]
+COMPARE_RE_FUELS = COMPARE_VRE_FUELS + ["Hydro"]
 # Fuels a viewer reads as "light" — dark (INK) segment text reads better on
 # them than the PAPER (near-white) text used on every other fuel's colour.
 COMPARE_LIGHT_FUELS = {"Solar", "Rooftop Solar"}
+
+
+def _renewable_shares(mix: pd.DataFrame) -> pd.DataFrame:
+    """Per-row VRE share (wind + solar + rooftop) and renewable share (VRE
+    + hydro), in % of the row total. Battery discharge is storage, not a
+    renewable source, so it sits in the denominator only."""
+    total = mix.sum(axis=1).replace(0, np.nan)
+    vre = mix[[c for c in COMPARE_VRE_FUELS if c in mix.columns]].sum(axis=1)
+    re = mix[[c for c in COMPARE_RE_FUELS if c in mix.columns]].sum(axis=1)
+    return pd.DataFrame({"vre": (vre / total * 100).fillna(0),
+                         "re": (re / total * 100).fillna(0)})
 
 
 def _regional_mix_energy(s_ts, e_ts) -> pd.DataFrame:
@@ -3765,11 +3781,32 @@ def _generation_regions_content(range_slug: str, start: str | None,
                                           else PAPER)),
             hovertemplate=f"<b>{fuel}</b>: %{{x:.1f}}%<extra></extra>",
         ))
+    # VRE and renewable boundaries: a short INK tick across each bar at the
+    # segment edge, with both numbers in a column right of the 100% line.
+    ren = _renewable_shares(mix2)
+    ren.index = y2
+    shapes2 = [dict(type="line", xref="paper", x0=0, x1=1, yref="y",
+                    y0=0.5, y1=0.5, line=dict(color=BORDER, width=1.5))]
+    annotations2 = []
+    for i, label in enumerate(y2):
+        for key in ("vre", "re"):
+            x = ren.loc[label, key]
+            if x <= 0:
+                continue
+            shapes2.append(dict(type="line", xref="x", yref="y",
+                                x0=x, x1=x, y0=i - 0.46, y1=i + 0.46,
+                                line=dict(color=INK, width=2.5)))
+        annotations2.append(dict(
+            x=1.0, xref="paper", xanchor="left", xshift=10,
+            y=label, yref="y", yanchor="middle", showarrow=False, align="left",
+            text=(f"VRE {ren.loc[label, 'vre']:.0f}%<br>"
+                  f"RE {ren.loc[label, 're']:.0f}%"),
+            font=dict(size=10, color=INK)))
     fig2_height = 70 * len(y2) + 130
     fig2.update_layout(
         barmode="stack",
         paper_bgcolor=PAPER, plot_bgcolor=PAPER,
-        height=fig2_height, margin=dict(l=52, r=16, t=8, b=64),
+        height=fig2_height, margin=dict(l=52, r=70, t=8, b=64),
         legend=dict(orientation="h", yanchor="top", y=-0.16,
                     xanchor="center", x=0.5, font=dict(size=10), bgcolor=PAPER,
                     traceorder="normal"),
@@ -3778,8 +3815,8 @@ def _generation_regions_content(range_slug: str, start: str | None,
         yaxis=dict(showgrid=False, tickfont=dict(size=11, color=INK),
                    categoryorder="array", categoryarray=y2,
                    autorange="reversed"),
-        shapes=[dict(type="line", xref="paper", x0=0, x1=1, yref="y",
-                     y0=0.5, y1=0.5, line=dict(color=BORDER, width=1.5))],
+        shapes=shapes2,
+        annotations=annotations2,
     )
     title2 = f"Generation mix share by region &middot; {range_label}"
     div_id2 = f"plot-genregions-share-{int(datetime.now().timestamp() * 1000)}"
@@ -3789,7 +3826,10 @@ def _generation_regions_content(range_slug: str, start: str | None,
                 f'line-height:1.5">Utility-scale generation plus rooftop '
                 f'solar; battery counts discharge only; net imports excluded '
                 f'(labelled beside each bar on the energy chart). NEM = sum of the '
-                f'five regions.</p>')
+                f'five regions. Ticks mark the VRE share (wind, solar, rooftop) '
+                f'and the renewable share (VRE plus hydro, which includes '
+                f'pumped-hydro output); battery discharge is not counted '
+                f'as renewable.</p>')
 
     return (
         f'<div class="prices-stack">'
