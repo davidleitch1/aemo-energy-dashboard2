@@ -167,6 +167,7 @@ TABS = [
     ("today",            "Today",            []),
     ("generation-mix",   "Generation mix",   [("yr-on-yr",      "Yr on yr"),
                                               ("stack",         "Stack"),
+                                              ("regions",       "Compare regions"),
                                               ("tod",           "Time of day"),
                                               ("trends",        "Trends"),
                                               ("transmission",  "Transmission")]),
@@ -3550,6 +3551,269 @@ def _generation_yr_on_yr_content(region: str, range_slug: str,
     )
 
 
+# ----------------------------------------------------------------------------
+# /generation-mix — Compare regions subtab (all 5 regions on one chart)
+# ----------------------------------------------------------------------------
+#
+# Unlike the Stack subtab, this always reads the 30-min tables regardless of
+# the range — a 7d or 30d energy-mix comparison doesn't need 5-min bars, and
+# the query stays cheap (one GROUP BY over a bounded window) at any range.
+
+GENMIX_COMPARE_REGIONS = ["NSW1", "QLD1", "VIC1", "SA1", "TAS1"]
+COMPARE_FUEL_ORDER = ["Coal", "Hydro", "Wind", "Solar", "Rooftop Solar",
+                      "Battery", "Gas", "Other"]
+# Fuels a viewer reads as "light" — dark (INK) segment text reads better on
+# them than the PAPER (near-white) text used on every other fuel's colour.
+COMPARE_LIGHT_FUELS = {"Solar", "Rooftop Solar"}
+
+
+def _regional_mix_energy(s_ts, e_ts) -> pd.DataFrame:
+    """Energy by region x fuel (GWh) over [s_ts, e_ts), always from the
+    30-min tables (generation_by_fuel_30min, rooftop30) — confirmed those
+    columns are per-interval MW averages, not cumulative energy: a
+    generation_by_fuel_30min row exactly equals the mean of the six
+    generation_by_fuel_5min rows in its window, and rooftop30 has been at
+    30-min cadence since its earliest row (2020-01-01).
+
+    Index: GENMIX_COMPARE_REGIONS, restricted to regions with any data in the
+    window. Columns: COMPARE_FUEL_ORDER, with all-zero columns dropped.
+
+    Every fuel — not just Battery — is clipped to GREATEST(mw, 0) at the
+    per-interval, per-region level before summing. This matches how
+    _generation_stack_content already treats Coal/Hydro/Wind/Solar (each
+    `.clip(lower=0)` there); real data has occasional small negative
+    readings on non-battery fuels too (e.g. a few MW of negative "Other"
+    in SA1), which would otherwise render as a nonsensical negative
+    segment in a stacked bar. For Battery this clip *is* the "discharge
+    only" rule the spec asks for; charging (negative) is dropped.
+    """
+    region_in = ",".join(f"'{r}'" for r in GENMIX_COMPARE_REGIONS)
+
+    util_sql = f"""
+        WITH labeled AS (
+            SELECT settlementdate, region,
+                   CASE WHEN fuel_type IN ('CCGT','OCGT','Gas other') THEN 'Gas'
+                        WHEN fuel_type = 'Water' THEN 'Hydro'
+                        WHEN fuel_type = 'Battery Storage' THEN 'Battery'
+                        WHEN fuel_type IN ('Biomass','Other') THEN 'Other'
+                        ELSE fuel_type END AS fuel,
+                   total_generation_mw AS gen_mw
+              FROM generation_by_fuel_30min
+             WHERE region IN ({region_in})
+               AND settlementdate >= ? AND settlementdate < ?
+        ),
+        per_period AS (
+            SELECT settlementdate, region, fuel, SUM(gen_mw) AS mw
+              FROM labeled
+             GROUP BY settlementdate, region, fuel
+        )
+        SELECT region, fuel, SUM(GREATEST(mw, 0)) * 0.5 / 1000.0 AS gwh
+          FROM per_period
+         GROUP BY region, fuel
+    """
+    util_df = q(util_sql, [s_ts, e_ts])
+
+    roof_sql = f"""
+        SELECT regionid AS region, SUM(GREATEST(power, 0)) * 0.5 / 1000.0 AS gwh
+          FROM rooftop30
+         WHERE regionid IN ({region_in})
+           AND settlementdate >= ? AND settlementdate < ?
+         GROUP BY regionid
+    """
+    roof_df = q(roof_sql, [s_ts, e_ts])
+
+    regions_with_data = set(util_df["region"]) | set(roof_df["region"])
+    regions = [r for r in GENMIX_COMPARE_REGIONS if r in regions_with_data]
+
+    out = pd.DataFrame(0.0, index=regions, columns=COMPARE_FUEL_ORDER)
+    for row in util_df.itertuples(index=False):
+        if row.region in out.index and row.fuel in out.columns:
+            out.loc[row.region, row.fuel] = row.gwh
+    for row in roof_df.itertuples(index=False):
+        if row.region in out.index:
+            out.loc[row.region, "Rooftop Solar"] = row.gwh
+
+    nonzero_cols = [c for c in COMPARE_FUEL_ORDER if out[c].sum() > 1e-9]
+    return out[nonzero_cols]
+
+
+def _regional_net_imports(s_ts, e_ts) -> pd.Series:
+    """Net interconnector import energy per region (GWh, imports positive)
+    over [s_ts, e_ts), for hover/annotation text only — never a bar segment.
+
+    Uses the same INTERCONNECTOR_MAP sign convention as
+    _generation_stack_content, but summed once over the whole window rather
+    than bucketed. Degrades gracefully: a region whose query fails gets
+    None, and callers skip it in hover text rather than failing the chart.
+    """
+    out: dict[str, float | None] = {}
+    for region in GENMIX_COMPARE_REGIONS:
+        ic_map = INTERCONNECTOR_MAP.get(region, {})
+        if not ic_map:
+            out[region] = 0.0
+            continue
+        ic_ids = list(ic_map.keys())
+        ic_in = ",".join(f"'{i}'" for i in ic_ids)
+        from_set = [k for k, v in ic_map.items() if v == "from"]
+        from_in = ",".join(f"'{i}'" for i in from_set)
+        sign = (f"CASE WHEN interconnectorid IN ({from_in}) "
+                f"THEN -meteredmwflow ELSE meteredmwflow END"
+                if from_set else "meteredmwflow")
+        sql = f"""
+            SELECT SUM({sign}) AS net_mw
+              FROM transmission30
+             WHERE interconnectorid IN ({ic_in})
+               AND settlementdate >= ? AND settlementdate < ?
+        """
+        try:
+            df = q(sql, [s_ts, e_ts])
+            net_mw = df["net_mw"].iloc[0] if not df.empty else None
+            out[region] = (float(net_mw) * 0.5 / 1000.0
+                           if net_mw is not None else 0.0)
+        except Exception:
+            out[region] = None
+    return pd.Series(out)
+
+
+def _generation_regions_content(range_slug: str, start: str | None,
+                                end: str | None) -> str:
+    """Two stacked cards comparing generation mix across all 5 regions:
+    an absolute-energy horizontal stacked bar, and a %-share horizontal
+    100%-stacked bar with a NEM (= sum of the 5 regions) row on top."""
+    s_ts, e_ts, _, range_label = _range_window(range_slug, start, end)
+    mix = _regional_mix_energy(s_ts, e_ts)
+    if mix.empty or not len(mix.columns):
+        return (f'<div class="placeholder">'
+                f'<p><strong>No generation data for {range_label}.</strong>'
+                f'</p></div>')
+
+    imports = _regional_net_imports(s_ts, e_ts)
+    hours = max((e_ts - s_ts).total_seconds() / 3600.0, 1e-9)
+    fuel_cols = list(mix.columns)
+    totals = mix.sum(axis=1)
+    max_total = totals.max() if len(totals) else 0.0
+    use_twh = max_total >= 1000
+    unit = "TWh" if use_twh else "GWh"
+    div = 1000.0 if use_twh else 1.0
+
+    def fuel_color(fuel: str) -> str:
+        return FUEL_COLORS.get("Battery Storage" if fuel == "Battery" else fuel,
+                               MUTED)
+
+    # ---- Chart 1: absolute stacked energy, one bar per region -------------
+    y1 = [_region_display(r) for r in mix.index]
+    fig1 = go.Figure()
+    for fuel in fuel_cols:
+        vals = mix[fuel]
+        share_of_region = (vals / totals.replace(0, np.nan) * 100).fillna(0)
+        fig1.add_trace(go.Bar(
+            name=fuel, y=y1, x=(vals / div).values, orientation="h",
+            marker_color=fuel_color(fuel),
+            customdata=np.stack([share_of_region.values], axis=-1),
+            hovertemplate=(f"<b>{fuel}</b>: %{{x:.1f}} {unit} "
+                           f"(%{{customdata[0]:.0f}}% of region)<extra></extra>"),
+        ))
+    annotations1 = []
+    for i, region in enumerate(mix.index):
+        total = totals[region]
+        avg_gw = total / hours
+        imp = imports.get(region) if imports is not None else None
+        imp_bit = (f" · net imports {imp:+.0f} GWh" if imp is not None
+                   else "")
+        annotations1.append(dict(
+            x=total / div, y=y1[i], xanchor="left", xshift=8, yanchor="middle",
+            text=(f"{total / div:.1f} {unit} · {avg_gw:.1f} GW avg"
+                  f"{imp_bit}"),
+            showarrow=False, align="left", font=dict(size=10, color=MUTED),
+        ))
+    fig1_height = 70 * len(y1) + 130
+    fig1.update_layout(
+        barmode="stack",
+        paper_bgcolor=PAPER, plot_bgcolor=PAPER,
+        height=fig1_height, margin=dict(l=52, r=200, t=8, b=64),
+        legend=dict(orientation="h", yanchor="top", y=-0.16,
+                    xanchor="center", x=0.5, font=dict(size=10), bgcolor=PAPER,
+                    traceorder="normal"),
+        xaxis=dict(showgrid=False, tickfont=dict(size=10, color=MUTED),
+                   title=dict(text=unit, font=dict(size=10, color=MUTED))),
+        yaxis=dict(showgrid=False, tickfont=dict(size=11, color=INK),
+                   categoryorder="array", categoryarray=y1,
+                   autorange="reversed"),
+        annotations=annotations1,
+    )
+    title1 = f"Generation by region &middot; {range_label} &middot; {unit}"
+    div_id1 = f"plot-genregions-abs-{int(datetime.now().timestamp() * 1000)}"
+    fig1_json = _plot_json(fig1)
+
+    # ---- Chart 2: %-share, NEM + 5 regions, NEM row on top -----------------
+    nem_row = mix.sum(axis=0)
+    mix2 = pd.concat([pd.DataFrame([nem_row], index=["NEM"]), mix])
+    totals2 = mix2.sum(axis=1)
+    shares = mix2.div(totals2.replace(0, np.nan), axis=0).fillna(0) * 100
+    y2 = ["NEM"] + y1
+
+    fig2 = go.Figure()
+    for fuel in fuel_cols:
+        vals = shares[fuel]
+        texts = [f"{v:.0f}%" if v >= 6 else "" for v in vals]
+        fig2.add_trace(go.Bar(
+            name=fuel, y=y2, x=vals.values, orientation="h",
+            marker_color=fuel_color(fuel),
+            text=texts, texttemplate="%{text}",
+            textposition="inside", insidetextanchor="middle",
+            textfont=dict(size=10, color=(INK if fuel in COMPARE_LIGHT_FUELS
+                                          else PAPER)),
+            hovertemplate=f"<b>{fuel}</b>: %{{x:.1f}}%<extra></extra>",
+        ))
+    fig2_height = 70 * len(y2) + 130
+    fig2.update_layout(
+        barmode="stack",
+        paper_bgcolor=PAPER, plot_bgcolor=PAPER,
+        height=fig2_height, margin=dict(l=52, r=16, t=8, b=64),
+        legend=dict(orientation="h", yanchor="top", y=-0.16,
+                    xanchor="center", x=0.5, font=dict(size=10), bgcolor=PAPER,
+                    traceorder="normal"),
+        xaxis=dict(range=[0, 100], ticksuffix="%", showgrid=False,
+                   tickfont=dict(size=10, color=MUTED)),
+        yaxis=dict(showgrid=False, tickfont=dict(size=11, color=INK),
+                   categoryorder="array", categoryarray=y2,
+                   autorange="reversed"),
+        shapes=[dict(type="line", xref="paper", x0=0, x1=1, yref="y",
+                     y0=0.5, y1=0.5, line=dict(color=BORDER, width=1.5))],
+    )
+    title2 = f"Generation mix share by region &middot; {range_label}"
+    div_id2 = f"plot-genregions-share-{int(datetime.now().timestamp() * 1000)}"
+    fig2_json = _plot_json(fig2)
+
+    footnote = (f'<p style="color:{MUTED};font-size:11px;margin:8px 14px 0;'
+                f'line-height:1.5">Utility-scale generation plus rooftop '
+                f'solar; battery counts discharge only; net imports excluded '
+                f'(labelled beside each bar on the energy chart). NEM = sum of the '
+                f'five regions.</p>')
+
+    return (
+        f'<div class="prices-stack">'
+        f'<div class="card">'
+        f'{_card_h3(title1)}'
+        f'<div id="{div_id1}" style="height:{fig1_height}px"></div>'
+        f'<script>(function(){{var f={fig1_json};'
+        f'Plotly.newPlot("{div_id1}",f.data,f.layout,'
+        f'{PLOTLY_CFG});}})();</script>'
+        + _attribution()
+        + f'</div>'
+        f'<div class="card">'
+        f'{_card_h3(title2)}'
+        f'<div id="{div_id2}" style="height:{fig2_height}px"></div>'
+        f'<script>(function(){{var f={fig2_json};'
+        f'Plotly.newPlot("{div_id2}",f.data,f.layout,'
+        f'{PLOTLY_CFG});}})();</script>'
+        + footnote
+        + _attribution()
+        + f'</div>'
+        f'</div>'
+    )
+
+
 @app.get("/generation-mix", response_class=HTMLResponse)
 def generation_mix_root(region: str = "", range: str = "",
                         start: str | None = None, end: str | None = None
@@ -3624,22 +3888,30 @@ def generation_mix_sub(sub: str, request: Request,
                                 if k not in ("fuel",)}),
         )
     else:
-        # 1H is meaningless on the yr-on-yr subtab (annualised comparison
-        # against the same hour last year is just noise). Hide that pill;
-        # 24H stays and works as a real 24-hour window via the period
-        # handling in _generation_yr_on_yr_content.
+        # 1H is meaningless on yr-on-yr (annualised comparison against the
+        # same hour last year is just noise) and on regions (a one-hour
+        # energy-mix comparison across 5 regions is too thin to read). Hide
+        # that pill; 24H stays.
         range_options = ([o for o in RANGE_OPTIONS if o[0] != "1h"]
-                         if sub == "yr-on-yr" else RANGE_OPTIONS)
-        selectors = _render_selector_strip(
-            _render_region_pills(base_url, region,
-                                 {k: v for k, v in base_params.items() if k != "region"},
-                                 regions=GENMIX_REGION_LIST),
-            _render_range_pills(base_url, range,
-                                {k: v for k, v in base_params.items()
-                                 if k not in ("range", "start", "end")},
-                                start=start or "", end=end or "",
-                                options=range_options),
-        )
+                         if sub in ("yr-on-yr", "regions") else RANGE_OPTIONS)
+        range_pills = _render_range_pills(
+            base_url, range,
+            {k: v for k, v in base_params.items()
+             if k not in ("range", "start", "end")},
+            start=start or "", end=end or "", options=range_options)
+        if sub == "regions":
+            # Every region is on the chart at once, so there's no region
+            # selector — `region` still rides in base_params (carried via
+            # subtab_html below) so switching subtabs preserves it.
+            selectors = _render_selector_strip(range_pills)
+        else:
+            selectors = _render_selector_strip(
+                _render_region_pills(base_url, region,
+                                     {k: v for k, v in base_params.items()
+                                      if k != "region"},
+                                     regions=GENMIX_REGION_LIST),
+                range_pills,
+            )
     subtab_html = _render_subtab_nav("generation-mix", subtabs, sub,
                                       carry_params=base_params)
 
@@ -3660,6 +3932,8 @@ def generation_mix_sub(sub: str, request: Request,
         )
     elif sub == "tod":
         content = _generation_tod_content(region, range, start, end)
+    elif sub == "regions":
+        content = _generation_regions_content(range, start, end)
     elif sub == "transmission":
         content = _generation_transmission_content(region, range, start, end)
     elif sub == "yr-on-yr":
