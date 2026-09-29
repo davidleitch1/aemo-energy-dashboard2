@@ -6432,6 +6432,37 @@ def _cal_year_average(df: pd.DataFrame, contracts: dict, year: int
     return df[cols].mean(axis=1)
 
 
+def _fy_quarters(fy: int) -> list:
+    """(year, quarter) keys of Australian FY `fy` (Jul fy-1 to Jun fy)."""
+    return [(fy - 1, 3), (fy - 1, 4), (fy, 1), (fy, 2)]
+
+
+def _fy_contract_average(df: pd.DataFrame, contracts: dict, fy: int
+                         ) -> pd.Series:
+    """FY strip price: simple mean of the FY's four quarterly contracts.
+    NaN until all four have listed. A quarter that has finished delivery
+    stops trading; its last settlement is carried forward so the strip
+    runs on through the year. The strip ends when its last quarter stops
+    trading."""
+    cols = [contracts.get(k) for k in _fy_quarters(fy)]
+    if any(c is None or c not in df.columns for c in cols):
+        return pd.Series(np.nan, index=df.index)
+    strip = df[cols].ffill().mean(axis=1, skipna=False)
+    last = df[cols].apply(pd.Series.last_valid_index).max()
+    return strip.where(strip.index <= last) if pd.notna(last) else strip
+
+
+def _futures_fy_available(contracts: dict) -> list:
+    """FYs for which at least one region has all four quarter columns."""
+    fys = set()
+    for rc in contracts.values():
+        for y, _ in rc:
+            for fy in (y, y + 1):
+                if all(k in rc for k in _fy_quarters(fy)):
+                    fys.add(fy)
+    return sorted(fys)
+
+
 def _build_forward_expectations(futures_df: pd.DataFrame,
                                 contracts: dict, region: str) -> str:
     """Cal+1 and Cal+2 forward averages over time. Both lines share the
@@ -6557,16 +6588,22 @@ def _build_futures_vs_spot(futures_df: pd.DataFrame, contracts: dict,
 
 
 def _build_single_contract(futures_df: pd.DataFrame, contracts: dict,
-                           year: int, quarter: int) -> str:
-    """All 4 regions on one chart for a specific contract. Shows regional
-    spread over time for that quarter."""
+                           key: tuple) -> str:
+    """All 4 regions on one chart for a specific contract. `key` is
+    (year, quarter) for a quarterly contract or ("FY", fy) for a financial
+    year strip. Shows regional spread over time for that contract."""
+    is_fy = key[0] == "FY"
     fig = go.Figure()
     for r in FUTURES_REGIONS:
         region_contracts = contracts.get(r, {})
-        col = region_contracts.get((year, quarter))
-        if col is None or col not in futures_df.columns:
-            continue
-        series = futures_df[col].dropna()
+        if is_fy:
+            series = _fy_contract_average(
+                futures_df, region_contracts, key[1]).dropna()
+        else:
+            col = region_contracts.get(key)
+            if col is None or col not in futures_df.columns:
+                continue
+            series = futures_df[col].dropna()
         if series.empty:
             continue
         fig.add_trace(go.Scatter(
@@ -6591,15 +6628,27 @@ def _build_single_contract(futures_df: pd.DataFrame, contracts: dict,
     )
     div_id = f"plot-single-{int(datetime.now().timestamp() * 1000)}"
     fig_json = _plot_json(fig)
-    return (_card_h3(f"{year} Q{quarter} base load &middot; all regions")
+    if is_fy:
+        fy = key[1]
+        label = f"FY{fy}"
+        note = (f'FY{fy} runs July {fy - 1} to June {fy}. Strip price = '
+                f'simple mean of the Q3 {fy - 1}, Q4 {fy - 1}, Q1 {fy} and '
+                f'Q2 {fy} contracts, shown once all four have listed. A '
+                f'quarter that has finished delivery is held at its last '
+                f'settlement. Spread between regions reflects '
+                f'interconnector capacity + dispatch expectations.')
+    else:
+        label = f"{key[0]} Q{key[1]}"
+        note = (f'How NSW/QLD/SA/VIC traded for the {label} contract '
+                f'as it approached delivery. Spread between regions reflects '
+                f'interconnector capacity + dispatch expectations.')
+    return (_card_h3(f"{label} base load &middot; all regions")
             + f'<div id="{div_id}" style="height:440px"></div>'
             + f'<script>(function(){{var f={fig_json};'
               f'Plotly.newPlot("{div_id}",f.data,f.layout,'
               f'{PLOTLY_CFG});}})();</script>'
             + f'<p style="color:{MUTED};font-size:11px;margin:8px 14px 0">'
-              f'How NSW/QLD/SA/VIC traded for the {year} Q{quarter} contract '
-              f'as it approached delivery. Spread between regions reflects '
-              f'interconnector capacity + dispatch expectations.</p>'
+              f'{note}</p>'
             + _attribution("Global-Roam"))
 
 
@@ -6625,20 +6674,30 @@ def _render_futures_region_pills(base_url: str, active: str,
 
 def _render_futures_contract_select(base_url: str, active: str,
                                     contracts_sorted: list,
-                                    other_params: dict) -> str:
+                                    other_params: dict,
+                                    fys: list = ()) -> str:
     """Native <select> wrapped in a form. Too many quarterly contracts
     (~20) for a pill bar; dropdown is the right control. requestSubmit()
-    fires HTMX on change so the swap happens without a button click."""
+    fires HTMX on change so the swap happens without a button click.
+    Financial years (slug FYyyyy) and quarters (slug yyyy-q) sit in
+    separate optgroups."""
     hidden = "".join(
         f'<input type="hidden" name="{k}" value="{v}">'
         for k, v in other_params.items() if v
     )
-    options = []
-    for y, qq in contracts_sorted:
-        slug = f"{y}-{qq}"
+
+    def _opt(slug: str, text: str) -> str:
         sel = " selected" if slug == active else ""
-        options.append(
-            f'<option value="{slug}"{sel}>{y} Q{qq}</option>')
+        return f'<option value="{slug}"{sel}>{text}</option>'
+
+    options = []
+    if fys:
+        options.append('<optgroup label="Financial years">')
+        options += [_opt(f"FY{fy}", f"FY{fy}") for fy in fys]
+        options.append('</optgroup><optgroup label="Quarters">')
+    options += [_opt(f"{y}-{qq}", f"{y} Q{qq}") for y, qq in contracts_sorted]
+    if fys:
+        options.append('</optgroup>')
     return (
         f'<form class="pill-bar" hx-get="{base_url}" '
         f'hx-target="#tab-body" hx-push-url="true">'
@@ -6669,11 +6728,10 @@ def _futures_content(region: str, contract: tuple) -> str:
     spot = _load_futures_spot_weekly()
     range_label = (f"data through {df.index[-1].strftime('%d %b %Y')}")
 
-    y, qq = contract
     fwd_curve_html = _build_forward_curve(df, contracts, region, range_label)
     fwd_exp_html = _build_forward_expectations(df, contracts, region)
     fvs_html = _build_futures_vs_spot(df, contracts, spot, region)
-    single_html = _build_single_contract(df, contracts, y, qq)
+    single_html = _build_single_contract(df, contracts, contract)
 
     return ('<div class="prices-stack">'
             f'<div class="card">{fwd_curve_html}</div>'
@@ -6702,18 +6760,27 @@ def futures_page(request: Request,
     default_key = (contracts_sorted[default_idx] if contracts_sorted
                    else (datetime.now().year, 1))
 
-    # Parse the URL ?contract=YYYY-Q value.
+    fys = _futures_fy_available(contracts)
+
+    # Parse the URL ?contract= value: YYYY-Q for a quarter, FYyyyy for a
+    # financial year.
     parsed_key = default_key
     if contract:
         try:
-            y_str, q_str = contract.split("-")
-            parsed_key = (int(y_str), int(q_str))
+            if contract.upper().startswith("FY"):
+                parsed_key = ("FY", int(contract[2:]))
+                if parsed_key[1] not in fys:
+                    parsed_key = default_key
+            else:
+                y_str, q_str = contract.split("-")
+                parsed_key = (int(y_str), int(q_str))
+                if parsed_key not in contracts_sorted and contracts_sorted:
+                    parsed_key = default_key
         except ValueError:
             parsed_key = default_key
-        if parsed_key not in contracts_sorted and contracts_sorted:
-            parsed_key = default_key
 
-    contract_slug = f"{parsed_key[0]}-{parsed_key[1]}"
+    contract_slug = (f"FY{parsed_key[1]}" if parsed_key[0] == "FY"
+                     else f"{parsed_key[0]}-{parsed_key[1]}")
 
     base_params = {"region": region, "contract": contract_slug}
     base_url = "/futures"
@@ -6723,7 +6790,8 @@ def futures_page(request: Request,
             {k: v for k, v in base_params.items() if k != "region"}),
         _render_futures_contract_select(
             base_url, contract_slug, contracts_sorted,
-            {k: v for k, v in base_params.items() if k != "contract"}),
+            {k: v for k, v in base_params.items() if k != "contract"},
+            fys),
     )
     content = _futures_content(region, parsed_key)
     body = _render_tab_body("", selectors + content)
