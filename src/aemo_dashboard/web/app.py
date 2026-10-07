@@ -6954,7 +6954,7 @@ def _battery_agg_node(rows: pd.DataFrame, hours: float, label: str,
         "spread_per_mwh_yr":(round(spread_per_mwh_yr)
                              if spread_per_mwh_yr is not None else None),
         "util":             round(util_pct) if util_pct is not None else None,
-        "cap_mw":           round(effective_cap),
+        "cap_mw":           round(cap_mw),  # nameplate; util uses storage/24
         "storage_mwh":      round(storage),
         # Mirror generic field names so the generic shell formatter can
         # still display generic metrics if requested.
