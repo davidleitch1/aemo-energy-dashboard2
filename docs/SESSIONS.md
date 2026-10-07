@@ -2,7 +2,7 @@
 
 Covers the NEM dashboard (FastAPI/HTMX app on .71) and the AEMO data collector. The price forecasting system keeps its own log in `itk_lp_model/docs/sessions_history.md`.
 
-**Protocol.** Start any dashboard or collector session by reading the state block and the last two entries. End it by appending an entry at the top of the log and rewriting the state block. Each entry is a handoff: what was asked, what was produced, what was decided and why, what was corrected and must not be undone, what is open.
+**Protocol.** Start any dashboard or collector session by reading `docs/SYSTEM.md` (how the system runs now), then the state block and the last two entries here. When a session changes how something runs, rewrite the affected part of SYSTEM.md. End it by appending an entry at the top of the log and rewriting the state block. Each entry is a handoff: what was asked, what was produced, what was decided and why, what was corrected and must not be undone, what is open.
 
 ## State now (8 Oct 2026)
 
@@ -12,8 +12,25 @@ Covers the NEM dashboard (FastAPI/HTMX app on .71) and the AEMO data collector. 
 - **Collector:** `~/aemo_production/aemo-data-updater` on .71, tmux `services:0`.
 - **Generation mix subtabs:** Yr on yr, Stack, Compare regions, Time of day, Trends, Transmission.
 - **Futures data:** `~/aemo_production/data/futures.csv`, weekly Sunday 00:00 rows, runs to 29 Sep 2026. Update by dropping a NEM-Review export in `~/futures_updates/` and running `~/aemo_production/data/update_futures.py` (merge: union of dates and columns, new wins). The Monday launchd job `com.aemo.update-futures` has not run since 4 May 2026.
-- **duid_mapping:** audited against AEMO registration list + Gen Info + MMS on 8 Oct (33 fixes, 8 inserts; edit log in `~/aemo_production/data/duid_mapping_history/`). Batteries tab Cap MW = nameplate; Util % and $/MWh-cap/yr weighted by time in window. **Open:** pump loads counted as hydro generation (~166 MW avg); collector auto-classifier leaves new DUIDs blank and never retries.
+- **duid_mapping:** audited 8 Oct against AEMO sources; weekly refresh (cron Sun 05:10) fills gaps and emails conflicts — first live run 11 Oct. Pump loads carry fuel NULL and are out of all generation totals. **Open:** 14 refresh conflicts to review; stale `tests/api` fixture DB.
 - **Open:** the futures launchd job is dead; not investigated (it only merges a file dropped by hand, so manual runs lose nothing).
+
+## 2026-10-08 (3) — Pump loads out of generation; weekly duid_mapping refresh; SYSTEM.md
+
+**Asked.** Go ahead with excluding pump loads and with a scheduled `duid_mapping` refresh; check the standalone gauge too. Then write a system map, since David is the only user and Claude the maintainer.
+
+**Produced.**
+- Pump loads (PUMP1, PUMP2, SNOWYP, SHPUMP, KIDSPHL1/2) set to fuel NULL in `duid_mapping` (log `duid_mapping_history/pump_loads_null_20261008.csv`). Views already drop NULL fuel. Code fixes where NULL would still leak, in `aemo-energy-dashboard2` (commit `b97c85a`): iOS renewable gauge (`api/routers/gauges.py`), iOS evening peak (`api/routers/evening_peak.py`), web evening peak (`evening_peak/evening_analysis.py`). Test `tests/api/test_pump_loads.py`. The 10 other failures in `tests/api` existed before this change (stale fixture DB). Restarted windows 1, 2, 11.
+- `PUMPED_HYDRO_DUIDS` corrected in both checkouts (`7c6fd10` in aemo-redesign) to TUMUT3, SHGEN, W/HOE#1, W/HOE#2, KIDSPHG1, KIDSPHG2, plus `PUMP_LOAD_DUIDS`; `~/aemo_production/data/pumped_hydro_duids.txt` rewritten (old copy in `duid_mapping_history/`).
+- `aemo-data-updater` commit `e0fed35`: `src/aemo_updater/duid_registry.py`, `scripts/refresh_duid_mapping.py`, 58 tests. Cron Sunday 05:10, log `~/aemo_production/logs/duid_refresh.log`, emails RECIPIENT_EMAIL. Dry run 8 Oct: 0 inserts, 0 fills, 14 conflicts (mostly small water-utility batteries' storage, TB2B1, WDBESS1, SNB01, LIMBESS1; capacity on ADPPV1, CLOVER, SMTHBES1, PIONEER) — left for review.
+- `start_services.sh` windows 2 and 3 pointed at `aemo_readonly.duckdb` (they were on `aemo_test.duckdb` at boot, readonly only after the 00:15 restart). Backup `start_services.sh.bak_20261008`.
+- `docs/SYSTEM.md`: current-state map (checkouts, services, data flow, tables, mapping maintenance, cron). Protocol now says read it at session start and rewrite it when something changes.
+
+**Decided.** NULL fuel rather than a new label for pump loads: a new label would have leaked into four live totals or series (web gauge total, `_generation_fuel_stats`, 5009 gauge, iOS generation stack); NULL needed three fixes. Pumping is not plotted anywhere — it is load, like battery charging, and hydro is now gross hydro output.
+
+**Corrected — do not undo.** The live renewable gauges never used `PUMPED_HYDRO_DUIDS` (only the retired Panel gauge did), so renewable % was not missing conventional hydro. What was wrong in live numbers was pump consumption counted as `Water` generation: NSW hydro 7 Sep–7 Oct was 471 MW with pumps, 284 MW without. YoY hydro for that window is 1.49 → 1.27 GW, not the 1.84 → 1.46 quoted in chat on 7 Oct.
+
+**Open.** Review the 14 refresh conflicts. Stale `tests/api` fixture DB. Weekly refresh's live write path runs for the first time on Sunday 11 Oct — check the email.
 
 ## 2026-10-08 (2) — duid_mapping audit against AEMO sources; battery time-weighting
 
