@@ -41,3 +41,17 @@ def test_util_is_cycles_per_day_on_storage():
     node = _battery_agg_node(_rows(), hours=240.0, label="R", kind="region",
                              ctx={})
     assert node["util"] == 75
+
+
+def test_new_battery_is_weighted_by_time_in_window():
+    # B1 reports for the whole 10-day window; B2 (same size) only the last
+    # 5 days. Storage-days = 200*10 + 200*5 = 3,000 MWh-days.
+    rows = _rows().assign(n_intervals=[480, 240])
+    node = _battery_agg_node(rows, hours=240.0, label="R", kind="region",
+                             ctx={})
+    # 3,000 MWh discharged / 3,000 storage-days = 1.0 cycle/day.
+    assert node["util"] == 100
+    # Net revenue 225,000 over 3,000/365 storage-MWh-years.
+    assert node["spread_per_mwh_yr"] == round(225_000 / (3000 / 365))
+    # Cap and storage columns still show the installed fleet.
+    assert node["storage_mwh"] == 400

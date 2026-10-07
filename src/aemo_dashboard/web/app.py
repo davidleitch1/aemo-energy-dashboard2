@@ -6925,18 +6925,23 @@ def _battery_agg_node(rows: pd.DataFrame, hours: float, label: str,
                 else float(rows["storage_mwh"].iloc[0] or 0)
     cap_mw    = float(rows["capacity_mw"].fillna(0).sum()) if kind != "duid" \
                 else float(rows["capacity_mw"].iloc[0] or 0)
-    effective_cap = storage / 24.0  # one cycle/day equivalent MW
+    # Storage-hours actually in the window: a battery commissioned part-way
+    # through only counts from its first 30-min row (n_intervals × 0.5 h).
+    if "n_intervals" in rows.columns:
+        storage_hours = float((rows["storage_mwh"].fillna(0)
+                               * rows["n_intervals"].fillna(0) * 0.5).sum())
+    else:
+        storage_hours = storage * hours
     disch_price = (disch_rev / disch_mwh) if disch_mwh > 0 else None
     ch_price = (ch_cost / ch_mwh) if ch_mwh > 0 else None
     spread = ((disch_price - ch_price)
               if (disch_price is not None and ch_price is not None) else None)
     spread_rev = disch_rev - ch_cost
-    # Annualise: window_hours / (365 * 24) tells you what fraction of a year
-    # this window covers; divide by that to scale up.
+    # Annualise over the storage-hours each battery was in the window.
     year_hours = 365.0 * 24.0
-    annual_spread_rev = (spread_rev * year_hours / hours) if hours > 0 else 0
-    spread_per_mwh_yr = (annual_spread_rev / storage) if storage > 0 else None
-    util_denom = effective_cap * hours
+    spread_per_mwh_yr = ((spread_rev * year_hours / storage_hours)
+                         if storage_hours > 0 else None)
+    util_denom = storage_hours / 24.0  # one full cycle a day = 100%
     util_pct = ((disch_mwh / util_denom * 100)
                 if util_denom > 0 else None)
     n_duids = int(rows["duid"].nunique()) if kind != "duid" else 1

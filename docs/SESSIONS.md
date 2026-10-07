@@ -12,8 +12,29 @@ Covers the NEM dashboard (FastAPI/HTMX app on .71) and the AEMO data collector. 
 - **Collector:** `~/aemo_production/aemo-data-updater` on .71, tmux `services:0`.
 - **Generation mix subtabs:** Yr on yr, Stack, Compare regions, Time of day, Trends, Transmission.
 - **Futures data:** `~/aemo_production/data/futures.csv`, weekly Sunday 00:00 rows, runs to 29 Sep 2026. Update by dropping a NEM-Review export in `~/futures_updates/` and running `~/aemo_production/data/update_futures.py` (merge: union of dates and columns, new wins). The Monday launchd job `com.aemo.update-futures` has not run since 4 May 2026.
-- **Batteries tab:** Cap MW is nameplate since 8 Oct; duid_mapping gaps (7 unregioned battery DUIDs, zero storage on 7 more) distort region Util % and $/MWh-cap/yr — see the 8 Oct entry.
+- **duid_mapping:** audited against AEMO registration list + Gen Info + MMS on 8 Oct (33 fixes, 8 inserts; edit log in `~/aemo_production/data/duid_mapping_history/`). Batteries tab Cap MW = nameplate; Util % and $/MWh-cap/yr weighted by time in window. **Open:** pump loads counted as hydro generation (~166 MW avg); collector auto-classifier leaves new DUIDs blank and never retries.
 - **Open:** the futures launchd job is dead; not investigated (it only merges a file dropped by hand, so manual runs lose nothing).
+
+## 2026-10-08 (2) — duid_mapping audit against AEMO sources; battery time-weighting
+
+**Asked.** Fix `duid_mapping` (not touched since the July Gen Info file); check every DUID, not just batteries; find a source fresher than the quarterly Gen Info.
+
+**Sources.** (1) AEMO NEM Registration and Exemption List, sheet "PU and Scheduled Loads" (`https://www.aemo.com.au/-/media/Files/Electricity/NEM/Participant_Information/NEM-Registration-and-Exemption-List.xls`, last-modified 22 Sep 2026): DUID, region, station, participant, fuel, reg/max MW, max storage MWh. (2) Gen Info July 2026 (`~/Downloads` on the Studio): nameplate MW (AC column), storage, commitment status. (3) MMSDM monthly `DUDETAILSUMMARY` (region, dispatch type) and `DUDETAIL` (REGISTEREDCAPACITY, MAXCAPACITY, MAXSTORAGECAPACITY), latest month 2026_08. The existing mapping's MW matches Gen Info nameplate for 91% of rows.
+
+**Produced.** 33 rows corrected, 8 inserted (591 → 599). Edit list with old → new values: `~/aemo_production/data/duid_mapping_history/duid_mapping_edits_20261008.csv`; pre-edit table kept in the DB as `duid_mapping_bak_20261008`. Applied to `aemo_test.duckdb` between collector cycles; readonly picked it up next cycle. Rules: region from MMS (dispatch) > registration > Gen Info; battery MW = registration Max Cap generation; other MW = Gen Info nameplate (AC) > registration Reg Cap; storage = registration > MMS > Gen Info; names and owners from the registration list, trustee clauses stripped.
+- Wrong plant behind the DUID (names had been guessed from the code): CGBESS01 Clements Gap SA (was "Castlereagh" NSW), TRGBESS1 Terang VIC (was "Taronga" NSW), LGAPBS1 Lincoln Gap SA (was "Logan" QLD), QPSFB1/2 Quorn Park NSW (was "QLD Solar Farm Battery"; QPSFB1 is solar), PUMP1/2 Wivenhoe pumps QLD (was Tumut 3 NSW), BRDDSF01 Broadsound QLD (was Berida NSW), GUSF1 Gunsynd QLD (was Gunnedah NSW), GESF1 → NSW, WNSF1 Wangaratta, SHOAL1 Shoalhaven Starches gas cogen 54 MW (was hydro 240 MW).
+- Blank region / zero MW / zero storage filled: NESBESS1/2, MRNBESS1, STABESS1, SMFBESS1/2, PLBESS1, ORABESS1 (49 → 415 MW, 1,660 MWh), SWANBBF1, BUSF1, LANCSF1, MULWASF1, WANDSF2, CUSF1. ERB01 700 → 460 MW, 1,073 → 1,997 MWh; HPR1 storage 117 → 194; WKIEWA1 34 → 68 MW.
+- Inserted (active batteries never mapped): MLB01, SNB02, WILLBES1, BRDDBES1, WOOLES1, ERB02, WOORB1, TB3B1.
+- Batteries tab: Util % and $/MWh-cap/yr now divide by storage × hours each DUID was in the window (`n_intervals × 0.5`), so batteries commissioned mid-window are not diluted. Test added. 1Y after both fixes: NSW util 39 / $8,220, QLD 62 / $16,523, VIC 61 / $16,039, SA 56 / $29,148; 69 DUIDs, 27,462 MWh.
+
+**Root cause of the missing rows.** The collector classifies a DUID once, on first sight (`_auto_insert_duid_mapping`), from the DUID string only; low-confidence guesses are skipped and never retried because `known_duids.txt` already holds the DUID. Rows it does insert have blank region, 0 MW, 0 MWh. `duid_exceptions.json` only silences alert emails.
+
+**Not changed (deliberate).** Solar rows where the mapping holds registration Reg Cap rather than Gen Info AC nameplate (10–25% apart: CHILDSF1, CRWARP1, DAYDSF1, GNNDHSF1, HAYMSF1, KARSF1, KERNGSP1, MANNSF2, METZSF1, SRSF1, TB2SF1, WANDSF1, …) — convention, not error. Hydro peaks above registered MW (Tumut 3 1,789 vs 1,500; Poatina, Cethana) are overload capability. TB2B1 storage 84 kept (AEMO lists 41; public sources say ~2 h). 111 mapping rows have no SCADA in 12 months (retired); untouched. UWF1 (auto-classified 6 Oct, wind) is in no source yet.
+
+**Open.**
+- Pump loads are in the generation views as `Water`: PUMP1/2, SNOWYP, SHPUMP (and KIDSPHL1/2) report consumption as positive SCADA, and `generation_by_fuel_*` sums them as hydro output — about 166 MW average over 12 months. Needs a decision on how to exclude them (affects all hydro and renewable-share history).
+- ERB01 storage is a single current value; it was smaller earlier in the window, so its 1Y cycles are understated.
+- Replace the one-shot classifier with a scheduled refresh from the registration list + MMS (proposal in chat 8 Oct).
 
 ## 2026-10-08 — Batteries tab: Cap MW fix and column audit
 
