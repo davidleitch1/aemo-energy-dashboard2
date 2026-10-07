@@ -88,6 +88,7 @@ def _load_window(conn, start: datetime, end: datetime, region: str) -> dict:
             WHERE s.settlementdate >= ? AND s.settlementdate < ?
               AND EXTRACT(HOUR FROM s.settlementdate) >= 17
               AND EXTRACT(HOUR FROM s.settlementdate) < 22
+              AND di."Fuel" IS NOT NULL  -- pump loads: consumption, not generation
               {region_filter}
         )
         SELECT settlementdate, fuel, SUM(gen) AS mw

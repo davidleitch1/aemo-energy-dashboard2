@@ -144,6 +144,10 @@ def get_evening_data(start_date: str, end_date: str, region: str = "NEM"):
     if region_duids is not None:
         scada_df = scada_df[scada_df["duid"].isin(region_duids)]
 
+    # Pump loads are mapped with fuel NULL: consumption, not generation.
+    pump_loads = {d for d, f in duid_to_fuel.items() if pd.isna(f)}
+    scada_df = scada_df[~scada_df["duid"].isin(pump_loads)]
+
     scada_df["fuel_raw"] = scada_df["duid"].map(duid_to_fuel).fillna("Other")
     scada_df["fuel"] = scada_df["fuel_raw"].map(FUEL_MAPPING).fillna("Other")
     scada_df["region"] = scada_df["duid"].map(duid_to_region)

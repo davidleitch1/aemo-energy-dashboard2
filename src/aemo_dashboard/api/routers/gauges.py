@@ -144,6 +144,7 @@ def _load_renewable(conn) -> dict:
           JOIN duid_mapping d ON s.duid = d.duid, latest
          WHERE s.settlementdate = latest.ts
            AND d.region IN {regs}
+           AND d.fuel IS NOT NULL  -- pump loads: consumption, not generation
          GROUP BY d.fuel
     """).fetchall()
 
