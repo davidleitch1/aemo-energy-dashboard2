@@ -86,39 +86,33 @@ ROOFTOP_SUBREGIONS = [
 # PUMPED HYDRO STORAGE DUIDS
 # =============================================================================
 
-# These 20 DUIDs are pumped hydro storage facilities that can both generate
-# (discharge) and consume (pump) electricity. They must be excluded from
-# renewable percentage calculations as they are energy storage devices,
-# not primary generation sources.
+# These are the pumped-storage generating units in the NEM: they generate
+# from water pumped uphill, so renewable-share calculations that follow
+# principle 1 exclude them. Corrected 2026-10-08: the August 2025 list held
+# 20 conventional hydro stations (Guthega, Murray, Upper Tumut, Tasmanian
+# stations, ...) and missed W/HOE#1. Tumut 3 also runs on natural inflow.
 #
-# Source: /Volumes/davidleitch/aemo_production/data/pumped_hydro_duids.txt
-# Audit date: August 3, 2025
-# Method: Analysis of bidirectional water generation patterns
+# Their pumps are separate load DUIDs (PUMP_LOAD_DUIDS below). Pump loads
+# report consumption as positive SCADA MW and carry fuel NULL in
+# duid_mapping so the generation views leave them out.
 
 PUMPED_HYDRO_DUIDS = [
-    'BARRON-1',   # Barron Gorge 1, QLD, 32 MW - Tablelands pumped storage
-    'BLOWERNG',   # Blowering, NSW, 80 MW - Snowy Hydro system
-    'BUTLERSG',   # Butlers Gorge, TAS, 12 MW - Tasmanian system
-    'CLOVER',     # Clover, TAS, 17 MW - Tasmanian system
-    'CLUNY',      # Cluny, TAS, 17 MW - Tasmanian system
-    'EILDON1',    # Eildon 1, VIC, 65 MW - Part of Eildon complex
-    'EILDON2',    # Eildon 2, VIC, 65 MW - Part of Eildon complex
-    'GUTHEGA',    # Guthega, NSW, 60 MW - Snowy Hydro system
-    'HUMENSW',    # Hume NSW, NSW, 29 MW - Murray River system
-    'HUMEV',      # Hume VIC, VIC, 29 MW - Murray River system
-    'KAREEYA4',   # Kareeya 4, QLD, 22 MW - Far North Queensland
-    'MCKAY1',     # Mackay 1, VIC, 300 MW - Part of Bogong complex
-    'MURRAY',     # Murray 1, NSW/VIC, 1,550 MW - Snowy 2.0 precursor
-    'PALOONA',    # Paloona, TAS, 28 MW - Tasmanian system
-    'REPULSE',    # Repulse, TAS, 28 MW - Tasmanian system
-    'ROWALLAN',   # Rowallan, TAS, 10 MW - Tasmanian system
-    'SHGEN',      # Shoalhaven, NSW, 247 MW - Origin Energy pumped storage
-    'TUMUT3',     # Tumut 3, NSW, 1,500 MW - Snowy Hydro, largest pumped hydro
-    'UPPTUMUT',   # Upper Tumut, NSW, 616 MW - Snowy Hydro system
-    'W/HOE#2'     # Wivenhoe 2, QLD, 285 MW - SEQ pumped storage
+    'TUMUT3',     # Tumut 3, NSW, 1,500 MW (Snowy Hydro)
+    'SHGEN',      # Shoalhaven (Bendeela + Kangaroo Valley), NSW, 240 MW (Origin)
+    'W/HOE#1',    # Wivenhoe 1, QLD, 285 MW (CleanCo)
+    'W/HOE#2',    # Wivenhoe 2, QLD, 285 MW (CleanCo)
+    'KIDSPHG1',   # Kidston 1, QLD, 125 MW (Genex)
+    'KIDSPHG2',   # Kidston 2, QLD, 125 MW (Genex)
 ]
 
-# Total pumped hydro capacity: ~4,972 MW
+PUMP_LOAD_DUIDS = [
+    'SNOWYP',     # Tumut 3 pumps
+    'SHPUMP',     # Shoalhaven pumps
+    'PUMP1',      # Wivenhoe pump 1
+    'PUMP2',      # Wivenhoe pump 2
+    'KIDSPHL1',   # Kidston pump 1
+    'KIDSPHL2',   # Kidston pump 2
+]
 
 # =============================================================================
 # EXCLUDED FROM GENERATION CALCULATIONS
@@ -275,8 +269,10 @@ def validate_configuration():
     assert not overlap, f"Renewable and thermal fuels overlap: {overlap}"
 
     # Check PUMPED_HYDRO_DUIDS has correct count
-    assert len(PUMPED_HYDRO_DUIDS) == 20, \
-        f"Expected 20 pumped hydro DUIDs, got {len(PUMPED_HYDRO_DUIDS)}"
+    assert len(PUMPED_HYDRO_DUIDS) == 6, \
+        f"Expected 6 pumped hydro DUIDs, got {len(PUMPED_HYDRO_DUIDS)}"
+    assert not set(PUMPED_HYDRO_DUIDS) & set(PUMP_LOAD_DUIDS), \
+        "A DUID is both a pumped hydro generator and a pump load"
 
     # Check no duplicate DUIDs
     assert len(PUMPED_HYDRO_DUIDS) == len(set(PUMPED_HYDRO_DUIDS)), \
