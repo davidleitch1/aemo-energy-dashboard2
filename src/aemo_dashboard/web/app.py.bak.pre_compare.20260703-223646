@@ -137,11 +137,6 @@ def _rooftop_latest_mw() -> float:
 
 app = FastAPI(title="NEM Today mockup")
 
-try:                       # tests import aemo_dashboard.web.app
-    from . import pasa_data
-except ImportError:        # uvicorn runs `app:app` from this directory
-    import pasa_data
-
 
 def q(sql: str, params: list | None = None) -> pd.DataFrame:
     """Fresh read-only connection per query, like the iOS API does."""
@@ -172,14 +167,12 @@ TABS = [
     ("today",            "Today",            []),
     ("generation-mix",   "Generation mix",   [("yr-on-yr",      "Yr on yr"),
                                               ("stack",         "Stack"),
-                                              ("regions",       "Compare regions"),
                                               ("tod",           "Time of day"),
                                               ("trends",        "Trends"),
                                               ("transmission",  "Transmission")]),
     ("evening-peak",     "Evening peak",     []),
     ("prices",           "Prices",           [("analysis", "Price Analysis"),
-                                              ("bands",    "Price Bands"),
-                                              ("compare",  "Period Compare")]),
+                                              ("bands",    "Price Bands")]),
     ("batteries",        "Batteries",        []),  # moved
     ("futures",          "Futures",          []),  # moved
     ("generators",       "Generators",       []),
@@ -192,10 +185,7 @@ TABS = [
     # at /generation-mix/trends. Bookmarks to /trends redirect via the
     # legacy_trends_redirect handler below.
     ("curtailment",      "Curtailment",      []),
-    ("pasa",             "PASA",             [("now",          "Now & 7 days"),
-                                              ("extended",     "Extended outages"),
-                                              ("slippage",     "Return-date changes"),
-                                              ("transmission", "Transmission")]),
+    ("pasa",             "PASA",             []),
     ("gas",              "Gas",              []),
 ]
 TAB_LOOKUP = {slug: (label, subs) for slug, label, subs in TABS}
@@ -1830,336 +1820,6 @@ def prices_root(region: str = "", range: str = "", smooth: str = "",
     return RedirectResponse(url=target)
 
 
-# ----------------------------------------------------------------------------
-# /prices/compare — period-on-period time-of-day comparison (single region)
-# ----------------------------------------------------------------------------
-#
-# One region (incl. NEM) and two equal-length windows overlaid as 48-point
-# half-hour-of-day price profiles. The primary window anchors to the latest
-# data (or a chosen start); the comparison window is the SAME length, placed by
-# mode: PCP (same window one calendar year earlier), Preceding (contiguous
-# prior window), or Custom (user-picked start). Both the per-bucket line and
-# the reference-line means are demand-weighted — for NEM, across the five
-# regions; for a single region, across days within each half-hour bucket.
-
-COMPARE_REGIONS = ["NEM", "NSW1", "QLD1", "SA1", "TAS1", "VIC1"]
-COMPARE_PERIODS = [("1d", "1D"), ("7d", "7D"), ("30d", "30D"),
-                   ("90d", "90D"), ("1y", "Yr")]
-COMPARE_PERIOD_DAYS = {"1d": 1, "7d": 7, "30d": 30, "90d": 90, "1y": 365}
-COMPARE_MODES = [("pcp", "PCP"), ("prev", "Preceding"), ("custom", "Custom")]
-COMPARE_MODE_SLUGS = {m for m, _ in COMPARE_MODES}
-COMPARE_MODE_DESC = {
-    "pcp":    "prior corresponding period (same window one year earlier)",
-    "prev":   "immediately preceding window",
-    "custom": "custom comparison start",
-}
-COMPARE_PRIMARY_COLOR = "#205EA6"   # Flexoki blue — the primary window
-COMPARE_CMP_COLOR = "#BC5215"       # Flexoki orange — the comparison window
-
-
-def _compare_windows(period: str, primary_start: str | None,
-                     cmp_mode: str, cmp_start: str | None):
-    """Resolve (p_start, p_end, c_start, c_end). Both windows share the same
-    length; the comparison is positioned by mode. Primary anchors to now unless
-    primary_start is given."""
-    delta = timedelta(days=COMPARE_PERIOD_DAYS.get(period, 30))
-    now_ts = pd.Timestamp(datetime.now(NEM_TZ).replace(tzinfo=None))
-
-    if primary_start:
-        p_start = pd.Timestamp(primary_start)
-        p_end = p_start + delta
-    else:
-        p_end = now_ts
-        p_start = p_end - delta
-
-    if cmp_mode == "prev":
-        c_start = p_start - delta
-    elif cmp_mode == "custom" and cmp_start:
-        c_start = pd.Timestamp(cmp_start)
-    else:  # pcp, or custom before a date is picked → default to PCP
-        c_start = p_start - pd.DateOffset(years=1)
-    return p_start, p_end, c_start, c_start + delta
-
-
-def _compare_tod_profile(region: str, s_ts, e_ts):
-    """48-point half-hour-of-day demand-weighted price profile for one window.
-
-    Returns (profile: Series indexed 0..47 of $/MWh with gaps as NaN,
-    mean: demand-weighted period mean $/MWh or None). Accumulating
-    Σ(rrp×demand) and Σ(demand) per bucket gives the demand-weighted price at
-    each half-hour; summing the same numerator/denominator across all buckets
-    gives the window mean. For NEM the region clause spans the five regions, so
-    the ratio is the demand-weighted NEM price in one pass."""
-    if region == "NEM":
-        region_clause = "p.regionid IN ('NSW1','QLD1','VIC1','SA1','TAS1')"
-    else:
-        region_clause = f"p.regionid = '{region}'"
-    df = q(
-        f"""SELECT (EXTRACT(HOUR FROM p.settlementdate) * 2
-                    + CASE WHEN EXTRACT(MINUTE FROM p.settlementdate) >= 30
-                           THEN 1 ELSE 0 END)          AS hh,
-                   SUM(p.rrp * d.demand)               AS num,
-                   SUM(d.demand)                       AS den
-              FROM prices30 p
-              JOIN demand30 d
-                ON p.settlementdate = d.settlementdate
-               AND p.regionid       = d.regionid
-             WHERE {region_clause}
-               AND p.settlementdate >= ? AND p.settlementdate < ?
-             GROUP BY hh
-             ORDER BY hh""",
-        [s_ts, e_ts],
-    )
-    if df.empty:
-        return pd.Series(dtype=float), None
-    df["hh"] = df["hh"].astype(int)
-    df = df[df["den"] > 0]
-    if df.empty:
-        return pd.Series(dtype=float), None
-    profile = (df.set_index("hh")["num"] / df.set_index("hh")["den"]).reindex(range(48))
-    total_den = float(df["den"].sum())
-    mean = float(df["num"].sum()) / total_den if total_den else None
-    return profile, mean
-
-
-def _hh_label(h: int) -> str:
-    """Half-hour-of-day index 0..47 → 'HH:MM' (NEM time)."""
-    return f"{h // 2:02d}:{'30' if h % 2 else '00'}"
-
-
-def _build_compare_chart(region, p_start, p_end, c_start, c_end,
-                         p_profile, p_mean, c_profile, c_mean,
-                         period_label) -> str:
-    hours = [_hh_label(h) for h in range(48)]
-    x = list(range(48))
-
-    def _dates(a, b):
-        return (f"{pd.Timestamp(a).strftime('%-d %b %Y')} – "
-                f"{pd.Timestamp(b - timedelta(days=1)).strftime('%-d %b %Y')}")
-
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=x, y=[p_profile.get(i) for i in x], customdata=hours,
-        name=f"Primary · {_dates(p_start, p_end)}", mode="lines",
-        line=dict(color=COMPARE_PRIMARY_COLOR, width=2), connectgaps=False,
-        hovertemplate="%{customdata} · $%{y:.0f}/MWh<extra>Primary</extra>",
-    ))
-    fig.add_trace(go.Scatter(
-        x=x, y=[c_profile.get(i) for i in x], customdata=hours,
-        name=f"Comparison · {_dates(c_start, c_end)}", mode="lines",
-        line=dict(color=COMPARE_CMP_COLOR, width=2, dash="dot"), connectgaps=False,
-        hovertemplate="%{customdata} · $%{y:.0f}/MWh<extra>Comparison</extra>",
-    ))
-    if p_mean is not None:
-        fig.add_hline(y=p_mean, line_dash="dash", line_width=1,
-                      line_color=COMPARE_PRIMARY_COLOR,
-                      annotation_text=f"primary mean ${p_mean:,.0f}",
-                      annotation_position="top left",
-                      annotation_font_size=10,
-                      annotation_font_color=COMPARE_PRIMARY_COLOR)
-    if c_mean is not None:
-        fig.add_hline(y=c_mean, line_dash="dash", line_width=1,
-                      line_color=COMPARE_CMP_COLOR,
-                      annotation_text=f"comparison mean ${c_mean:,.0f}",
-                      annotation_position="bottom left",
-                      annotation_font_size=10,
-                      annotation_font_color=COMPARE_CMP_COLOR)
-
-    fig.update_layout(
-        paper_bgcolor=PAPER, plot_bgcolor=PAPER,
-        height=380, margin=dict(l=52, r=12, t=8, b=64),
-        legend=dict(orientation="h", yanchor="top", y=-0.16,
-                    xanchor="center", x=0.5, font=dict(size=10),
-                    bgcolor="rgba(0,0,0,0)"),
-        xaxis=dict(showgrid=False, tickfont=dict(size=10, color=MUTED),
-                   tickmode="array", tickvals=list(range(0, 48, 6)),
-                   ticktext=[hours[i] for i in range(0, 48, 6)],
-                   title=dict(text="Time of day (NEM time, 30-min)",
-                              font=dict(size=10, color=MUTED))),
-        yaxis=dict(showgrid=False, tickfont=dict(size=10, color=MUTED),
-                   autorange=True,
-                   title=dict(text="$/MWh", font=dict(size=10, color=MUTED))),
-    )
-    title = (f"{_region_display(region)} price by time of day &middot; "
-             f"{period_label} windows")
-    div_id = f"plot-cmp-{int(datetime.now().timestamp() * 1000)}"
-    fig_json = _plot_json(fig)
-    return (
-        _card_h3(title)
-        + f'<div id="{div_id}" style="height:380px"></div>'
-        + f'<script>(function(){{var f={fig_json};'
-          f'Plotly.newPlot("{div_id}",f.data,f.layout,'
-          f'{PLOTLY_CFG});}})();</script>'
-        + f'<p style="color:{MUTED};font-size:11px;margin:10px 14px 0;'
-          f'line-height:1.5">Each point is the demand-weighted mean price at '
-          f'that half-hour across all days in the window'
-          f'{" (demand-weighted across the five regions)" if region == "NEM" else ""}. '
-          f'Dashed lines mark each window&rsquo;s demand-weighted average.</p>'
-        + _attribution()
-    )
-
-
-def _compare_summary(region, p_start, p_end, c_start, c_end,
-                     p_mean, c_mean, cmp_mode) -> str:
-    def dates(a, b):
-        return (f"{pd.Timestamp(a).strftime('%-d %b %Y')} – "
-                f"{pd.Timestamp(b - timedelta(days=1)).strftime('%-d %b %Y')}")
-
-    def dol(v):
-        return "&mdash;" if v is None else f"${v:,.0f}"
-
-    delta_cell = "&mdash;"
-    if p_mean is not None and c_mean is not None:
-        d = p_mean - c_mean
-        up = d >= 0
-        sign = "+" if up else "−"
-        color = "#af3029" if up else "#66800b"   # dearer = red, cheaper = green
-        pct = f" ({sign}{abs(d) / c_mean * 100:.0f}%)" if c_mean else ""
-        delta_cell = (f'<span style="color:{color};font-weight:700">'
-                      f'{sign}${abs(d):,.0f}/MWh{pct}</span>')
-
-    def row(swatch, label, dates_txt, mean):
-        dot = (f'<span style="display:inline-block;width:10px;height:10px;'
-               f'border-radius:2px;background:{swatch};margin-right:8px"></span>'
-               if swatch else "")
-        return (f'<tr style="border-bottom:1px solid {BORDER}">'
-                f'<td style="padding:8px 14px;color:{INK};font-size:14px">{dot}{label}</td>'
-                f'<td style="padding:8px 14px;color:{MUTED};font-size:13px">{dates_txt}</td>'
-                f'<td style="padding:8px 14px;text-align:right;color:{INK};'
-                f'font-weight:600;font-size:14px">{mean}</td></tr>')
-
-    body = (
-        row(COMPARE_PRIMARY_COLOR, "Primary", dates(p_start, p_end), dol(p_mean))
-        + row(COMPARE_CMP_COLOR, "Comparison", dates(c_start, c_end), dol(c_mean))
-        + (f'<tr><td style="padding:8px 14px;color:{INK};font-size:14px;'
-           f'font-weight:600">Difference</td><td></td>'
-           f'<td style="padding:8px 14px;text-align:right;font-size:14px">'
-           f'{delta_cell}</td></tr>')
-    )
-    return (_card_h3(f"{_region_display(region)} &middot; demand-weighted mean price")
-            + f'<table style="width:100%;border-collapse:collapse">{body}</table>'
-            + f'<p style="color:{MUTED};font-size:11px;margin:10px 14px 0;'
-              f'line-height:1.5">Comparison window = {COMPARE_MODE_DESC[cmp_mode]}. '
-              f'Difference is primary minus comparison (red = dearer, green = cheaper).</p>')
-
-
-def _compare_content(region, period, cmp_mode, p_start, p_end, c_start, c_end,
-                     p_profile, p_mean, c_profile, c_mean) -> str:
-    if p_mean is None and c_mean is None:
-        return ('<div class="placeholder"><p><strong>No price data for the '
-                'selected windows.</strong></p><p>Try a different region, '
-                'period, or comparison start date.</p></div>')
-    period_label = dict(COMPARE_PERIODS).get(period, period)
-    summary = _compare_summary(region, p_start, p_end, c_start, c_end,
-                               p_mean, c_mean, cmp_mode)
-    chart = _build_compare_chart(region, p_start, p_end, c_start, c_end,
-                                 p_profile, p_mean, c_profile, c_mean,
-                                 period_label)
-    return (f'<div class="prices-stack">'
-            f'<div class="card">{summary}</div>'
-            f'<div class="card">{chart}</div>'
-            f'</div>')
-
-
-def _render_compare_period_pills(base_url, active, other_params) -> str:
-    pills = []
-    for slug, label in COMPARE_PERIODS:
-        url = _build_url(base_url, **dict(other_params, period=slug))
-        cls = "pill active" if slug == active else "pill"
-        pills.append(f'<button class="{cls}" hx-get="{url}" '
-                     f'hx-target="#tab-body" hx-push-url="true">{label}</button>')
-    return (f'<div class="pill-bar"><span class="pill-bar-label">Period</span>'
-            f'<div class="pill-group">{"".join(pills)}</div></div>')
-
-
-def _render_compare_mode_pills(base_url, active, other_params) -> str:
-    pills = []
-    for slug, label in COMPARE_MODES:
-        # Leaving custom drops any custom comparison start.
-        params = {k: v for k, v in other_params.items() if k != "cstart"}
-        params["cmp"] = slug
-        url = _build_url(base_url, **params)
-        cls = "pill active" if slug == active else "pill"
-        pills.append(f'<button class="{cls}" hx-get="{url}" '
-                     f'hx-target="#tab-body" hx-push-url="true">{label}</button>')
-    return (f'<div class="pill-bar"><span class="pill-bar-label">Compare to</span>'
-            f'<div class="pill-group">{"".join(pills)}</div></div>')
-
-
-def _render_compare_dates(base_url, region, period, cmp_mode, pstart, cstart) -> str:
-    today = datetime.now(NEM_TZ).date().isoformat()
-    hidden = (f'<input type="hidden" name="region" value="{region}">'
-              f'<input type="hidden" name="period" value="{period}">'
-              f'<input type="hidden" name="cmp" value="{cmp_mode}">')
-    cstart_input = ""
-    if cmp_mode == "custom":
-        cstart_input = (f'<span class="sep">vs from</span>'
-                        f'<input type="date" name="cstart" value="{cstart}" max="{today}">')
-    reset_url = _build_url(base_url, region=region, period=period, cmp=cmp_mode)
-    return (f'<div class="pill-bar"><span class="pill-bar-label">Dates</span>'
-            f'<form class="custom-form" hx-get="{base_url}" '
-            f'hx-target="#tab-body" hx-push-url="true">{hidden}'
-            f'<span class="sep">primary from</span>'
-            f'<input type="date" name="pstart" value="{pstart}" max="{today}">'
-            f'{cstart_input}'
-            f'<button type="submit">Apply</button></form>'
-            f'<button class="pill" hx-get="{reset_url}" hx-target="#tab-body" '
-            f'hx-push-url="true">Latest</button></div>')
-
-
-def _render_compare_selectors(base_url, region, period, cmp_mode,
-                              pstart, cstart, base_params) -> str:
-    return _render_selector_strip(
-        _render_region_pills(base_url, region,
-                             {k: v for k, v in base_params.items() if k != "region"},
-                             multi=False, regions=COMPARE_REGIONS),
-        _render_compare_period_pills(base_url, period,
-                             {k: v for k, v in base_params.items() if k != "period"}),
-        _render_compare_mode_pills(base_url, cmp_mode,
-                             {k: v for k, v in base_params.items() if k != "cmp"}),
-        _render_compare_dates(base_url, region, period, cmp_mode, pstart, cstart),
-    )
-
-
-@app.get("/prices/compare", response_class=HTMLResponse)
-def prices_compare(request: Request,
-                   region: str = "NEM",
-                   period: str = "30d",
-                   cmp: str = "pcp",
-                   pstart: str | None = None,
-                   cstart: str | None = None) -> HTMLResponse:
-    if region not in COMPARE_REGIONS:
-        region = "NEM"
-    if period not in COMPARE_PERIOD_DAYS:
-        period = "30d"
-    if cmp not in COMPARE_MODE_SLUGS:
-        cmp = "pcp"
-
-    _, subtabs = TAB_LOOKUP["prices"]
-    p_start, p_end, c_start, c_end = _compare_windows(period, pstart, cmp, cstart)
-    p_profile, p_mean = _compare_tod_profile(region, p_start, p_end)
-    c_profile, c_mean = _compare_tod_profile(region, c_start, c_end)
-
-    base_url = "/prices/compare"
-    base_params = {"region": region, "period": period, "cmp": cmp}
-    if pstart:
-        base_params["pstart"] = pstart
-    if cstart and cmp == "custom":
-        base_params["cstart"] = cstart
-
-    selectors = _render_compare_selectors(base_url, region, period, cmp,
-                                          pstart or "", cstart or "", base_params)
-    subtab_html = _render_subtab_nav("prices", subtabs, "compare",
-                                     carry_params=base_params)
-    content = _compare_content(region, period, cmp,
-                               p_start, p_end, c_start, c_end,
-                               p_profile, p_mean, c_profile, c_mean)
-    body = _render_tab_body(subtab_html, selectors + content)
-    if _is_htmx(request):
-        return HTMLResponse(body)
-    return HTMLResponse(_render_shell(body))
-
-
 @app.get("/prices/{sub}", response_class=HTMLResponse)
 def prices_sub(sub: str, request: Request,
                region: str = "NSW1,VIC1",
@@ -3559,309 +3219,6 @@ def _generation_yr_on_yr_content(region: str, range_slug: str,
     )
 
 
-# ----------------------------------------------------------------------------
-# /generation-mix — Compare regions subtab (all 5 regions on one chart)
-# ----------------------------------------------------------------------------
-#
-# Unlike the Stack subtab, this always reads the 30-min tables regardless of
-# the range — a 7d or 30d energy-mix comparison doesn't need 5-min bars, and
-# the query stays cheap (one GROUP BY over a bounded window) at any range.
-
-GENMIX_COMPARE_REGIONS = ["NSW1", "QLD1", "VIC1", "SA1", "TAS1"]
-# Renewables first, VRE before hydro, so the VRE share and the renewable
-# share each fall on a segment boundary of the share chart and can be marked
-# with a tick. Storage and fossil follow.
-COMPARE_FUEL_ORDER = ["Wind", "Solar", "Rooftop Solar", "Hydro",
-                      "Battery", "Gas", "Coal", "Other"]
-COMPARE_VRE_FUELS = ["Wind", "Solar", "Rooftop Solar"]
-COMPARE_RE_FUELS = COMPARE_VRE_FUELS + ["Hydro"]
-# Fuels a viewer reads as "light" — dark (INK) segment text reads better on
-# them than the PAPER (near-white) text used on every other fuel's colour.
-COMPARE_LIGHT_FUELS = {"Solar", "Rooftop Solar"}
-
-
-def _renewable_shares(mix: pd.DataFrame) -> pd.DataFrame:
-    """Per-row VRE share (wind + solar + rooftop) and renewable share (VRE
-    + hydro), in % of the row total. Battery discharge is storage, not a
-    renewable source, so it sits in the denominator only."""
-    total = mix.sum(axis=1).replace(0, np.nan)
-    vre = mix[[c for c in COMPARE_VRE_FUELS if c in mix.columns]].sum(axis=1)
-    re = mix[[c for c in COMPARE_RE_FUELS if c in mix.columns]].sum(axis=1)
-    return pd.DataFrame({"vre": (vre / total * 100).fillna(0),
-                         "re": (re / total * 100).fillna(0)})
-
-
-def _regional_mix_energy(s_ts, e_ts) -> pd.DataFrame:
-    """Energy by region x fuel (GWh) over [s_ts, e_ts), always from the
-    30-min tables (generation_by_fuel_30min, rooftop30) — confirmed those
-    columns are per-interval MW averages, not cumulative energy: a
-    generation_by_fuel_30min row exactly equals the mean of the six
-    generation_by_fuel_5min rows in its window, and rooftop30 has been at
-    30-min cadence since its earliest row (2020-01-01).
-
-    Index: GENMIX_COMPARE_REGIONS, restricted to regions with any data in the
-    window. Columns: COMPARE_FUEL_ORDER, with all-zero columns dropped.
-
-    Every fuel — not just Battery — is clipped to GREATEST(mw, 0) at the
-    per-interval, per-region level before summing. This matches how
-    _generation_stack_content already treats Coal/Hydro/Wind/Solar (each
-    `.clip(lower=0)` there); real data has occasional small negative
-    readings on non-battery fuels too (e.g. a few MW of negative "Other"
-    in SA1), which would otherwise render as a nonsensical negative
-    segment in a stacked bar. For Battery this clip *is* the "discharge
-    only" rule the spec asks for; charging (negative) is dropped.
-    """
-    region_in = ",".join(f"'{r}'" for r in GENMIX_COMPARE_REGIONS)
-
-    util_sql = f"""
-        WITH labeled AS (
-            SELECT settlementdate, region,
-                   CASE WHEN fuel_type IN ('CCGT','OCGT','Gas other') THEN 'Gas'
-                        WHEN fuel_type = 'Water' THEN 'Hydro'
-                        WHEN fuel_type = 'Battery Storage' THEN 'Battery'
-                        WHEN fuel_type IN ('Biomass','Other') THEN 'Other'
-                        ELSE fuel_type END AS fuel,
-                   total_generation_mw AS gen_mw
-              FROM generation_by_fuel_30min
-             WHERE region IN ({region_in})
-               AND settlementdate >= ? AND settlementdate < ?
-        ),
-        per_period AS (
-            SELECT settlementdate, region, fuel, SUM(gen_mw) AS mw
-              FROM labeled
-             GROUP BY settlementdate, region, fuel
-        )
-        SELECT region, fuel, SUM(GREATEST(mw, 0)) * 0.5 / 1000.0 AS gwh
-          FROM per_period
-         GROUP BY region, fuel
-    """
-    util_df = q(util_sql, [s_ts, e_ts])
-
-    roof_sql = f"""
-        SELECT regionid AS region, SUM(GREATEST(power, 0)) * 0.5 / 1000.0 AS gwh
-          FROM rooftop30
-         WHERE regionid IN ({region_in})
-           AND settlementdate >= ? AND settlementdate < ?
-         GROUP BY regionid
-    """
-    roof_df = q(roof_sql, [s_ts, e_ts])
-
-    regions_with_data = set(util_df["region"]) | set(roof_df["region"])
-    regions = [r for r in GENMIX_COMPARE_REGIONS if r in regions_with_data]
-
-    out = pd.DataFrame(0.0, index=regions, columns=COMPARE_FUEL_ORDER)
-    for row in util_df.itertuples(index=False):
-        if row.region in out.index and row.fuel in out.columns:
-            out.loc[row.region, row.fuel] = row.gwh
-    for row in roof_df.itertuples(index=False):
-        if row.region in out.index:
-            out.loc[row.region, "Rooftop Solar"] = row.gwh
-
-    nonzero_cols = [c for c in COMPARE_FUEL_ORDER if out[c].sum() > 1e-9]
-    return out[nonzero_cols]
-
-
-def _regional_net_imports(s_ts, e_ts) -> pd.Series:
-    """Net interconnector import energy per region (GWh, imports positive)
-    over [s_ts, e_ts), for hover/annotation text only — never a bar segment.
-
-    Uses the same INTERCONNECTOR_MAP sign convention as
-    _generation_stack_content, but summed once over the whole window rather
-    than bucketed. Degrades gracefully: a region whose query fails gets
-    None, and callers skip it in hover text rather than failing the chart.
-    """
-    out: dict[str, float | None] = {}
-    for region in GENMIX_COMPARE_REGIONS:
-        ic_map = INTERCONNECTOR_MAP.get(region, {})
-        if not ic_map:
-            out[region] = 0.0
-            continue
-        ic_ids = list(ic_map.keys())
-        ic_in = ",".join(f"'{i}'" for i in ic_ids)
-        from_set = [k for k, v in ic_map.items() if v == "from"]
-        from_in = ",".join(f"'{i}'" for i in from_set)
-        sign = (f"CASE WHEN interconnectorid IN ({from_in}) "
-                f"THEN -meteredmwflow ELSE meteredmwflow END"
-                if from_set else "meteredmwflow")
-        sql = f"""
-            SELECT SUM({sign}) AS net_mw
-              FROM transmission30
-             WHERE interconnectorid IN ({ic_in})
-               AND settlementdate >= ? AND settlementdate < ?
-        """
-        try:
-            df = q(sql, [s_ts, e_ts])
-            net_mw = df["net_mw"].iloc[0] if not df.empty else None
-            out[region] = (float(net_mw) * 0.5 / 1000.0
-                           if net_mw is not None else 0.0)
-        except Exception:
-            out[region] = None
-    return pd.Series(out)
-
-
-def _generation_regions_content(range_slug: str, start: str | None,
-                                end: str | None) -> str:
-    """Two stacked cards comparing generation mix across all 5 regions:
-    an absolute-energy horizontal stacked bar, and a %-share horizontal
-    100%-stacked bar with a NEM (= sum of the 5 regions) row on top."""
-    s_ts, e_ts, _, range_label = _range_window(range_slug, start, end)
-    mix = _regional_mix_energy(s_ts, e_ts)
-    if mix.empty or not len(mix.columns):
-        return (f'<div class="placeholder">'
-                f'<p><strong>No generation data for {range_label}.</strong>'
-                f'</p></div>')
-
-    imports = _regional_net_imports(s_ts, e_ts)
-    hours = max((e_ts - s_ts).total_seconds() / 3600.0, 1e-9)
-    fuel_cols = list(mix.columns)
-    totals = mix.sum(axis=1)
-    max_total = totals.max() if len(totals) else 0.0
-    use_twh = max_total >= 1000
-    unit = "TWh" if use_twh else "GWh"
-    div = 1000.0 if use_twh else 1.0
-
-    def fuel_color(fuel: str) -> str:
-        return FUEL_COLORS.get("Battery Storage" if fuel == "Battery" else fuel,
-                               MUTED)
-
-    # ---- Chart 1: absolute stacked energy, one bar per region -------------
-    y1 = [_region_display(r) for r in mix.index]
-    fig1 = go.Figure()
-    for fuel in fuel_cols:
-        vals = mix[fuel]
-        share_of_region = (vals / totals.replace(0, np.nan) * 100).fillna(0)
-        fig1.add_trace(go.Bar(
-            name=fuel, y=y1, x=(vals / div).values, orientation="h",
-            marker_color=fuel_color(fuel),
-            customdata=np.stack([share_of_region.values], axis=-1),
-            hovertemplate=(f"<b>{fuel}</b>: %{{x:.1f}} {unit} "
-                           f"(%{{customdata[0]:.0f}}% of region)<extra></extra>"),
-        ))
-    annotations1 = []
-    for i, region in enumerate(mix.index):
-        total = totals[region]
-        avg_gw = total / hours
-        imp = imports.get(region) if imports is not None else None
-        imp_bit = (f" · net imports {imp:+.0f} GWh" if imp is not None
-                   else "")
-        annotations1.append(dict(
-            x=total / div, y=y1[i], xanchor="left", xshift=8, yanchor="middle",
-            text=(f"{total / div:.1f} {unit} · {avg_gw:.1f} GW avg"
-                  f"{imp_bit}"),
-            showarrow=False, align="left", font=dict(size=10, color=MUTED),
-        ))
-    fig1_height = 70 * len(y1) + 130
-    fig1.update_layout(
-        barmode="stack",
-        paper_bgcolor=PAPER, plot_bgcolor=PAPER,
-        height=fig1_height, margin=dict(l=52, r=200, t=8, b=64),
-        legend=dict(orientation="h", yanchor="top", y=-0.16,
-                    xanchor="center", x=0.5, font=dict(size=10), bgcolor=PAPER,
-                    traceorder="normal"),
-        xaxis=dict(showgrid=False, tickfont=dict(size=10, color=MUTED),
-                   title=dict(text=unit, font=dict(size=10, color=MUTED))),
-        yaxis=dict(showgrid=False, tickfont=dict(size=11, color=INK),
-                   categoryorder="array", categoryarray=y1,
-                   autorange="reversed"),
-        annotations=annotations1,
-    )
-    title1 = f"Generation by region &middot; {range_label} &middot; {unit}"
-    div_id1 = f"plot-genregions-abs-{int(datetime.now().timestamp() * 1000)}"
-    fig1_json = _plot_json(fig1)
-
-    # ---- Chart 2: %-share, NEM + 5 regions, NEM row on top -----------------
-    nem_row = mix.sum(axis=0)
-    mix2 = pd.concat([pd.DataFrame([nem_row], index=["NEM"]), mix])
-    totals2 = mix2.sum(axis=1)
-    shares = mix2.div(totals2.replace(0, np.nan), axis=0).fillna(0) * 100
-    y2 = ["NEM"] + y1
-
-    fig2 = go.Figure()
-    for fuel in fuel_cols:
-        vals = shares[fuel]
-        texts = [f"{v:.0f}%" if v >= 6 else "" for v in vals]
-        fig2.add_trace(go.Bar(
-            name=fuel, y=y2, x=vals.values, orientation="h",
-            marker_color=fuel_color(fuel),
-            text=texts, texttemplate="%{text}",
-            textposition="inside", insidetextanchor="middle",
-            textfont=dict(size=10, color=(INK if fuel in COMPARE_LIGHT_FUELS
-                                          else PAPER)),
-            hovertemplate=f"<b>{fuel}</b>: %{{x:.1f}}%<extra></extra>",
-        ))
-    # VRE and renewable boundaries: a short INK tick across each bar at the
-    # segment edge, with both numbers in a column right of the 100% line.
-    ren = _renewable_shares(mix2)
-    ren.index = y2
-    shapes2 = [dict(type="line", xref="paper", x0=0, x1=1, yref="y",
-                    y0=0.5, y1=0.5, line=dict(color=BORDER, width=1.5))]
-    annotations2 = []
-    for i, label in enumerate(y2):
-        for key in ("vre", "re"):
-            x = ren.loc[label, key]
-            if x <= 0:
-                continue
-            shapes2.append(dict(type="line", xref="x", yref="y",
-                                x0=x, x1=x, y0=i - 0.46, y1=i + 0.46,
-                                line=dict(color=INK, width=2.5)))
-        annotations2.append(dict(
-            x=1.0, xref="paper", xanchor="left", xshift=10,
-            y=label, yref="y", yanchor="middle", showarrow=False, align="left",
-            text=(f"VRE {ren.loc[label, 'vre']:.0f}%<br>"
-                  f"RE {ren.loc[label, 're']:.0f}%"),
-            font=dict(size=10, color=INK)))
-    fig2_height = 70 * len(y2) + 130
-    fig2.update_layout(
-        barmode="stack",
-        paper_bgcolor=PAPER, plot_bgcolor=PAPER,
-        height=fig2_height, margin=dict(l=52, r=70, t=8, b=64),
-        legend=dict(orientation="h", yanchor="top", y=-0.16,
-                    xanchor="center", x=0.5, font=dict(size=10), bgcolor=PAPER,
-                    traceorder="normal"),
-        xaxis=dict(range=[0, 100], ticksuffix="%", showgrid=False,
-                   tickfont=dict(size=10, color=MUTED)),
-        yaxis=dict(showgrid=False, tickfont=dict(size=11, color=INK),
-                   categoryorder="array", categoryarray=y2,
-                   autorange="reversed"),
-        shapes=shapes2,
-        annotations=annotations2,
-    )
-    title2 = f"Generation mix share by region &middot; {range_label}"
-    div_id2 = f"plot-genregions-share-{int(datetime.now().timestamp() * 1000)}"
-    fig2_json = _plot_json(fig2)
-
-    footnote = (f'<p style="color:{MUTED};font-size:11px;margin:8px 14px 0;'
-                f'line-height:1.5">Utility-scale generation plus rooftop '
-                f'solar; battery counts discharge only; net imports excluded '
-                f'(labelled beside each bar on the energy chart). NEM = sum of the '
-                f'five regions. Ticks mark the VRE share (wind, solar, rooftop) '
-                f'and the renewable share (VRE plus hydro, which includes '
-                f'pumped-hydro output); battery discharge is not counted '
-                f'as renewable.</p>')
-
-    return (
-        f'<div class="prices-stack">'
-        f'<div class="card">'
-        f'{_card_h3(title1)}'
-        f'<div id="{div_id1}" style="height:{fig1_height}px"></div>'
-        f'<script>(function(){{var f={fig1_json};'
-        f'Plotly.newPlot("{div_id1}",f.data,f.layout,'
-        f'{PLOTLY_CFG});}})();</script>'
-        + _attribution()
-        + f'</div>'
-        f'<div class="card">'
-        f'{_card_h3(title2)}'
-        f'<div id="{div_id2}" style="height:{fig2_height}px"></div>'
-        f'<script>(function(){{var f={fig2_json};'
-        f'Plotly.newPlot("{div_id2}",f.data,f.layout,'
-        f'{PLOTLY_CFG});}})();</script>'
-        + footnote
-        + _attribution()
-        + f'</div>'
-        f'</div>'
-    )
-
-
 @app.get("/generation-mix", response_class=HTMLResponse)
 def generation_mix_root(region: str = "", range: str = "",
                         start: str | None = None, end: str | None = None
@@ -3936,30 +3293,22 @@ def generation_mix_sub(sub: str, request: Request,
                                 if k not in ("fuel",)}),
         )
     else:
-        # 1H is meaningless on yr-on-yr (annualised comparison against the
-        # same hour last year is just noise) and on regions (a one-hour
-        # energy-mix comparison across 5 regions is too thin to read). Hide
-        # that pill; 24H stays.
+        # 1H is meaningless on the yr-on-yr subtab (annualised comparison
+        # against the same hour last year is just noise). Hide that pill;
+        # 24H stays and works as a real 24-hour window via the period
+        # handling in _generation_yr_on_yr_content.
         range_options = ([o for o in RANGE_OPTIONS if o[0] != "1h"]
-                         if sub in ("yr-on-yr", "regions") else RANGE_OPTIONS)
-        range_pills = _render_range_pills(
-            base_url, range,
-            {k: v for k, v in base_params.items()
-             if k not in ("range", "start", "end")},
-            start=start or "", end=end or "", options=range_options)
-        if sub == "regions":
-            # Every region is on the chart at once, so there's no region
-            # selector — `region` still rides in base_params (carried via
-            # subtab_html below) so switching subtabs preserves it.
-            selectors = _render_selector_strip(range_pills)
-        else:
-            selectors = _render_selector_strip(
-                _render_region_pills(base_url, region,
-                                     {k: v for k, v in base_params.items()
-                                      if k != "region"},
-                                     regions=GENMIX_REGION_LIST),
-                range_pills,
-            )
+                         if sub == "yr-on-yr" else RANGE_OPTIONS)
+        selectors = _render_selector_strip(
+            _render_region_pills(base_url, region,
+                                 {k: v for k, v in base_params.items() if k != "region"},
+                                 regions=GENMIX_REGION_LIST),
+            _render_range_pills(base_url, range,
+                                {k: v for k, v in base_params.items()
+                                 if k not in ("range", "start", "end")},
+                                start=start or "", end=end or "",
+                                options=range_options),
+        )
     subtab_html = _render_subtab_nav("generation-mix", subtabs, sub,
                                       carry_params=base_params)
 
@@ -3980,8 +3329,6 @@ def generation_mix_sub(sub: str, request: Request,
         )
     elif sub == "tod":
         content = _generation_tod_content(region, range, start, end)
-    elif sub == "regions":
-        content = _generation_regions_content(range, start, end)
     elif sub == "transmission":
         content = _generation_transmission_content(region, range, start, end)
     elif sub == "yr-on-yr":
@@ -6440,37 +5787,6 @@ def _cal_year_average(df: pd.DataFrame, contracts: dict, year: int
     return df[cols].mean(axis=1)
 
 
-def _fy_quarters(fy: int) -> list:
-    """(year, quarter) keys of Australian FY `fy` (Jul fy-1 to Jun fy)."""
-    return [(fy - 1, 3), (fy - 1, 4), (fy, 1), (fy, 2)]
-
-
-def _fy_contract_average(df: pd.DataFrame, contracts: dict, fy: int
-                         ) -> pd.Series:
-    """FY strip price: simple mean of the FY's four quarterly contracts.
-    NaN until all four have listed. A quarter that has finished delivery
-    stops trading; its last settlement is carried forward so the strip
-    runs on through the year. The strip ends when its last quarter stops
-    trading."""
-    cols = [contracts.get(k) for k in _fy_quarters(fy)]
-    if any(c is None or c not in df.columns for c in cols):
-        return pd.Series(np.nan, index=df.index)
-    strip = df[cols].ffill().mean(axis=1, skipna=False)
-    last = df[cols].apply(pd.Series.last_valid_index).max()
-    return strip.where(strip.index <= last) if pd.notna(last) else strip
-
-
-def _futures_fy_available(contracts: dict) -> list:
-    """FYs for which at least one region has all four quarter columns."""
-    fys = set()
-    for rc in contracts.values():
-        for y, _ in rc:
-            for fy in (y, y + 1):
-                if all(k in rc for k in _fy_quarters(fy)):
-                    fys.add(fy)
-    return sorted(fys)
-
-
 def _build_forward_expectations(futures_df: pd.DataFrame,
                                 contracts: dict, region: str) -> str:
     """Cal+1 and Cal+2 forward averages over time. Both lines share the
@@ -6596,22 +5912,16 @@ def _build_futures_vs_spot(futures_df: pd.DataFrame, contracts: dict,
 
 
 def _build_single_contract(futures_df: pd.DataFrame, contracts: dict,
-                           key: tuple) -> str:
-    """All 4 regions on one chart for a specific contract. `key` is
-    (year, quarter) for a quarterly contract or ("FY", fy) for a financial
-    year strip. Shows regional spread over time for that contract."""
-    is_fy = key[0] == "FY"
+                           year: int, quarter: int) -> str:
+    """All 4 regions on one chart for a specific contract. Shows regional
+    spread over time for that quarter."""
     fig = go.Figure()
     for r in FUTURES_REGIONS:
         region_contracts = contracts.get(r, {})
-        if is_fy:
-            series = _fy_contract_average(
-                futures_df, region_contracts, key[1]).dropna()
-        else:
-            col = region_contracts.get(key)
-            if col is None or col not in futures_df.columns:
-                continue
-            series = futures_df[col].dropna()
+        col = region_contracts.get((year, quarter))
+        if col is None or col not in futures_df.columns:
+            continue
+        series = futures_df[col].dropna()
         if series.empty:
             continue
         fig.add_trace(go.Scatter(
@@ -6636,27 +5946,15 @@ def _build_single_contract(futures_df: pd.DataFrame, contracts: dict,
     )
     div_id = f"plot-single-{int(datetime.now().timestamp() * 1000)}"
     fig_json = _plot_json(fig)
-    if is_fy:
-        fy = key[1]
-        label = f"FY{fy}"
-        note = (f'FY{fy} runs July {fy - 1} to June {fy}. Strip price = '
-                f'simple mean of the Q3 {fy - 1}, Q4 {fy - 1}, Q1 {fy} and '
-                f'Q2 {fy} contracts, shown once all four have listed. A '
-                f'quarter that has finished delivery is held at its last '
-                f'settlement. Spread between regions reflects '
-                f'interconnector capacity + dispatch expectations.')
-    else:
-        label = f"{key[0]} Q{key[1]}"
-        note = (f'How NSW/QLD/SA/VIC traded for the {label} contract '
-                f'as it approached delivery. Spread between regions reflects '
-                f'interconnector capacity + dispatch expectations.')
-    return (_card_h3(f"{label} base load &middot; all regions")
+    return (_card_h3(f"{year} Q{quarter} base load &middot; all regions")
             + f'<div id="{div_id}" style="height:440px"></div>'
             + f'<script>(function(){{var f={fig_json};'
               f'Plotly.newPlot("{div_id}",f.data,f.layout,'
               f'{PLOTLY_CFG});}})();</script>'
             + f'<p style="color:{MUTED};font-size:11px;margin:8px 14px 0">'
-              f'{note}</p>'
+              f'How NSW/QLD/SA/VIC traded for the {year} Q{quarter} contract '
+              f'as it approached delivery. Spread between regions reflects '
+              f'interconnector capacity + dispatch expectations.</p>'
             + _attribution("Global-Roam"))
 
 
@@ -6682,30 +5980,20 @@ def _render_futures_region_pills(base_url: str, active: str,
 
 def _render_futures_contract_select(base_url: str, active: str,
                                     contracts_sorted: list,
-                                    other_params: dict,
-                                    fys: list = ()) -> str:
+                                    other_params: dict) -> str:
     """Native <select> wrapped in a form. Too many quarterly contracts
     (~20) for a pill bar; dropdown is the right control. requestSubmit()
-    fires HTMX on change so the swap happens without a button click.
-    Financial years (slug FYyyyy) and quarters (slug yyyy-q) sit in
-    separate optgroups."""
+    fires HTMX on change so the swap happens without a button click."""
     hidden = "".join(
         f'<input type="hidden" name="{k}" value="{v}">'
         for k, v in other_params.items() if v
     )
-
-    def _opt(slug: str, text: str) -> str:
-        sel = " selected" if slug == active else ""
-        return f'<option value="{slug}"{sel}>{text}</option>'
-
     options = []
-    if fys:
-        options.append('<optgroup label="Financial years">')
-        options += [_opt(f"FY{fy}", f"FY{fy}") for fy in fys]
-        options.append('</optgroup><optgroup label="Quarters">')
-    options += [_opt(f"{y}-{qq}", f"{y} Q{qq}") for y, qq in contracts_sorted]
-    if fys:
-        options.append('</optgroup>')
+    for y, qq in contracts_sorted:
+        slug = f"{y}-{qq}"
+        sel = " selected" if slug == active else ""
+        options.append(
+            f'<option value="{slug}"{sel}>{y} Q{qq}</option>')
     return (
         f'<form class="pill-bar" hx-get="{base_url}" '
         f'hx-target="#tab-body" hx-push-url="true">'
@@ -6736,10 +6024,11 @@ def _futures_content(region: str, contract: tuple) -> str:
     spot = _load_futures_spot_weekly()
     range_label = (f"data through {df.index[-1].strftime('%d %b %Y')}")
 
+    y, qq = contract
     fwd_curve_html = _build_forward_curve(df, contracts, region, range_label)
     fwd_exp_html = _build_forward_expectations(df, contracts, region)
     fvs_html = _build_futures_vs_spot(df, contracts, spot, region)
-    single_html = _build_single_contract(df, contracts, contract)
+    single_html = _build_single_contract(df, contracts, y, qq)
 
     return ('<div class="prices-stack">'
             f'<div class="card">{fwd_curve_html}</div>'
@@ -6768,27 +6057,18 @@ def futures_page(request: Request,
     default_key = (contracts_sorted[default_idx] if contracts_sorted
                    else (datetime.now().year, 1))
 
-    fys = _futures_fy_available(contracts)
-
-    # Parse the URL ?contract= value: YYYY-Q for a quarter, FYyyyy for a
-    # financial year.
+    # Parse the URL ?contract=YYYY-Q value.
     parsed_key = default_key
     if contract:
         try:
-            if contract.upper().startswith("FY"):
-                parsed_key = ("FY", int(contract[2:]))
-                if parsed_key[1] not in fys:
-                    parsed_key = default_key
-            else:
-                y_str, q_str = contract.split("-")
-                parsed_key = (int(y_str), int(q_str))
-                if parsed_key not in contracts_sorted and contracts_sorted:
-                    parsed_key = default_key
+            y_str, q_str = contract.split("-")
+            parsed_key = (int(y_str), int(q_str))
         except ValueError:
             parsed_key = default_key
+        if parsed_key not in contracts_sorted and contracts_sorted:
+            parsed_key = default_key
 
-    contract_slug = (f"FY{parsed_key[1]}" if parsed_key[0] == "FY"
-                     else f"{parsed_key[0]}-{parsed_key[1]}")
+    contract_slug = f"{parsed_key[0]}-{parsed_key[1]}"
 
     base_params = {"region": region, "contract": contract_slug}
     base_url = "/futures"
@@ -6798,8 +6078,7 @@ def futures_page(request: Request,
             {k: v for k, v in base_params.items() if k != "region"}),
         _render_futures_contract_select(
             base_url, contract_slug, contracts_sorted,
-            {k: v for k, v in base_params.items() if k != "contract"},
-            fys),
+            {k: v for k, v in base_params.items() if k != "contract"}),
     )
     content = _futures_content(region, parsed_key)
     body = _render_tab_body("", selectors + content)
@@ -6933,23 +6212,18 @@ def _battery_agg_node(rows: pd.DataFrame, hours: float, label: str,
                 else float(rows["storage_mwh"].iloc[0] or 0)
     cap_mw    = float(rows["capacity_mw"].fillna(0).sum()) if kind != "duid" \
                 else float(rows["capacity_mw"].iloc[0] or 0)
-    # Storage-hours actually in the window: a battery commissioned part-way
-    # through only counts from its first 30-min row (n_intervals × 0.5 h).
-    if "n_intervals" in rows.columns:
-        storage_hours = float((rows["storage_mwh"].fillna(0)
-                               * rows["n_intervals"].fillna(0) * 0.5).sum())
-    else:
-        storage_hours = storage * hours
+    effective_cap = storage / 24.0  # one cycle/day equivalent MW
     disch_price = (disch_rev / disch_mwh) if disch_mwh > 0 else None
     ch_price = (ch_cost / ch_mwh) if ch_mwh > 0 else None
     spread = ((disch_price - ch_price)
               if (disch_price is not None and ch_price is not None) else None)
     spread_rev = disch_rev - ch_cost
-    # Annualise over the storage-hours each battery was in the window.
+    # Annualise: window_hours / (365 * 24) tells you what fraction of a year
+    # this window covers; divide by that to scale up.
     year_hours = 365.0 * 24.0
-    spread_per_mwh_yr = ((spread_rev * year_hours / storage_hours)
-                         if storage_hours > 0 else None)
-    util_denom = storage_hours / 24.0  # one full cycle a day = 100%
+    annual_spread_rev = (spread_rev * year_hours / hours) if hours > 0 else 0
+    spread_per_mwh_yr = (annual_spread_rev / storage) if storage > 0 else None
+    util_denom = effective_cap * hours
     util_pct = ((disch_mwh / util_denom * 100)
                 if util_denom > 0 else None)
     n_duids = int(rows["duid"].nunique()) if kind != "duid" else 1
@@ -6967,7 +6241,7 @@ def _battery_agg_node(rows: pd.DataFrame, hours: float, label: str,
         "spread_per_mwh_yr":(round(spread_per_mwh_yr)
                              if spread_per_mwh_yr is not None else None),
         "util":             round(util_pct) if util_pct is not None else None,
-        "cap_mw":           round(cap_mw),  # nameplate; util uses storage/24
+        "cap_mw":           round(effective_cap),
         "storage_mwh":      round(storage),
         # Mirror generic field names so the generic shell formatter can
         # still display generic metrics if requested.
@@ -8939,8 +8213,11 @@ def _build_market_notices() -> HTMLResponse:
 
 
 # ============================================================================
-# Generator outages  (ST-PASA / MT-PASA; logic in pasa_data.py)
+# Tile 9: Generator outages  (PASA-driven, stacked bars by fuel × region)
 # ============================================================================
+
+_outages_cache: dict = {"ts": 0.0, "data": None}
+_OUTAGES_TTL = 300
 
 # Match production palette in pasa/pasa_tab.py REGION_COLORS for the segments.
 OUTAGE_REGION_COLORS = {
@@ -8949,35 +8226,21 @@ OUTAGE_REGION_COLORS = {
 }
 REGION_DISPLAY = {"NSW1": "NSW", "QLD1": "QLD", "VIC1": "VIC",
                   "SA1": "SA", "TAS1": "TAS"}
-PASA_THRESHOLD_MW = 50.0
 
 
-def _pasa_units() -> pd.DataFrame:
-    """Scheduled plant from duid_mapping, cached with the parquet loads."""
-    def _load():
-        conn = duckdb.connect(DB_PATH, read_only=True)
-        try:
-            return pasa_data.load_scheduled_units(conn)
-        finally:
-            conn.close()
-    return pasa_data._cached("units", _load)
-
-
-def _get_outage_data() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame] | None:
-    """(ST-PASA, units without mothballed/retired, MT-PASA or empty,
-    mothballed units); None if the store is unreadable."""
+def _get_outage_data() -> tuple[pd.DataFrame, pd.DataFrame] | None:
+    now = time.time()
+    if _outages_cache["data"] is not None and now - _outages_cache["ts"] < _OUTAGES_TTL:
+        return _outages_cache["data"]
     try:
-        st = pasa_data.load_stpasa()
-        units = _pasa_units()
-        try:
-            mt = pasa_data.load_mtpasa()
-        except Exception:
-            mt = pd.DataFrame()
-        moth = pasa_data.mothballed(mt, units, threshold=PASA_THRESHOLD_MW) \
-            if len(mt) else pd.DataFrame()
-        if len(moth):
-            units = units[~units["duid"].isin(moth["duid"])]
-        return st, units, mt, moth
+        from aemo_dashboard.pasa.change_detector import ChangeDetector
+        from aemo_dashboard.pasa.pasa_tab import load_gen_info, DEFAULT_DATA_PATH
+        detector = ChangeDetector(data_path=DEFAULT_DATA_PATH)
+        outages = detector.get_current_generator_outages(min_reduction_mw=50)
+        gen_info = load_gen_info()
+        _outages_cache["data"] = (outages, gen_info)
+        _outages_cache["ts"] = now
+        return _outages_cache["data"]
     except Exception:
         return None
 
@@ -8989,14 +8252,48 @@ def outages_summary() -> HTMLResponse:
     return _cached_tile("outages-summary", _build_outages_summary, ttl=120.0)
 
 
-def _outage_bars(cur: pd.DataFrame, slug: str) -> HTMLResponse:
+def _build_outages_summary() -> HTMLResponse:
     """Horizontal stacked bar per fuel; segments per DUID coloured by region.
-    `cur` is pasa_data.current_outages(): duid, region, fuel, mw_out."""
-    df = pd.DataFrame({
-        "duid": cur["duid"], "fuel": cur["fuel"],
-        "region": cur["region"].map(lambda r: REGION_DISPLAY.get(r, r)),
-        "mw": cur["mw_out"],
-    })
+
+    Mirrors the production PASA tab's `create_generator_fuel_summary` —
+    uses live PASA availability so returned generators self-exclude.
+    """
+    data = _get_outage_data()
+    if data is None:
+        return HTMLResponse(_card_h3("Generator outages") +
+            f'<div style="color:{MUTED};padding:10px">PASA data unavailable</div>')
+    outages, gen_info = data
+
+    if outages.empty or gen_info.empty:
+        return HTMLResponse(_card_h3("Generator outages") +
+            f'<div style="color:{MUTED};padding:10px">No current outages</div>')
+
+    # Join outages with fuel + region; fall back to gen_info capacity when
+    # PASA reports 0/0 (genuine "off, nameplate") rather than "no change".
+    info = gen_info.set_index("DUID")
+    rows = []
+    for _, row in outages.iterrows():
+        duid = row["DUID"]
+        if duid not in info.index:
+            fuel, cap, region = "Unknown", 0.0, "Unknown"
+        else:
+            r = info.loc[duid]
+            fuel = r.get("Fuel") or "Unknown"
+            cap = float(r.get("Capacity(MW)") or 0)
+            region = r.get("Region") or "Unknown"
+        region_short = REGION_DISPLAY.get(region, region)
+        reduction = float(row["reduction_mw"])
+        if reduction <= 0 and float(row["current_mw"]) == 0 and cap > 0:
+            reduction = cap
+        if reduction > 0:
+            rows.append({"duid": duid, "fuel": fuel,
+                         "region": region_short, "mw": reduction})
+
+    if not rows:
+        return HTMLResponse(_card_h3("Generator outages") +
+            f'<div style="color:{MUTED};padding:10px">No outages above 50 MW</div>')
+
+    df = pd.DataFrame(rows)
     fuel_totals = df.groupby("fuel")["mw"].sum().sort_values(ascending=True)
     fuel_order = list(fuel_totals.index)  # ascending → Plotly draws top-to-bottom correctly
     total = float(fuel_totals.sum())
@@ -9046,355 +8343,9 @@ def _outage_bars(cur: pd.DataFrame, slug: str) -> HTMLResponse:
         annotations=annotations,
     )
     return _wrap_plot_with_extras(
-        slug, f"Generator outages &middot; {total:,.0f} MW total", fig,
+        "outages", f"Generator outages &middot; {total:,.0f} MW total", fig,
         extras_before=f'<div style="margin:0 0 6px 70px">{legend_chips}</div>',
     )
-
-
-def _build_outages_summary() -> HTMLResponse:
-    """Today tile: scheduled units out now (PASA availability, so units
-    offline for economic reasons are not counted)."""
-    data = _get_outage_data()
-    if data is None:
-        return HTMLResponse(_card_h3("Generator outages") +
-            f'<div style="color:{MUTED};padding:10px">PASA data unavailable</div>')
-    st, units, _, _ = data
-    cur = pasa_data.current_outages(st, units, PASA_THRESHOLD_MW)
-    if cur.empty:
-        return HTMLResponse(_card_h3("Generator outages") +
-            f'<div style="color:{MUTED};padding:10px">No outages above '
-            f'{PASA_THRESHOLD_MW:.0f} MW</div>')
-    return _outage_bars(cur, "outages")
-
-
-# ----------------------------------------------------------------------------
-# /pasa — Now & 7 days
-# ----------------------------------------------------------------------------
-
-_PASA_PLACEHOLDERS = {
-    "extended": "Being rebuilt &mdash; MT-PASA history backfill in progress.",
-    "slippage": "Being rebuilt &mdash; MT-PASA history backfill in progress.",
-    "transmission": "Coming next.",
-}
-
-
-@app.get("/pasa", response_class=HTMLResponse)
-def pasa_root() -> RedirectResponse:
-    return RedirectResponse(url="/pasa/now")
-
-
-def _fmt_dt(ts) -> str:
-    return "" if pd.isna(ts) else f"{ts:%a %d %b %H:%M}"
-
-
-def _pasa_timeseries_chart(ts: pd.DataFrame, region: str) -> str:
-    if ts.empty or float(ts.to_numpy().sum()) == 0:
-        return (_card_h3("MW out over the next 7 days")
-                + f'<div style="color:{MUTED};padding:10px">'
-                  f'No units above {PASA_THRESHOLD_MW:.0f} MW out.</div>')
-    fig = go.Figure()
-    for fuel in ("Coal", "Gas", "Hydro"):
-        if fuel not in ts.columns:
-            continue
-        color = FUEL_COLORS[fuel]
-        fig.add_trace(go.Scatter(
-            x=ts.index, y=ts[fuel], name=fuel, mode="lines",
-            stackgroup="out", line=dict(width=0.8, color=color, shape="hv"),
-            fillcolor=color,
-            hovertemplate=f"{fuel} %{{y:,.0f}} MW<extra></extra>",
-        ))
-    fig.update_layout(
-        paper_bgcolor=PAPER, plot_bgcolor=PAPER, height=320,
-        margin=dict(l=60, r=20, t=8, b=36), hovermode="x unified",
-        legend=dict(orientation="h", y=1.08, x=0, font=dict(size=11)),
-        xaxis=dict(showgrid=False, tickfont=dict(size=10, color=MUTED)),
-        yaxis=dict(gridcolor=BORDER, zeroline=False, ticksuffix=" MW",
-                   tickfont=dict(size=10, color=MUTED), rangemode="tozero"),
-    )
-    title = ("MW out over the next 7 days &middot; "
-             + ("NEM" if region == "NEM" else region[:-1]))
-    resp = _wrap_plot_with_extras("pasa-ts", title, fig)
-    return resp.body.decode()
-
-
-def _pasa_table(tbl: pd.DataFrame) -> str:
-    if tbl.empty:
-        return (_card_h3("Units out now")
-                + f'<div style="color:{MUTED};padding:10px">No units out.</div>')
-
-    def _td(v, right=False, title=""):
-        al = "right" if right else "left"
-        t = f' title="{html_lib.escape(title)}"' if title else ""
-        return f'<td{t} style="text-align:{al};padding:6px 12px">{v}</td>'
-
-    heads = [("Unit", False), ("Station", False), ("Region", False),
-             ("Fuel", False), ("Capacity MW", True), ("Available MW", True),
-             ("MW out", True), ("Type", False), ("Back within week", False),
-             ("MT-PASA return", False), ("Recall (h)", True)]
-    header = "".join(
-        f'<th style="text-align:{"right" if r else "left"};padding:6px 12px">'
-        f'{h}</th>' for h, r in heads)
-    rows = []
-    for _, r in tbl.iterrows():
-        outage_state = str(r["raw_state"]).startswith(("OUTAGE", "DERATING"))
-        back = (_fmt_dt(r["back_within_week"])
-                if pd.notna(r["back_within_week"]) else "beyond 7 days")
-        if pd.notna(r["mtpasa_return"]):
-            mt_ret = f'{r["mtpasa_return"]:%a %d %b %Y}'
-        else:
-            mt_ret = "beyond horizon" if outage_state else "&mdash;"
-        rec = r["recall_h"] * 60
-        recall = ("Long-term" if rec >= pasa_data.LONG_TERM_RECALL_MIN
-                  else f'{r["recall_h"]:.1f}')
-        rows.append(
-            f'<tr style="border-top:1px solid {BORDER}">'
-            + _td(html_lib.escape(str(r["duid"])))
-            + _td(html_lib.escape(str(r["site_name"] or "")))
-            + _td(REGION_DISPLAY.get(r["region"], r["region"]))
-            + _td(r["fuel"])
-            + _td(f'{r["capacity_mw"]:,.0f}', True)
-            + _td(f'{r["available_mw"]:,.0f}', True)
-            + _td(f'<b>{r["mw_out"]:,.0f}</b>', True)
-            + _td(r["type"], title=str(r["raw_state"]))
-            + _td(back)
-            + _td(mt_ret)
-            + _td(recall, True)
-            + '</tr>')
-    return (_card_h3(f"Units out now &middot; {len(tbl)} units")
-            + '<div style="overflow-x:auto"><table style="width:100%;'
-              'border-collapse:collapse;font-size:13px">'
-            + f'<thead style="background:{BORDER};color:{INK};font-size:11px;'
-              f'text-transform:uppercase;letter-spacing:0.4px">'
-            + f'<tr>{header}</tr></thead><tbody>{"".join(rows)}</tbody>'
-            + '</table></div>')
-
-
-def _pasa_now_content(region: str) -> str:
-    data = _get_outage_data()
-    if data is None:
-        return ('<div class="prices-stack"><div class="card">'
-                + _card_h3("PASA")
-                + f'<div style="color:{MUTED};padding:10px">'
-                  'PASA data unavailable</div></div></div>')
-    st, units, mt, moth = data
-    run = st["RUN_DATETIME"].max()
-    mt_pub = mt["PUBLISH_DATETIME"].max() if len(mt) else pd.NaT
-    fresh = (f'<div style="color:{MUTED};font-size:12px;padding:8px 24px 0">'
-             f'ST-PASA run {_fmt_dt(run)} &middot; MT-PASA published '
-             f'{_fmt_dt(mt_pub) if pd.notna(mt_pub) else "n/a"} '
-             f'&middot; times AEST &middot; units out = '
-             f'&ge;{PASA_THRESHOLD_MW:.0f} MW below capacity</div>')
-
-    cur = pasa_data.current_outages(st, units, PASA_THRESHOLD_MW)
-    if cur.empty:
-        bars = (_card_h3("Generator outages")
-                + f'<div style="color:{MUTED};padding:10px">No outages above '
-                  f'{PASA_THRESHOLD_MW:.0f} MW</div>')
-    else:
-        bars = _outage_bars(cur, "pasa-now").body.decode()
-
-    ts = pasa_data.outage_timeseries(st, units, PASA_THRESHOLD_MW,
-                                     region=None if region == "NEM" else region)
-    tbl = pasa_data.outage_table(st, units, mt, PASA_THRESHOLD_MW)
-    note = pasa_data.mothballed_note(moth)
-    moth_note = (f'<div style="color:{MUTED};font-size:11px;margin:6px 14px 0">'
-                 f'{html_lib.escape(note)}</div>' if note else "")
-    return (fresh + '<div class="prices-stack">'
-            f'<div class="card">{bars}</div>'
-            f'<div class="card">{_pasa_timeseries_chart(ts, region)}</div>'
-            f'<div class="card">{_pasa_table(tbl)}{moth_note}'
-            f'{_attribution("AEMO ST-PASA, MT-PASA")}</div>'
-            '</div>')
-
-
-# ----------------------------------------------------------------------------
-# /pasa/slippage — Return-date changes
-# ----------------------------------------------------------------------------
-
-_SLIP_CACHE: dict = {"mtime": None, "val": None}
-PASA_SLIP_COLORS = ["#af3029", "#bc5215", "#ad8301", "#66800b", "#24837b",
-                    "#205ea6", "#5e409d", "#a02f6f"]
-
-
-def _slippage_data():
-    """(table, paths, publishes) joined to unit names; recomputed only when
-    the history file changes."""
-    import os
-    mtime = os.stat(pasa_data.HISTORY_PATH).st_mtime
-    if _SLIP_CACHE["mtime"] == mtime and _SLIP_CACHE["val"] is not None:
-        return _SLIP_CACHE["val"]
-    hist = pasa_data.load_mtpasa_history()
-    units = _pasa_units()
-    pubs = pasa_data.weekly_publishes(hist, 26)
-    table, paths = pasa_data.slippage_table(hist, units, pubs,
-                                            30, PASA_THRESHOLD_MW)
-    info = units.rename(columns={"duid": "duid"})[
-        ["duid", "site_name", "region", "fuel"]]
-    info = info.assign(fuel=info["fuel"].map(pasa_data.FUEL_DISPLAY))
-    table = table.merge(info, on="duid", how="left")
-    _SLIP_CACHE.update(mtime=mtime, val=(table, paths, pubs))
-    return _SLIP_CACHE["val"]
-
-
-def _fmt_d(ts) -> str:
-    return "" if pd.isna(ts) else f"{ts:%d %b %Y}"
-
-
-def _slip_table_html(t: pd.DataFrame, latest_pub) -> str:
-    if t.empty:
-        return (_card_h3("Return-date changes")
-                + f'<div style="color:{MUTED};padding:10px">No units out now '
-                  f'or starting within 30 days.</div>')
-
-    def _td(v, right=False, extra=""):
-        al = "right" if right else "left"
-        return (f'<td style="text-align:{al};padding:6px 10px;'
-                f'white-space:nowrap;{extra}">{v}</td>')
-
-    def _prior(ts, is_new):
-        if pd.notna(ts):
-            return _fmt_d(ts)
-        return "new" if is_new else "&mdash;"
-
-    heads = [("Unit", 0), ("Station", 0), ("Region", 0), ("Fuel", 0),
-             ("MW", 1), ("Type", 0), ("Out from", 0), ("Expected return", 0),
-             ("Return 1 week ago", 0), ("Return 4 weeks ago", 0),
-             ("First listed", 0), ("Original return", 0), ("Slip (days)", 1)]
-    header = "".join(
-        f'<th style="text-align:{"right" if r else "left"};padding:6px 10px">'
-        f'{h}</th>' for h, r in heads)
-    rows = []
-    for r in t.itertuples():
-        up = bool(r.moved_later)
-        mark = (f' <span style="color:#af3029" title="Return moved later in '
-                f'the last week">&#9650;</span>' if up else "")
-        if r.open_ended:
-            ret_now, slip = "open-ended", "&mdash;"
-        else:
-            ret_now = _fmt_d(r.return_now) + mark
-            slip = ("&mdash;" if pd.isna(r.slip_days)
-                    else f"{r.slip_days:+.0f}" if r.slip_days else "0")
-            if r.is_new:
-                slip = "new"
-        if r.open_ended:
-            ret_now += mark
-        rows.append(
-            f'<tr style="border-top:1px solid {BORDER}">'
-            + _td(html_lib.escape(str(r.duid)))
-            + _td(html_lib.escape(str(r.site_name or "")))
-            + _td(REGION_DISPLAY.get(r.region, r.region))
-            + _td(r.fuel) + _td(f"{r.mw:,.0f}", True)
-            + _td(r.type) + _td(_fmt_d(r.start)) + _td(ret_now)
-            + _td(_prior(r.ret_1w, r.new_1w)) + _td(_prior(r.ret_4w, r.new_4w))
-            + _td(_fmt_d(r.first_listed)) + _td(_fmt_d(r.orig_return))
-            + _td(f"<b>{slip}</b>", True) + "</tr>")
-    return (_card_h3(f"Return-date changes &middot; {len(t)} outages")
-            + '<div style="overflow-x:auto"><table style="width:100%;'
-              'border-collapse:collapse;font-size:13px">'
-            + f'<thead style="background:{BORDER};color:{INK};font-size:11px;'
-              f'text-transform:uppercase;letter-spacing:0.4px">'
-            + f'<tr>{header}</tr></thead><tbody>{"".join(rows)}</tbody>'
-            + '</table></div>')
-
-
-def _slip_path_chart(t: pd.DataFrame, paths: pd.DataFrame) -> str:
-    top = t[t["slip_days"].notna() & (t["slip_days"] > 0)].head(8)
-    if top.empty:
-        return (_card_h3("Return-date path")
-                + f'<div style="color:{MUTED};padding:10px">No outage has a '
-                  f'later return than when first listed.</div>')
-    fig = go.Figure()
-    for i, r in enumerate(top.itertuples()):
-        p = paths[(paths["duid"] == r.duid) & (paths["start"] == r.start)] \
-            .sort_values("publish")
-        color = PASA_SLIP_COLORS[i % len(PASA_SLIP_COLORS)]
-        text = [""] * (len(p) - 1) + [f" {r.duid}"]
-        fig.add_trace(go.Scatter(
-            x=p["publish"], y=p["return_date"], mode="lines+markers+text",
-            name=r.duid, text=text, textposition="middle right",
-            textfont=dict(size=11, color=color),
-            line=dict(color=color, width=1.8), marker=dict(size=4),
-            hovertemplate=f"{r.duid}: published %{{x|%d %b}}, "
-                          f"return %{{y|%d %b %Y}}<extra></extra>",
-            showlegend=False))
-    lo, hi = paths["publish"].min(), paths["publish"].max()
-    fig.add_trace(go.Scatter(
-        x=[lo, hi], y=[lo, hi], mode="lines",
-        line=dict(color=MUTED, width=1, dash="dash"), hoverinfo="skip",
-        showlegend=False))
-    fig.add_annotation(x=hi, y=hi, text="return = publish date", showarrow=False,
-                       xanchor="right", yanchor="top", yshift=-6,
-                       font=dict(size=10, color=MUTED))
-    fig.update_layout(
-        paper_bgcolor=PAPER, plot_bgcolor=PAPER, height=420,
-        margin=dict(l=70, r=80, t=8, b=36),
-        xaxis=dict(showgrid=False, tickfont=dict(size=10, color=MUTED),
-                   title=dict(text="Publish date", font=dict(size=11, color=MUTED))),
-        yaxis=dict(gridcolor=BORDER, zeroline=False, type="date",
-                   tickfont=dict(size=10, color=MUTED),
-                   title=dict(text="Expected return", font=dict(size=11, color=MUTED))),
-    )
-    return _wrap_plot_with_extras(
-        "pasa-slip", "Return-date path &middot; top 8 by slip since first listed",
-        fig).body.decode()
-
-
-def _pasa_slippage_content(region: str) -> str:
-    try:
-        table, paths, pubs = _slippage_data()
-    except Exception as exc:
-        return ('<div class="prices-stack"><div class="card">'
-                + _card_h3("Return-date changes")
-                + f'<div style="color:{MUTED};padding:10px">MT-PASA history '
-                  f'unavailable ({html_lib.escape(type(exc).__name__)})</div>'
-                  '</div></div>')
-    if region != "NEM":
-        table = table[table["region"] == region]
-    table = table.reset_index(drop=True)
-    latest = pubs[-1]
-    note = (f'<div style="color:{MUTED};font-size:12px;padding:8px 24px 0">'
-            f'MT-PASA publish {_fmt_dt(latest)} compared with the last publish '
-            f'of each of the previous {len(pubs) - 1} weeks &middot; outages '
-            f'of &ge;{PASA_THRESHOLD_MW:.0f} MW out now or starting within 30 '
-            f'days &middot; &#9650; return moved later in the last week '
-            f'&middot; open-ended = outage runs to the end of the MT-PASA '
-            f'horizon</div>')
-    return (note + '<div class="prices-stack">'
-            f'<div class="card">{_slip_path_chart(table, paths)}</div>'
-            f'<div class="card">{_slip_table_html(table, latest)}'
-            f'{_attribution("AEMO MT-PASA")}</div></div>')
-
-
-@app.get("/pasa/{sub}", response_class=HTMLResponse)
-def pasa_sub(sub: str, request: Request, region: str = "NEM") -> HTMLResponse:
-    label, subtabs = TAB_LOOKUP["pasa"]
-    sub_labels = dict(subtabs)
-    if sub not in sub_labels:
-        return HTMLResponse(status_code=404, content="Not found")
-    if region not in GENMIX_REGION_LIST:
-        region = "NEM"
-
-    subtab_html = _render_subtab_nav("pasa", subtabs, sub,
-                                     carry_params={"region": region}
-                                     if sub in ("now", "slippage") else None)
-    if sub == "now":
-        selectors = _render_selector_strip(
-            _render_region_pills("/pasa/now", region, {},
-                                 regions=GENMIX_REGION_LIST))
-        content = selectors + _pasa_now_content(region)
-    elif sub == "slippage":
-        selectors = _render_selector_strip(
-            _render_region_pills("/pasa/slippage", region, {},
-                                 regions=GENMIX_REGION_LIST))
-        content = selectors + _pasa_slippage_content(region)
-    else:
-        content = ('<div class="placeholder"><p><strong>PASA &middot; '
-                   f'{sub_labels[sub]}</strong></p>'
-                   f'<p>{_PASA_PLACEHOLDERS[sub]}</p></div>')
-    body = _render_tab_body(subtab_html, content)
-    if _is_htmx(request):
-        return HTMLResponse(body)
-    return HTMLResponse(_render_shell(body))
 
 
 # ============================================================================

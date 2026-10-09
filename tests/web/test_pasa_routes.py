@@ -45,3 +45,19 @@ def test_today_outage_tile(client):
     r = client.get("/tile/outages-summary")
     assert r.status_code == 200
     assert "Generator outages" in r.text
+
+
+def test_pasa_slippage_renders(client):
+    r = client.get("/pasa/slippage")
+    assert r.status_code == 200
+    assert "Return-date changes" in r.text and "Return-date path" in r.text
+
+
+@pytest.mark.parametrize("region", ["NSW1", "QLD1", "TAS1"])
+def test_pasa_slippage_regions(client, region):
+    assert client.get(f"/pasa/slippage?region={region}").status_code == 200
+
+
+def test_pasa_now_mothballed_footnote(client):
+    r = client.get("/pasa/now")
+    assert "not counted" in r.text

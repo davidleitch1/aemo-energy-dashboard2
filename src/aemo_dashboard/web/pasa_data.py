@@ -352,7 +352,7 @@ def slippage_table(history: pd.DataFrame, units: pd.DataFrame, pubs: list,
     eps_by_pub, horizon = {}, {}
     for p in pubs:
         v = _asof_sorted(hist, p)
-        horizon[p] = v["DAY"].max()
+        horizon[p] = v["DAY"].max() - pd.Timedelta(days=7)   # last week counts as open-ended
         eps_by_pub[p] = episodes(outage_days(v, units, threshold))
     latest = pubs[-1]
     first_day = latest.normalize()
