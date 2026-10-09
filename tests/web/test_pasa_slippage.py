@@ -213,3 +213,47 @@ def test_open_ended_outage_has_no_slip():
     t, _ = pm.slippage_table(h, _units(), [D(x) for x in pubs], 30, 50)
     r = t.iloc[0]
     assert bool(r["open_ended"]) and pd.isna(r["slip_days"])
+
+
+# ---------------------------------------------------------------- extended
+
+def _ext_view():
+    return _view("2026-10-09 18:00", [
+        _clear("COAL1", "2026-10-10", "2027-12-31"),
+        _out("COAL1", "2026-10-20", "2026-10-26"),                 # 7 days: kept
+        _out("COAL2", "2026-11-01", "2026-11-05"),                 # 5 days: dropped
+        _out("GAS1", "2026-09-20", "2026-10-12", state="OUTAGEUNPLANFORCED"),  # overlaps today
+        _out("HYD1", "2027-11-01", "2027-11-30"),                  # beyond 12 months
+        _out("SMALL", "2026-12-01", "2026-12-31", avail=50),       # 10 MW: below threshold
+    ])
+
+
+def test_extended_episodes_filters():
+    today = D("2026-10-10")
+    e = pm.extended_episodes(_ext_view(), _units(), today, min_days=7,
+                             horizon_days=365, threshold=50)
+    assert set(e["duid"]) == {"COAL1", "GAS1"}
+    assert e.set_index("duid").loc["GAS1", "type"] == "Unplanned"
+
+
+def test_weekly_mw_out_by_fuel():
+    today = D("2026-10-10")
+    view = _view("2026-10-09 18:00", [
+        _out("COAL1", "2026-10-10", "2026-10-16"),        # 700 MW all of week 1
+        _out("GAS1", "2026-10-10", "2026-10-12"),         # 300 MW for 3 of 7 days
+    ])
+    days = pm.outage_days(view, _units(), 50)
+    w = pm.weekly_mw_out(days, _units(), today, weeks=4)
+    assert len(w) == 4
+    assert w.loc[today, "Coal"] == 700.0
+    assert w.loc[today, "Gas"] == pytest.approx(300 * 3 / 7)
+    assert w.iloc[1].sum() == 0.0
+
+
+def test_weekly_mw_out_region_filter():
+    today = D("2026-10-10")
+    view = _view("2026-10-09 18:00", [_out("COAL1", "2026-10-10", "2026-10-16"),
+                                      _out("COAL2", "2026-10-10", "2026-10-16")])
+    days = pm.outage_days(view, _units(), 50)
+    w = pm.weekly_mw_out(days, _units(), today, weeks=2, region="QLD1")
+    assert w.loc[today, "Coal"] == 600.0

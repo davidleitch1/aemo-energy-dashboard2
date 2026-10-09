@@ -9365,6 +9365,113 @@ def _pasa_slippage_content(region: str) -> str:
             f'{_attribution("AEMO MT-PASA")}</div></div>')
 
 
+# ----------------------------------------------------------------------------
+# /pasa/extended — Extended outages
+# ----------------------------------------------------------------------------
+
+PASA_TYPE_COLORS = {"Planned": "#205ea6", "Unplanned": "#af3029"}
+
+
+def _extended_gantt(eps: pd.DataFrame, today: pd.Timestamp) -> str:
+    if eps.empty:
+        return (_card_h3("Extended outages")
+                + f'<div style="color:{MUTED};padding:10px">No outages of '
+                  f'7 days or more in the next 12 months.</div>')
+    eps = eps.reset_index(drop=True)
+    labels = [f"{r.duid} · {r.site_name or ''} ({r.mw:,.0f} MW)"
+              for r in eps.itertuples()]
+    win_end = today + pd.Timedelta(days=365)
+    fig = go.Figure()
+    for typ, color in PASA_TYPE_COLORS.items():
+        sub = eps[eps["type"] == typ]
+        if sub.empty:
+            continue
+        shown_start = sub["start"].clip(lower=today)
+        shown_end = (sub["end"] + pd.Timedelta(days=1)).clip(upper=win_end)
+        fig.add_trace(go.Bar(
+            y=[labels[i] for i in sub.index],
+            x=((shown_end - shown_start).dt.total_seconds() * 1000).tolist(),
+            base=shown_start.tolist(), orientation="h", name=typ,
+            marker=dict(color=color, line=dict(width=0)),
+            customdata=[[r.state, r.mw, f"{r.start:%d %b %Y}",
+                         f"{r.return_date:%d %b %Y}"]
+                        for r in sub.itertuples()],
+            hovertemplate=("%{y}<br>%{customdata[0]}<br>%{customdata[1]:,.0f}"
+                           " MW<br>from %{customdata[2]}, back "
+                           "%{customdata[3]}<extra></extra>")))
+    fig.update_layout(
+        paper_bgcolor=PAPER, plot_bgcolor=PAPER, barmode="overlay",
+        height=max(200, 20 * len(eps) + 70), bargap=0.3,
+        margin=dict(l=260, r=20, t=24, b=30),
+        legend=dict(orientation="h", y=1.04, x=0, font=dict(size=11)),
+        xaxis=dict(type="date", range=[today, win_end], side="top",
+                   gridcolor=BORDER, tickfont=dict(size=10, color=MUTED)),
+        yaxis=dict(autorange="reversed", categoryorder="array",
+                   categoryarray=labels, tickfont=dict(size=10, color=INK)),
+    )
+    return _wrap_plot_with_extras(
+        "pasa-gantt", f"Outages of 7+ days &middot; {len(eps)} episodes",
+        fig).body.decode()
+
+
+def _extended_weekly(w: pd.DataFrame) -> str:
+    if w.empty or float(w.to_numpy().sum()) == 0:
+        return (_card_h3("Weekly MW out, next 52 weeks")
+                + f'<div style="color:{MUTED};padding:10px">No outage days.</div>')
+    fig = go.Figure()
+    for fuel in ("Coal", "Gas", "Hydro"):
+        if fuel in w.columns:
+            fig.add_trace(go.Bar(
+                x=w.index, y=w[fuel], name=fuel,
+                marker=dict(color=FUEL_COLORS[fuel], line=dict(width=0)),
+                hovertemplate=f"{fuel} %{{y:,.0f}} MW<extra></extra>"))
+    fig.update_layout(
+        paper_bgcolor=PAPER, plot_bgcolor=PAPER, barmode="stack", height=320,
+        margin=dict(l=60, r=20, t=8, b=36), hovermode="x unified", bargap=0.1,
+        legend=dict(orientation="h", y=1.08, x=0, font=dict(size=11)),
+        xaxis=dict(showgrid=False, tickfont=dict(size=10, color=MUTED)),
+        yaxis=dict(gridcolor=BORDER, zeroline=False, ticksuffix=" MW",
+                   tickfont=dict(size=10, color=MUTED), rangemode="tozero"),
+    )
+    return _wrap_plot_with_extras(
+        "pasa-weekly", "Mean daily MW out per week, next 52 weeks",
+        fig).body.decode()
+
+
+def _pasa_extended_content(region: str) -> str:
+    try:
+        mt = pasa_data.load_mtpasa()
+        units = _pasa_units()
+    except Exception as exc:
+        return ('<div class="prices-stack"><div class="card">'
+                + _card_h3("Extended outages")
+                + f'<div style="color:{MUTED};padding:10px">MT-PASA data '
+                  f'unavailable ({html_lib.escape(type(exc).__name__)})</div>'
+                  '</div></div>')
+    today = pasa_data.nem_now().normalize()
+    moth = pasa_data.mothballed(mt, units, threshold=PASA_THRESHOLD_MW)
+    scope = units[~units["duid"].isin(moth["duid"])]
+    if region != "NEM":
+        scope = scope[scope["region"] == region]
+        moth = moth[moth["region"] == region]
+    eps = pasa_data.extended_episodes(mt, scope, today, 7, 365,
+                                      PASA_THRESHOLD_MW)
+    days = pasa_data.outage_days(mt, scope, PASA_THRESHOLD_MW)
+    weekly = pasa_data.weekly_mw_out(days, scope, today, 52)
+    pub = mt["PUBLISH_DATETIME"].max()
+    note = pasa_data.mothballed_note(moth)
+    foot = (f'<div style="color:{MUTED};font-size:11px;margin:6px 14px 0">'
+            f'{html_lib.escape(note)}</div>' if note else "")
+    fresh = (f'<div style="color:{MUTED};font-size:12px;padding:8px 24px 0">'
+             f'MT-PASA published {_fmt_dt(pub)} &middot; outage days = '
+             f'&ge;{PASA_THRESHOLD_MW:.0f} MW below capacity in an outage or '
+             f'derating state &middot; episodes merge gaps of one day</div>')
+    return (fresh + '<div class="prices-stack">'
+            f'<div class="card">{_extended_gantt(eps, today)}</div>'
+            f'<div class="card">{_extended_weekly(weekly)}{foot}'
+            f'{_attribution("AEMO MT-PASA")}</div></div>')
+
+
 @app.get("/pasa/{sub}", response_class=HTMLResponse)
 def pasa_sub(sub: str, request: Request, region: str = "NEM") -> HTMLResponse:
     label, subtabs = TAB_LOOKUP["pasa"]
@@ -9376,12 +9483,17 @@ def pasa_sub(sub: str, request: Request, region: str = "NEM") -> HTMLResponse:
 
     subtab_html = _render_subtab_nav("pasa", subtabs, sub,
                                      carry_params={"region": region}
-                                     if sub in ("now", "slippage") else None)
+                                     if sub in ("now", "slippage", "extended") else None)
     if sub == "now":
         selectors = _render_selector_strip(
             _render_region_pills("/pasa/now", region, {},
                                  regions=GENMIX_REGION_LIST))
         content = selectors + _pasa_now_content(region)
+    elif sub == "extended":
+        selectors = _render_selector_strip(
+            _render_region_pills("/pasa/extended", region, {},
+                                 regions=GENMIX_REGION_LIST))
+        content = selectors + _pasa_extended_content(region)
     elif sub == "slippage":
         selectors = _render_selector_strip(
             _render_region_pills("/pasa/slippage", region, {},

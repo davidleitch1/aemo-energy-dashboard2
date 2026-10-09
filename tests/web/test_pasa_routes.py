@@ -61,3 +61,14 @@ def test_pasa_slippage_regions(client, region):
 def test_pasa_now_mothballed_footnote(client):
     r = client.get("/pasa/now")
     assert "not counted" in r.text
+
+
+def test_pasa_extended_renders(client):
+    r = client.get("/pasa/extended")
+    assert r.status_code == 200
+    assert "Outages of 7+ days" in r.text and "52 weeks" in r.text
+
+
+@pytest.mark.parametrize("region", ["NSW1", "QLD1", "TAS1"])
+def test_pasa_extended_regions(client, region):
+    assert client.get(f"/pasa/extended?region={region}").status_code == 200

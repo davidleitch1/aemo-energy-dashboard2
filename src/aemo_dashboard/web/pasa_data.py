@@ -395,3 +395,44 @@ def slippage_table(history: pd.DataFrame, units: pd.DataFrame, pubs: list,
             ["slip_days", "mw"], ascending=[False, False],
             na_position="last").reset_index(drop=True)
     return table, pd.DataFrame(path_rows)
+
+
+def with_units(df: pd.DataFrame, units: pd.DataFrame) -> pd.DataFrame:
+    """Add site_name, region and display fuel to a frame keyed by `duid`."""
+    info = units[["duid", "site_name", "region", "fuel"]].copy()
+    info["fuel"] = info["fuel"].map(FUEL_DISPLAY)
+    return df.merge(info, on="duid", how="left")
+
+
+def extended_episodes(view: pd.DataFrame, units: pd.DataFrame,
+                      today: pd.Timestamp, min_days: int = 7,
+                      horizon_days: int = 365,
+                      threshold: float = DEFAULT_THRESHOLD_MW) -> pd.DataFrame:
+    """Episodes of >= min_days that overlap [today, today + horizon_days]."""
+    eps = episodes(outage_days(view, units, threshold))
+    end = today + pd.Timedelta(days=horizon_days)
+    eps = eps[(eps["n_days"] >= min_days) & (eps["end"] >= today)
+              & (eps["start"] <= end)]
+    return (with_units(eps, units).sort_values(["start", "duid"])
+            .reset_index(drop=True))
+
+
+def weekly_mw_out(days: pd.DataFrame, units: pd.DataFrame,
+                  today: pd.Timestamp, weeks: int = 52,
+                  region: str | None = None) -> pd.DataFrame:
+    """Mean daily MW out per week (index = week start) by display fuel,
+    counting every outage day, not only long episodes."""
+    d = with_units(days, units)
+    if region and region != "NEM":
+        d = d[d["region"] == region]
+    idx = pd.date_range(today.normalize(), periods=weeks * 7, freq="D")
+    daily = (d[d["day"].isin(idx)]
+             .pivot_table(index="day", columns="fuel", values="mw_out",
+                          aggfunc="sum")
+             .reindex(idx).fillna(0.0))
+    if daily.empty or daily.shape[1] == 0:
+        daily = pd.DataFrame(index=idx)
+    wk = np.arange(len(idx)) // 7
+    out = daily.groupby(wk).mean()
+    out.index = idx[::7][:len(out)]
+    return out
