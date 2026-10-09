@@ -181,3 +181,13 @@ def test_mtpasa_without_state_when_mtpasa_none():
     st = _st([("COAL1", 0, 0, 0.0, 0)])
     tbl = pd_mod.outage_table(st, _units(), None, 50, now=NOW)
     assert tbl.iloc[0]["type"] == "Not in MT-PASA"
+
+
+def test_mtpasa_state_uses_first_day_when_publish_starts_after_today():
+    # MT-PASA publishes start two days after the publish date, so "today"
+    # often has no row; the state comes from the first day on or after today.
+    st = _st([("COAL1", 0, 0, 0.0, 0)])
+    mt = _mt([("COAL1", 1, "OUTAGEPLANEXTEND"), ("COAL1", 9, "NODERATINGS")])
+    tbl = pd_mod.outage_table(st, _units(), mt, 50, now=NOW).set_index("duid")
+    assert tbl.loc["COAL1", "type"] == "Planned"
+    assert tbl.loc["COAL1", "mtpasa_return"] == pd.Timestamp("2026-10-19")

@@ -163,7 +163,9 @@ def outage_type(state) -> str:
 
 
 def _mtpasa_lookup(mtpasa: pd.DataFrame | None, today: pd.Timestamp) -> dict:
-    """duid -> (raw state today, first DAY >= today with NODERATINGS)."""
+    """duid -> (raw state on the first DAY >= today, first DAY >= today with
+    NODERATINGS). A publish starts about two days after its publish date, so
+    today usually has no row; the first available day stands in for it."""
     if mtpasa is None or mtpasa.empty:
         return {}
     mt = _latest_mtpasa(mtpasa)
@@ -171,8 +173,7 @@ def _mtpasa_lookup(mtpasa: pd.DataFrame | None, today: pd.Timestamp) -> dict:
     out = {}
     for duid, g in mt.groupby("DUID"):
         g = g.sort_values("DAY")
-        today_row = g[g["DAY"] == today]
-        state = today_row["PASAUNITSTATE"].iloc[0] if len(today_row) else ""
+        state = g["PASAUNITSTATE"].iloc[0]
         state = state if isinstance(state, str) else ""
         clear = g[g["PASAUNITSTATE"] == "NODERATINGS"]
         ret = clear["DAY"].min() if len(clear) else pd.NaT
