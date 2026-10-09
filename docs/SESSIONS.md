@@ -4,7 +4,7 @@ Covers the NEM dashboard (FastAPI/HTMX app on .71) and the AEMO data collector. 
 
 **Protocol.** Start any dashboard or collector session by reading `docs/SYSTEM.md` (how the system runs now), then the state block and the last two entries here. When a session changes how something runs, rewrite the affected part of SYSTEM.md. End it by appending an entry at the top of the log and rewriting the state block. Each entry is a handoff: what was asked, what was produced, what was decided and why, what was corrected and must not be undone, what is open.
 
-## State now (8 Oct 2026)
+## State now (10 Oct 2026)
 
 - **Dashboard code:** `~/aemo-redesign` on .71 (davidleitch@192.168.68.71), branch `web-dashboard-redesign`, remote `davidleitch1/aemo-energy-dashboard2`. The whole app is one file, `src/aemo_dashboard/web/app.py` (~9,000 lines). Tests for the web app are in `tests/web/`; run with `/Users/davidleitch/aemo_production/aemo-energy-dashboard2/.venv/bin/python -m pytest tests/web -q` from the repo root.
 - **Live service:** tmux `services:1`, `uvicorn app:app --port 5008 --workers 4`, run from `src/aemo_dashboard/web`. No `--reload`, so code changes need a restart of that window. The launch line exists in both `~/tmux_files/start_services.sh` (boot) and `~/tmux_files/restart_dashboards.sh` (nightly 00:15); a change to how it launches must go in both, plus the process signature in `monitor_services.py`.
@@ -13,8 +13,37 @@ Covers the NEM dashboard (FastAPI/HTMX app on .71) and the AEMO data collector. 
 - **Generation mix subtabs:** Yr on yr, Stack, Compare regions, Time of day, Trends, Transmission.
 - **Futures data:** `~/aemo_production/data/futures.csv`, weekly Sunday 00:00 rows, runs to 29 Sep 2026. Update by dropping a NEM-Review export in `~/futures_updates/` and running `~/aemo_production/data/update_futures.py` (merge: union of dates and columns, new wins). The Monday launchd job `com.aemo.update-futures` has not run since 4 May 2026.
 - **duid_mapping:** audited 8 Oct against AEMO sources; weekly refresh (cron Sun 05:10) fills gaps and emails conflicts — first live run 11 Oct. Pump loads carry fuel NULL and are out of all generation totals. **Open:** 14 refresh conflicts to review; stale `tests/api` fixture DB.
+- **PASA tab:** rebuilt 10 Oct with four subtabs (Now & 7 days, Extended outages, Return-date changes, Transmission); logic in `web/pasa_data.py` and `web/pasa_transmission.py`; the Today outage tile uses the same code and `duid_mapping`. Feeds come from the outage monitor (tmux window 7, `~/aemo_production/outage_monitor`, local git only); see SYSTEM.md "PASA data".
 - **Open:** the futures launchd job is dead; not investigated (it only merges a file dropped by hand, so manual runs lose nothing).
 - **Open:** whether to relabel Batteries-tab Util % as cycles a day (it is discharge ÷ storage per day × 100).
+
+## 2026-10-10 — PASA tab rebuilt; MT-PASA collector fixed and history backfilled
+
+**Asked.** The PASA tab had been a placeholder since the Panel → FastAPI move. Rebuild it: short-term outages affecting prices now (ST-PASA), plus extended outages from MT-PASA.
+
+**Found.**
+- The old Panel tab (`aemo-energy-dashboard2/src/aemo_dashboard/pasa/pasa_tab.py`) had five summary figures, outage bars by fuel (the chart the Today tile copied), a generator changes table with notice class and MT-PASA return date, and High Impact Outages tables.
+- **MT-PASA collector bug since Feb 2026:** `outage_monitor/collectors/mtpasa.py` `save()` sorted on `RUN_DATETIME`, a column MT-PASA files do not have (they carry `PUBLISH_DATETIME`), so `drop_duplicates(['DUID','DAY'])` kept the existing row and every unit-day stayed at the first value seen (mostly the 9 Feb publish). Any MT-PASA return date shown before 10 Oct (old Panel tab, iOS outages router) was stale. Example: KPP_1 showed 750 MW NODERATINGS for October while it was out.
+- ST-PASA has two availability columns. MAXAVAIL is 0 for recallable plant switched off for price reasons; PASA availability is the physical figure. The old tab mixed them.
+
+**Produced.**
+- Outage monitor (`~/aemo_production/outage_monitor`, now under local git: f711148 baseline, e37f284 fix + history, ac4ea23 backfill): the snapshot keeps the newest publish per (DUID, DAY); new change-compressed `outages_mtpasa_history.parquet` with `mtpasa_history.py:mtpasa_asof`; new files processed oldest first; backfill of the last publish of each day 1 Oct 2025 → 9 Oct 2026 (321 files, 465k rows, 0.4 MB). Change-detector state seeded so the first corrected run was quiet. Old snapshot kept as `outages_mtpasa.parquet.bak_20261010`.
+- Dashboard (aemo-redesign 2f2e602 … bdcf87c): PASA tab with four subtabs; 118 tests in `tests/web` pass. Definitions in SYSTEM.md "Dashboard definitions". Slippage is computed once per worker per history change and warmed at startup in a background thread (cold first load was ~8 s; cached 0.06 s).
+- Numbers at 10 Oct (ST-PASA 09:00, MT-PASA 9 Oct 18:00): 10,036 MW of scheduled plant out now (coal 7,105 MW); 45 of 72 tracked outages changed return date over the window; TUNGATIN went from a 2 Sep 2027 return to open-ended this week (unplanned); ER02 11 Oct → 7 Nov; ER01 back 24 Oct; KPP_1 back 20 Oct; 79 units with 7+ day outages ≥ 100 MW in the next 12 months; weekly MW out peaks at 8–9 GW in Oct–Nov 2026.
+
+**Decided.**
+- MW out = `duid_mapping` capacity − ST-PASA PASA availability, scheduled fuels only, threshold 50 MW. Wind and solar (report 0) and batteries (rating noise) excluded.
+- Planned/Unplanned comes from the MT-PASA unit state (AEMO's own tag), not from the old change-log notice class. The state for "today" comes from the first MT-PASA day on or after today, because a publish starts about 2 days after its publish date.
+- Mothballed and retired units are footnoted, not counted (SNUG1 63 MW, POR01 50 MW).
+- History holds one publish per day before 10 Oct (backfill) and every publish after.
+
+**Corrected — do not undo.** The MT-PASA sort key is `PUBLISH_DATETIME`. Commit 8d279c2 accidentally added the two `app.py.bak.*` files; c98b522 untracks them (files still on disk, blobs in history).
+
+**Open.**
+- iOS API `api/routers/outages.py` (aemo-energy-dashboard2) still reads MT-PASA with the old logic; it now gets current data but has not been reviewed.
+- The Transmission "Unplanned" section is empty because the 6 Oct High Impact Outages report leaves `Unplanned?` blank; check a later report.
+- History rows for past days keep the state from the last publish that covered them (about 2 days before the day), which can make "Out from" early for long-running outages.
+- `aemo-energy-dashboard2/src/aemo_dashboard/pasa/` (Panel) is no longer used by the web app; delete it once the iOS router is reviewed.
 
 ## 2026-10-08 (3) — Pump loads out of generation; weekly duid_mapping refresh; SYSTEM.md
 

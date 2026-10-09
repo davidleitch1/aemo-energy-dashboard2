@@ -11,6 +11,7 @@ Everything runs on daves_mini (.71, `ssh davidleitch@192.168.68.71`), in tmux se
 | `~/aemo-redesign` (branch `web-dashboard-redesign`) | `davidleitch1/aemo-energy-dashboard2` | `src/aemo_dashboard/web/app.py` only — the live web app file |
 | `~/aemo_production/aemo-energy-dashboard2` (branch `main`) | same repo, different branch | every `aemo_dashboard.*` module the web app imports (evening_peak, penetration, generation_comparison, shared/...), the iOS API, the standalone gauge, spot prices |
 | `~/aemo_production/aemo-data-updater` | own repo | the collector, alert plugins, gap repair, weekly integrity, duid_mapping refresh |
+| `~/aemo_production/outage_monitor` (+ entry `~/aemo_production/run_outage_monitor.py`) | local git only, no remote (since 10 Oct 2026) | PASA / High Impact Outages collector feeding the PASA tab |
 
 **Import trap.** The dashboard2 venv has `aemo_dashboard` installed editable from `aemo-energy-dashboard2/src`, so `app.py` in aemo-redesign imports its helper modules from the *other* checkout. A fix to a shared module goes in `aemo-energy-dashboard2`; a fix to `app.py` goes in `aemo-redesign`. `shared/fuel_categories.py` exists in both and must be kept identical.
 
@@ -85,6 +86,12 @@ Other hand-maintained data: `~/aemo_production/data/futures.csv` (merge NEM-Revi
 | Sun 05:10 | `refresh_duid_mapping.py` (email) |
 | Mon 06:40, 09:30, 18:00 | intl_energy collection |
 
+**PASA data (outage monitor, tmux window 7).** Separate from the DuckDB pipeline; writes parquet in `~/aemo_production/data/`:
+- `outages_stpasa.parquet` — latest ST-PASA run per (DUID, half-hour), about 7 days of runs kept.
+- `outages_mtpasa.parquet` — latest MT-PASA publish per (DUID, DAY), days from today on. AEMO publishes about 4 times a day; a publish starts about 2 days after its publish date.
+- `outages_mtpasa_history.parquet` — MT-PASA revision history, change-compressed: one row per (DUID, DAY) only when availability or unit state changes. Rebuild a view at any publish with `outage_monitor/mtpasa_history.py:mtpasa_asof`. Backfilled from the last publish of each day since 1 Oct 2025 (`outage_monitor/scripts/backfill_mtpasa_history.py`; NEMweb Current keeps every MT-PASA file since Aug 2020).
+- `outages_high_impact.parquet` — AEMO High Impact Outages (transmission), weekly.
+
 The Mac Studio watchdog checks .71 every 30 min and SMSes on failure (see memory note on the watchdog).
 
 ## Dashboard definitions worth knowing
@@ -92,3 +99,4 @@ The Mac Studio watchdog checks .71 every 30 min and SMSes on failure (see memory
 - Battery tab: Cap MW = nameplate (registered max) MW. Util % = discharge ÷ (storage × days in window) — 100% means one full cycle a day. Util % and $/MWh-cap/yr weight each DUID by the hours it reported in the window.
 - Battery figures count discharge only as "generation"; battery and transmission are excluded from renewable-share denominators.
 - NEM prices are demand-weighted across regions.
+- PASA tab (`web/pasa_data.py`, `web/pasa_transmission.py`): scheduled fuels only (Coal, CCGT, OCGT, Gas other, Water). MW out = `duid_mapping.capacity_mw` − ST-PASA *PASA availability* (not MAXAVAIL, which counts recallable economic shutdowns); a unit is out at ≥ 50 MW. MT-PASA outage days = unit state OUTAGE*/DERATING* with ≥ 50 MW out; Planned/Unplanned from that state; MOTHBALLED and RETIRED are footnoted, not counted. Return-date changes compare the latest publish with the last publish of each of the previous 25 weeks; "before" dates mark outages already present at the start of the window (slip is then a lower bound); open-ended = runs to within 7 days of the MT-PASA horizon.
