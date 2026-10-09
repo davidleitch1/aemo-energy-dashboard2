@@ -72,3 +72,16 @@ def test_pasa_extended_renders(client):
 @pytest.mark.parametrize("region", ["NSW1", "QLD1", "TAS1"])
 def test_pasa_extended_regions(client, region):
     assert client.get(f"/pasa/extended?region={region}").status_code == 200
+
+
+def test_pasa_transmission_renders(client):
+    r = client.get("/pasa/transmission")
+    assert r.status_code == 200
+    for t in ("In progress", "Unplanned", "Planned, next 30 days",
+              "Inter-regional", "High Impact Outages report"):
+        assert t in r.text
+
+
+@pytest.mark.parametrize("region", ["NSW1", "QLD1", "SA1", "TAS1", "VIC1"])
+def test_pasa_transmission_regions(client, region):
+    assert client.get(f"/pasa/transmission?region={region}").status_code == 200

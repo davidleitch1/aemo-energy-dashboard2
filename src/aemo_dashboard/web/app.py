@@ -138,9 +138,10 @@ def _rooftop_latest_mw() -> float:
 app = FastAPI(title="NEM Today mockup")
 
 try:                       # tests import aemo_dashboard.web.app
-    from . import pasa_data
+    from . import pasa_data, pasa_transmission
 except ImportError:        # uvicorn runs `app:app` from this directory
     import pasa_data
+    import pasa_transmission
 
 
 def q(sql: str, params: list | None = None) -> pd.DataFrame:
@@ -9472,6 +9473,76 @@ def _pasa_extended_content(region: str) -> str:
             f'{_attribution("AEMO MT-PASA")}</div></div>')
 
 
+# ----------------------------------------------------------------------------
+# /pasa/transmission — AEMO High Impact Outages
+# ----------------------------------------------------------------------------
+
+TX_MAX_ROWS = 40
+
+
+def _tx_table(title: str, df: pd.DataFrame, empty: str) -> str:
+    if df.empty:
+        return (_card_h3(title) + f'<div style="color:{MUTED};padding:10px">'
+                f'{empty}</div>')
+    shown = df.head(TX_MAX_ROWS)
+    heads = ["Region", "NSP", "Network asset", "Start", "Finish", "Status"]
+    header = "".join(f'<th style="text-align:left;padding:6px 10px">{h}</th>'
+                     for h in heads)
+    rows = []
+    for r in shown.itertuples():
+        def d(ts):
+            return "" if pd.isna(ts) else f"{ts:%d %b %Y %H:%M}"
+        cells = [r.Region, getattr(r, "NSP", "") or "",
+                 html_lib.escape(str(shown.loc[r.Index, "Network Asset"])[:70]),
+                 d(r.Start), d(r.Finish),
+                 html_lib.escape(str(r.Status or ""))]
+        rows.append(f'<tr style="border-top:1px solid {BORDER}">'
+                    + "".join(f'<td style="padding:6px 10px;white-space:nowrap">'
+                              f'{c}</td>' for c in cells) + '</tr>')
+    more = (f'<div style="color:{MUTED};font-size:11px;margin:6px 10px 0">'
+            f'Showing {len(shown)} of {len(df)}</div>'
+            if len(df) > len(shown) else "")
+    return (_card_h3(f"{title} &middot; {len(df)}")
+            + '<div style="overflow-x:auto"><table style="width:100%;'
+              'border-collapse:collapse;font-size:13px">'
+            + f'<thead style="background:{BORDER};color:{INK};font-size:11px;'
+              f'text-transform:uppercase;letter-spacing:0.4px">'
+            + f'<tr>{header}</tr></thead><tbody>{"".join(rows)}</tbody>'
+            + f'</table></div>{more}')
+
+
+def _pasa_transmission_content(region: str) -> str:
+    try:
+        hi = pasa_transmission.load_high_impact()
+    except Exception as exc:
+        return ('<div class="prices-stack"><div class="card">'
+                + _card_h3("Transmission outages")
+                + f'<div style="color:{MUTED};padding:10px">High Impact '
+                  f'Outages data unavailable '
+                  f'({html_lib.escape(type(exc).__name__)})</div></div></div>')
+    tx = pasa_transmission
+    now = pasa_data.nem_now()
+    hi = tx.filter_region(hi, region)
+    sections = [
+        _tx_table("In progress", tx.in_progress(hi, now), "No outages in progress."),
+        _tx_table("Unplanned", tx.unplanned(hi, now), "No unplanned outages listed."),
+        _tx_table("Planned, next 30 days",
+                  tx.consolidate(tx.upcoming(hi, now, 30)),
+                  "No planned outages starting in the next 30 days."),
+        _tx_table("Inter-regional", tx.consolidate(tx.inter_regional(hi, now)),
+                  "No inter-regional outages listed."),
+    ]
+    rd = tx.report_date(tx.load_high_impact())
+    fresh = (f'<div style="color:{MUTED};font-size:12px;padding:8px 24px 0">'
+             f'AEMO High Impact Outages report of {_fmt_d(rd)} (weekly) '
+             f'&middot; consecutive outages of one asset within 2 days are '
+             f'merged</div>')
+    return (fresh + '<div class="prices-stack">'
+            + "".join(f'<div class="card">{s}</div>' for s in sections)
+            + f'<div class="card" style="min-height:0">'
+              f'{_attribution("AEMO High Impact Outages")}</div></div>')
+
+
 @app.get("/pasa/{sub}", response_class=HTMLResponse)
 def pasa_sub(sub: str, request: Request, region: str = "NEM") -> HTMLResponse:
     label, subtabs = TAB_LOOKUP["pasa"]
@@ -9483,12 +9554,18 @@ def pasa_sub(sub: str, request: Request, region: str = "NEM") -> HTMLResponse:
 
     subtab_html = _render_subtab_nav("pasa", subtabs, sub,
                                      carry_params={"region": region}
-                                     if sub in ("now", "slippage", "extended") else None)
+                                     if sub in ("now", "slippage", "extended", "transmission")
+                                     else None)
     if sub == "now":
         selectors = _render_selector_strip(
             _render_region_pills("/pasa/now", region, {},
                                  regions=GENMIX_REGION_LIST))
         content = selectors + _pasa_now_content(region)
+    elif sub == "transmission":
+        selectors = _render_selector_strip(
+            _render_region_pills("/pasa/transmission", region, {},
+                                 regions=GENMIX_REGION_LIST))
+        content = selectors + _pasa_transmission_content(region)
     elif sub == "extended":
         selectors = _render_selector_strip(
             _render_region_pills("/pasa/extended", region, {},
