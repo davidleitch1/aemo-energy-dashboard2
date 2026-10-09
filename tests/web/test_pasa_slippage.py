@@ -257,3 +257,86 @@ def test_weekly_mw_out_region_filter():
     days = pm.outage_days(view, _units(), 50)
     w = pm.weekly_mw_out(days, _units(), today, weeks=2, region="QLD1")
     assert w.loc[today, "Coal"] == 600.0
+
+
+# ---------------------------------------------------------------- review fixes
+
+def test_first_listed_bound_flags(slip):
+    t, _, _ = slip
+    assert bool(t.loc["COAL1", "first_is_bound"])      # in the earliest publish
+    assert not bool(t.loc["COAL2", "first_is_bound"])  # first seen 2 Oct
+
+
+def test_start_bound_when_outage_predates_history():
+    pubs = [D("2026-09-04 18:00"), D("2026-10-09 18:00")]
+    views = [(str(p), [_out("COAL1", "2026-09-01", "2026-10-20")]) for p in pubs]
+    h = _hist(views)
+    t, _ = pm.slippage_table(h, _units(), pubs, 30, 50)
+    assert bool(t.iloc[0]["start_bound"])
+
+
+def _open_hist():
+    pubs = [D("2026-09-04 18:00"), D("2026-09-11 18:00"), D("2026-09-18 18:00"),
+            D("2026-09-25 18:00"), D("2026-10-02 18:00"), D("2026-10-09 18:00")]
+    views = []
+    for i, p in enumerate(pubs):
+        specs = [_out("HYD1", "2026-10-12", "2027-03-01")]           # always open
+        if i < 5:
+            specs.append(_out("COAL1", "2026-10-12", "2026-10-20"))
+        else:
+            specs.append(_out("COAL1", "2026-10-12", "2027-03-01"))  # turns open
+        if i == 5:
+            specs.append(_out("GAS1", "2026-10-12", "2026-10-14"))
+        views.append((str(p), specs))
+    return _hist(views), pubs
+
+
+def test_newly_open_ended():
+    h, pubs = _open_hist()
+    t, _ = pm.slippage_table(h, _units(), pubs, 30, 50)
+    t = t.set_index("duid")
+    c = t.loc["COAL1"]
+    assert bool(c["open_ended"]) and bool(c["newly_open"])
+    assert c["pre_open_return"] == D("2026-10-21")
+    assert bool(c["moved_later"])
+    hy = t.loc["HYD1"]
+    assert bool(hy["open_ended"]) and not bool(hy["newly_open"])
+    assert not bool(hy["moved_later"])
+
+
+def test_sort_order_moved_then_newly_open_then_rest_then_long_open():
+    h, pubs = _open_hist()
+    t, _ = pm.slippage_table(h, _units(), pubs, 30, 50)
+    order = list(t["duid"])
+    assert order.index("COAL1") < order.index("GAS1") < order.index("HYD1")
+    assert order[-1] == "HYD1"
+
+
+def test_changed_flag():
+    h, pubs = _open_hist()
+    t, _ = pm.slippage_table(h, _units(), pubs, 30, 50)
+    t = t.set_index("duid")
+    assert bool(t.loc["COAL1", "changed"]) and bool(t.loc["GAS1", "changed"])
+    assert not bool(t.loc["HYD1", "changed"])
+
+
+def test_horizon_column_and_chart_slip():
+    h, pubs = _open_hist()
+    t, _ = pm.slippage_table(h, _units(), pubs, 30, 50)
+    t = t.set_index("duid")
+    assert t.loc["COAL1", "horizon"] == D("2027-03-01")
+    # capped at the horizon: return 2027-03-02 -> 2027-03-01
+    assert t.loc["COAL1", "slip_chart"] == (D("2027-03-01") - D("2026-10-21")).days
+
+
+# ---------------------------------------------------------------- extended rows
+
+def test_extended_one_row_per_unit_helper():
+    eps = pd.DataFrame({
+        "duid": ["A", "A", "B"], "site_name": ["a", "a", "b"],
+        "start": [D("2026-11-01"), D("2027-02-01"), D("2026-10-15")],
+        "mw": [100.0, 300.0, 150.0]})
+    rows = pm.unit_rows(eps, min_mw=120)
+    assert list(rows["duid"]) == ["B", "A"]                # sorted by first start
+    assert rows.set_index("duid").loc["A", "mw"] == 300.0  # max over episodes
+    assert pm.unit_rows(eps, min_mw=200)["duid"].tolist() == ["A"]

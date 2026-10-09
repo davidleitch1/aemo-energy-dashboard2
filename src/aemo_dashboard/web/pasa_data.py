@@ -327,13 +327,16 @@ def _pub_before(pubs: list, latest, days: int):
     return cands[-1] if cands else None
 
 
-def _match(eps: pd.DataFrame, duid, start, end):
-    """Episode of `duid` in eps with the largest date overlap with [start, end]."""
-    e = eps[(eps["duid"] == duid) & (eps["start"] <= end) & (eps["end"] >= start)]
+def _match(eps_by_duid: dict, duid, start, end):
+    """Episode of `duid` with the largest date overlap with [start, end];
+    eps_by_duid maps duid -> that unit's episodes."""
+    e = eps_by_duid.get(duid)
+    if e is None:
+        return None
+    e = e[(e["start"] <= end) & (e["end"] >= start)]
     if e.empty:
         return None
-    ov = (e[["end"]].assign(s=end)
-          .min(axis=1).sub(e["start"].where(e["start"] > start, start))
+    ov = ((e["end"].clip(upper=end) - e["start"].clip(lower=start))
           .dt.days)
     return e.loc[ov.idxmax()]
 
@@ -344,22 +347,34 @@ def slippage_table(history: pd.DataFrame, units: pd.DataFrame, pubs: list,
     """Return-date changes for episodes out now or starting within
     window_days of the latest publish's first day.
 
-    Returns (table, paths). Table columns: duid, start, end, mw, type,
+    Returns (table, paths). Table columns: duid, start, end, mw, type, state,
     return_now, ret_1w, ret_4w, new_1w, new_4w, first_listed, orig_return,
-    slip_days (NaN when open-ended), open_ended, moved_later, is_new. paths: duid, start, publish, return_date.
+    slip_days (NaN when open-ended), open_ended, newly_open (open-ended now,
+    not 4 weeks ago), pre_open_return (return before it turned open-ended),
+    moved_later, is_new, changed, first_is_bound (first listed = earliest
+    publish compared, so slip is a lower bound), start_bound (outage begins
+    at or before the start of the history), horizon (last MT-PASA day of the
+    latest view), slip_chart (slip with return capped at the horizon).
+    Sorted: moved later, newly open-ended, other changes, long-standing
+    open-ended last. paths: duid, start, publish, return_date.
     """
     hist = history.sort_values("PUBLISH_DATETIME", kind="stable")
-    eps_by_pub, horizon = {}, {}
+    hist_min_day = history["DAY"].min()
+    eps_by_pub, horizon_open, horizon_max = {}, {}, {}
     for p in pubs:
         v = _asof_sorted(hist, p)
-        horizon[p] = v["DAY"].max() - pd.Timedelta(days=7)   # last week counts as open-ended
-        eps_by_pub[p] = episodes(outage_days(v, units, threshold))
+        horizon_max[p] = v["DAY"].max()
+        horizon_open[p] = horizon_max[p] - pd.Timedelta(days=7)  # last week counts as open-ended
+        eps = episodes(outage_days(v, units, threshold))
+        eps_by_pub[p] = {d: g for d, g in eps.groupby("duid")}
     latest = pubs[-1]
     first_day = latest.normalize()
-    cur = eps_by_pub[latest]
+    cur = pd.concat(eps_by_pub[latest].values()) if eps_by_pub[latest] \
+        else pd.DataFrame(columns=episodes(pd.DataFrame()).columns)
     cur = cur[(cur["end"] >= first_day)
               & (cur["start"] <= first_day + pd.Timedelta(days=window_days))]
     p1w, p4w = _pub_before(pubs, latest, 7), _pub_before(pubs, latest, 28)
+    hz = horizon_max[latest]
 
     rows, path_rows = [], []
     for e in cur.itertuples():
@@ -367,7 +382,7 @@ def slippage_table(history: pd.DataFrame, units: pd.DataFrame, pubs: list,
         for p in pubs:
             m = _match(eps_by_pub[p], e.duid, e.start, e.end)
             if m is not None:
-                matches[p] = (m["return_date"], m["end"] >= horizon[p])
+                matches[p] = (m["return_date"], bool(m["end"] >= horizon_open[p]))
         for p, (r, _) in matches.items():
             path_rows.append({"duid": e.duid, "start": e.start,
                               "publish": p, "return_date": r})
@@ -376,6 +391,20 @@ def slippage_table(history: pd.DataFrame, units: pd.DataFrame, pubs: list,
         open_now = matches[latest][1]
         r1w = matches[p1w][0] if p1w in matches else pd.NaT
         r4w = matches[p4w][0] if p4w in matches else pd.NaT
+        open_1w = p1w in matches and matches[p1w][1]
+        open_4w = p4w in matches and matches[p4w][1]
+        newly_open = bool(open_now and p4w is not None and not open_4w)
+        pre_open = pd.NaT
+        if newly_open:
+            closed = [p for p in matches if not matches[p][1]]
+            if closed:
+                pre_open = matches[max(closed)][0]
+        moved_later = bool(pd.notna(r1w) and e.return_date > r1w
+                           and not (open_now and open_1w))
+        slip = (np.nan if open_now or orig_open
+                else float((e.return_date - orig).days))
+        is_new = first == latest
+        capped = min(e.return_date, hz)
         rows.append({
             "duid": e.duid, "start": e.start, "end": e.end, "mw": e.mw,
             "type": e.type, "state": e.state, "return_now": e.return_date,
@@ -383,18 +412,40 @@ def slippage_table(history: pd.DataFrame, units: pd.DataFrame, pubs: list,
             "new_1w": p1w is not None and pd.isna(r1w),
             "new_4w": p4w is not None and pd.isna(r4w),
             "first_listed": first.normalize(), "orig_return": orig,
-            "open_ended": bool(open_now),
-            "slip_days": (np.nan if open_now or orig_open
-                          else float((e.return_date - orig).days)),
-            "moved_later": bool(pd.notna(r1w) and e.return_date > r1w),
-            "is_new": first == latest,
+            "open_ended": bool(open_now), "newly_open": newly_open,
+            "pre_open_return": pre_open, "slip_days": slip,
+            "moved_later": moved_later, "is_new": is_new,
+            "changed": bool(moved_later or newly_open or is_new
+                            or (pd.notna(slip) and slip != 0)),
+            "first_is_bound": bool(first == pubs[0] and not is_new),
+            "start_bound": bool(e.start <= hist_min_day),
+            "horizon": hz,
+            "slip_chart": float((capped - orig).days),
         })
     table = pd.DataFrame(rows)
     if not table.empty:
-        table = table.sort_values(
-            ["slip_days", "mw"], ascending=[False, False],
-            na_position="last").reset_index(drop=True)
+        long_open = table["open_ended"] & ~table["newly_open"]
+        group = np.select(
+            [table["moved_later"], table["newly_open"], long_open],
+            [0, 1, 3], default=2)
+        table = (table.assign(_g=group, _n=~table["newly_open"])
+                 .sort_values(["_g", "_n", "slip_days", "mw"],
+                              ascending=[True, True, False, False],
+                              na_position="last")
+                 .drop(columns=["_g", "_n"]).reset_index(drop=True))
     return table, pd.DataFrame(path_rows)
+
+
+def unit_rows(eps: pd.DataFrame, min_mw: float = 0.0) -> pd.DataFrame:
+    """One row per unit from an episode frame: first start, max episode MW.
+    Units whose largest episode is below min_mw are dropped; sorted by first
+    start."""
+    if eps.empty:
+        return pd.DataFrame(columns=["duid", "site_name", "start", "mw"])
+    g = eps.groupby("duid").agg(site_name=("site_name", "first"),
+                                start=("start", "min"), mw=("mw", "max"))
+    g = g[g["mw"] >= min_mw].reset_index()
+    return g.sort_values(["start", "duid"]).reset_index(drop=True)
 
 
 def with_units(df: pd.DataFrame, units: pd.DataFrame) -> pd.DataFrame:

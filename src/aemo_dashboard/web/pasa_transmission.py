@@ -108,3 +108,10 @@ def consolidate(df: pd.DataFrame) -> pd.DataFrame:
     res.loc[multi, "Network Asset"] = res.loc[multi].apply(
         lambda r: f"{r['Network Asset']} ({r['Count']} periods)", axis=1)
     return res.drop(columns="Count")[cols].sort_values("Start").reset_index(drop=True)
+
+
+def within(df: pd.DataFrame, now: pd.Timestamp | None = None,
+           days: int = 365) -> pd.DataFrame:
+    """Rows starting no later than now + days."""
+    now = now if now is not None else nem_now()
+    return df[df["Start"] <= now + pd.Timedelta(days=days)]

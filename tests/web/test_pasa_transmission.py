@@ -80,3 +80,9 @@ def test_region_filter():
     df = _df([_row(region="NSW"), _row(region="SA")])
     assert list(tx.filter_region(df, "SA1")["Region"]) == ["SA"]
     assert len(tx.filter_region(df, "NEM")) == 2
+
+
+def test_within_days():
+    df = _df([_row(start="2026-12-01", asset="near"),
+              _row(start="2028-01-01", asset="far")])
+    assert list(tx.within(df, NOW, 365)["Network Asset"]) == ["near"]
