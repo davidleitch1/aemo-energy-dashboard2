@@ -137,6 +137,11 @@ def _rooftop_latest_mw() -> float:
 
 app = FastAPI(title="NEM Today mockup")
 
+try:                       # tests import aemo_dashboard.web.app
+    from . import pasa_data
+except ImportError:        # uvicorn runs `app:app` from this directory
+    import pasa_data
+
 
 def q(sql: str, params: list | None = None) -> pd.DataFrame:
     """Fresh read-only connection per query, like the iOS API does."""
@@ -187,7 +192,10 @@ TABS = [
     # at /generation-mix/trends. Bookmarks to /trends redirect via the
     # legacy_trends_redirect handler below.
     ("curtailment",      "Curtailment",      []),
-    ("pasa",             "PASA",             []),
+    ("pasa",             "PASA",             [("now",          "Now & 7 days"),
+                                              ("extended",     "Extended outages"),
+                                              ("slippage",     "Return-date changes"),
+                                              ("transmission", "Transmission")]),
     ("gas",              "Gas",              []),
 ]
 TAB_LOOKUP = {slug: (label, subs) for slug, label, subs in TABS}
@@ -8931,11 +8939,8 @@ def _build_market_notices() -> HTMLResponse:
 
 
 # ============================================================================
-# Tile 9: Generator outages  (PASA-driven, stacked bars by fuel × region)
+# Generator outages  (ST-PASA / MT-PASA; logic in pasa_data.py)
 # ============================================================================
-
-_outages_cache: dict = {"ts": 0.0, "data": None}
-_OUTAGES_TTL = 300
 
 # Match production palette in pasa/pasa_tab.py REGION_COLORS for the segments.
 OUTAGE_REGION_COLORS = {
@@ -8944,21 +8949,30 @@ OUTAGE_REGION_COLORS = {
 }
 REGION_DISPLAY = {"NSW1": "NSW", "QLD1": "QLD", "VIC1": "VIC",
                   "SA1": "SA", "TAS1": "TAS"}
+PASA_THRESHOLD_MW = 50.0
 
 
-def _get_outage_data() -> tuple[pd.DataFrame, pd.DataFrame] | None:
-    now = time.time()
-    if _outages_cache["data"] is not None and now - _outages_cache["ts"] < _OUTAGES_TTL:
-        return _outages_cache["data"]
+def _pasa_units() -> pd.DataFrame:
+    """Scheduled plant from duid_mapping, cached with the parquet loads."""
+    def _load():
+        conn = duckdb.connect(DB_PATH, read_only=True)
+        try:
+            return pasa_data.load_scheduled_units(conn)
+        finally:
+            conn.close()
+    return pasa_data._cached("units", _load)
+
+
+def _get_outage_data() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame] | None:
+    """(ST-PASA, units, MT-PASA or empty); None if the store is unreadable."""
     try:
-        from aemo_dashboard.pasa.change_detector import ChangeDetector
-        from aemo_dashboard.pasa.pasa_tab import load_gen_info, DEFAULT_DATA_PATH
-        detector = ChangeDetector(data_path=DEFAULT_DATA_PATH)
-        outages = detector.get_current_generator_outages(min_reduction_mw=50)
-        gen_info = load_gen_info()
-        _outages_cache["data"] = (outages, gen_info)
-        _outages_cache["ts"] = now
-        return _outages_cache["data"]
+        st = pasa_data.load_stpasa()
+        units = _pasa_units()
+        try:
+            mt = pasa_data.load_mtpasa()
+        except Exception:
+            mt = pd.DataFrame()
+        return st, units, mt
     except Exception:
         return None
 
@@ -8970,48 +8984,14 @@ def outages_summary() -> HTMLResponse:
     return _cached_tile("outages-summary", _build_outages_summary, ttl=120.0)
 
 
-def _build_outages_summary() -> HTMLResponse:
+def _outage_bars(cur: pd.DataFrame, slug: str) -> HTMLResponse:
     """Horizontal stacked bar per fuel; segments per DUID coloured by region.
-
-    Mirrors the production PASA tab's `create_generator_fuel_summary` —
-    uses live PASA availability so returned generators self-exclude.
-    """
-    data = _get_outage_data()
-    if data is None:
-        return HTMLResponse(_card_h3("Generator outages") +
-            f'<div style="color:{MUTED};padding:10px">PASA data unavailable</div>')
-    outages, gen_info = data
-
-    if outages.empty or gen_info.empty:
-        return HTMLResponse(_card_h3("Generator outages") +
-            f'<div style="color:{MUTED};padding:10px">No current outages</div>')
-
-    # Join outages with fuel + region; fall back to gen_info capacity when
-    # PASA reports 0/0 (genuine "off, nameplate") rather than "no change".
-    info = gen_info.set_index("DUID")
-    rows = []
-    for _, row in outages.iterrows():
-        duid = row["DUID"]
-        if duid not in info.index:
-            fuel, cap, region = "Unknown", 0.0, "Unknown"
-        else:
-            r = info.loc[duid]
-            fuel = r.get("Fuel") or "Unknown"
-            cap = float(r.get("Capacity(MW)") or 0)
-            region = r.get("Region") or "Unknown"
-        region_short = REGION_DISPLAY.get(region, region)
-        reduction = float(row["reduction_mw"])
-        if reduction <= 0 and float(row["current_mw"]) == 0 and cap > 0:
-            reduction = cap
-        if reduction > 0:
-            rows.append({"duid": duid, "fuel": fuel,
-                         "region": region_short, "mw": reduction})
-
-    if not rows:
-        return HTMLResponse(_card_h3("Generator outages") +
-            f'<div style="color:{MUTED};padding:10px">No outages above 50 MW</div>')
-
-    df = pd.DataFrame(rows)
+    `cur` is pasa_data.current_outages(): duid, region, fuel, mw_out."""
+    df = pd.DataFrame({
+        "duid": cur["duid"], "fuel": cur["fuel"],
+        "region": cur["region"].map(lambda r: REGION_DISPLAY.get(r, r)),
+        "mw": cur["mw_out"],
+    })
     fuel_totals = df.groupby("fuel")["mw"].sum().sort_values(ascending=True)
     fuel_order = list(fuel_totals.index)  # ascending → Plotly draws top-to-bottom correctly
     total = float(fuel_totals.sum())
@@ -9061,9 +9041,189 @@ def _build_outages_summary() -> HTMLResponse:
         annotations=annotations,
     )
     return _wrap_plot_with_extras(
-        "outages", f"Generator outages &middot; {total:,.0f} MW total", fig,
+        slug, f"Generator outages &middot; {total:,.0f} MW total", fig,
         extras_before=f'<div style="margin:0 0 6px 70px">{legend_chips}</div>',
     )
+
+
+def _build_outages_summary() -> HTMLResponse:
+    """Today tile: scheduled units out now (PASA availability, so units
+    offline for economic reasons are not counted)."""
+    data = _get_outage_data()
+    if data is None:
+        return HTMLResponse(_card_h3("Generator outages") +
+            f'<div style="color:{MUTED};padding:10px">PASA data unavailable</div>')
+    st, units, _ = data
+    cur = pasa_data.current_outages(st, units, PASA_THRESHOLD_MW)
+    if cur.empty:
+        return HTMLResponse(_card_h3("Generator outages") +
+            f'<div style="color:{MUTED};padding:10px">No outages above '
+            f'{PASA_THRESHOLD_MW:.0f} MW</div>')
+    return _outage_bars(cur, "outages")
+
+
+# ----------------------------------------------------------------------------
+# /pasa — Now & 7 days
+# ----------------------------------------------------------------------------
+
+_PASA_PLACEHOLDERS = {
+    "extended": "Being rebuilt &mdash; MT-PASA history backfill in progress.",
+    "slippage": "Being rebuilt &mdash; MT-PASA history backfill in progress.",
+    "transmission": "Coming next.",
+}
+
+
+@app.get("/pasa", response_class=HTMLResponse)
+def pasa_root() -> RedirectResponse:
+    return RedirectResponse(url="/pasa/now")
+
+
+def _fmt_dt(ts) -> str:
+    return "" if pd.isna(ts) else f"{ts:%a %d %b %H:%M}"
+
+
+def _pasa_timeseries_chart(ts: pd.DataFrame, region: str) -> str:
+    if ts.empty or float(ts.to_numpy().sum()) == 0:
+        return (_card_h3("MW out over the next 7 days")
+                + f'<div style="color:{MUTED};padding:10px">'
+                  f'No units above {PASA_THRESHOLD_MW:.0f} MW out.</div>')
+    fig = go.Figure()
+    for fuel in ("Coal", "Gas", "Hydro"):
+        if fuel not in ts.columns:
+            continue
+        color = FUEL_COLORS[fuel]
+        fig.add_trace(go.Scatter(
+            x=ts.index, y=ts[fuel], name=fuel, mode="lines",
+            stackgroup="out", line=dict(width=0.8, color=color, shape="hv"),
+            fillcolor=color,
+            hovertemplate=f"{fuel} %{{y:,.0f}} MW<extra></extra>",
+        ))
+    fig.update_layout(
+        paper_bgcolor=PAPER, plot_bgcolor=PAPER, height=320,
+        margin=dict(l=60, r=20, t=8, b=36), hovermode="x unified",
+        legend=dict(orientation="h", y=1.08, x=0, font=dict(size=11)),
+        xaxis=dict(showgrid=False, tickfont=dict(size=10, color=MUTED)),
+        yaxis=dict(gridcolor=BORDER, zeroline=False, ticksuffix=" MW",
+                   tickfont=dict(size=10, color=MUTED), rangemode="tozero"),
+    )
+    title = ("MW out over the next 7 days &middot; "
+             + ("NEM" if region == "NEM" else region[:-1]))
+    resp = _wrap_plot_with_extras("pasa-ts", title, fig)
+    return resp.body.decode()
+
+
+def _pasa_table(tbl: pd.DataFrame) -> str:
+    if tbl.empty:
+        return (_card_h3("Units out now")
+                + f'<div style="color:{MUTED};padding:10px">No units out.</div>')
+
+    def _td(v, right=False, title=""):
+        al = "right" if right else "left"
+        t = f' title="{html_lib.escape(title)}"' if title else ""
+        return f'<td{t} style="text-align:{al};padding:6px 12px">{v}</td>'
+
+    heads = [("Unit", False), ("Station", False), ("Region", False),
+             ("Fuel", False), ("Capacity MW", True), ("Available MW", True),
+             ("MW out", True), ("Type", False), ("Back within week", False),
+             ("MT-PASA return", False), ("Recall (h)", True)]
+    header = "".join(
+        f'<th style="text-align:{"right" if r else "left"};padding:6px 12px">'
+        f'{h}</th>' for h, r in heads)
+    rows = []
+    for _, r in tbl.iterrows():
+        outage_state = str(r["raw_state"]).startswith(("OUTAGE", "DERATING"))
+        back = (_fmt_dt(r["back_within_week"])
+                if pd.notna(r["back_within_week"]) else "beyond 7 days")
+        if pd.notna(r["mtpasa_return"]):
+            mt_ret = f'{r["mtpasa_return"]:%a %d %b %Y}'
+        else:
+            mt_ret = "beyond horizon" if outage_state else "&mdash;"
+        rec = r["recall_h"] * 60
+        recall = ("Long-term" if rec >= pasa_data.LONG_TERM_RECALL_MIN
+                  else f'{r["recall_h"]:.1f}')
+        rows.append(
+            f'<tr style="border-top:1px solid {BORDER}">'
+            + _td(html_lib.escape(str(r["duid"])))
+            + _td(html_lib.escape(str(r["site_name"] or "")))
+            + _td(REGION_DISPLAY.get(r["region"], r["region"]))
+            + _td(r["fuel"])
+            + _td(f'{r["capacity_mw"]:,.0f}', True)
+            + _td(f'{r["available_mw"]:,.0f}', True)
+            + _td(f'<b>{r["mw_out"]:,.0f}</b>', True)
+            + _td(r["type"], title=str(r["raw_state"]))
+            + _td(back)
+            + _td(mt_ret)
+            + _td(recall, True)
+            + '</tr>')
+    return (_card_h3(f"Units out now &middot; {len(tbl)} units")
+            + '<div style="overflow-x:auto"><table style="width:100%;'
+              'border-collapse:collapse;font-size:13px">'
+            + f'<thead style="background:{BORDER};color:{INK};font-size:11px;'
+              f'text-transform:uppercase;letter-spacing:0.4px">'
+            + f'<tr>{header}</tr></thead><tbody>{"".join(rows)}</tbody>'
+            + '</table></div>')
+
+
+def _pasa_now_content(region: str) -> str:
+    data = _get_outage_data()
+    if data is None:
+        return ('<div class="prices-stack"><div class="card">'
+                + _card_h3("PASA")
+                + f'<div style="color:{MUTED};padding:10px">'
+                  'PASA data unavailable</div></div></div>')
+    st, units, mt = data
+    run = st["RUN_DATETIME"].max()
+    mt_pub = mt["PUBLISH_DATETIME"].max() if len(mt) else pd.NaT
+    fresh = (f'<div style="color:{MUTED};font-size:12px;padding:8px 24px 0">'
+             f'ST-PASA run {_fmt_dt(run)} &middot; MT-PASA published '
+             f'{_fmt_dt(mt_pub) if pd.notna(mt_pub) else "n/a"} '
+             f'&middot; times AEST &middot; units out = '
+             f'&ge;{PASA_THRESHOLD_MW:.0f} MW below capacity</div>')
+
+    cur = pasa_data.current_outages(st, units, PASA_THRESHOLD_MW)
+    if cur.empty:
+        bars = (_card_h3("Generator outages")
+                + f'<div style="color:{MUTED};padding:10px">No outages above '
+                  f'{PASA_THRESHOLD_MW:.0f} MW</div>')
+    else:
+        bars = _outage_bars(cur, "pasa-now").body.decode()
+
+    ts = pasa_data.outage_timeseries(st, units, PASA_THRESHOLD_MW,
+                                     region=None if region == "NEM" else region)
+    tbl = pasa_data.outage_table(st, units, mt, PASA_THRESHOLD_MW)
+    return (fresh + '<div class="prices-stack">'
+            f'<div class="card">{bars}</div>'
+            f'<div class="card">{_pasa_timeseries_chart(ts, region)}</div>'
+            f'<div class="card">{_pasa_table(tbl)}'
+            f'{_attribution("AEMO ST-PASA, MT-PASA")}</div>'
+            '</div>')
+
+
+@app.get("/pasa/{sub}", response_class=HTMLResponse)
+def pasa_sub(sub: str, request: Request, region: str = "NEM") -> HTMLResponse:
+    label, subtabs = TAB_LOOKUP["pasa"]
+    sub_labels = dict(subtabs)
+    if sub not in sub_labels:
+        return HTMLResponse(status_code=404, content="Not found")
+    if region not in GENMIX_REGION_LIST:
+        region = "NEM"
+
+    subtab_html = _render_subtab_nav("pasa", subtabs, sub,
+                                     carry_params={"region": region}
+                                     if sub == "now" else None)
+    if sub == "now":
+        selectors = _render_selector_strip(
+            _render_region_pills("/pasa/now", region, {},
+                                 regions=GENMIX_REGION_LIST))
+        content = selectors + _pasa_now_content(region)
+    else:
+        content = ('<div class="placeholder"><p><strong>PASA &middot; '
+                   f'{sub_labels[sub]}</strong></p>'
+                   f'<p>{_PASA_PLACEHOLDERS[sub]}</p></div>')
+    body = _render_tab_body(subtab_html, content)
+    if _is_htmx(request):
+        return HTMLResponse(body)
+    return HTMLResponse(_render_shell(body))
 
 
 # ============================================================================
