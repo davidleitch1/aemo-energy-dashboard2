@@ -85,3 +85,29 @@ def test_pasa_transmission_renders(client):
 @pytest.mark.parametrize("region", ["NSW1", "QLD1", "SA1", "TAS1", "VIC1"])
 def test_pasa_transmission_regions(client, region):
     assert client.get(f"/pasa/transmission?region={region}").status_code == 200
+
+
+def test_slippage_show_all_and_changed(client):
+    a = client.get("/pasa/slippage?show=all").text
+    c = client.get("/pasa/slippage?show=changed").text
+    assert "changed of" in a and "changed of" in c
+    assert len(a) >= len(c)
+
+
+@pytest.mark.parametrize("mw", ["50", "100", "200"])
+def test_extended_min_mw(client, mw):
+    r = client.get(f"/pasa/extended?minmw={mw}")
+    assert r.status_code == 200 and "Min MW" in r.text
+
+
+def test_spread_labels_min_gap():
+    from aemo_dashboard.web.app import _spread_labels
+    out = _spread_labels([10, 11, 12, 30], 5)
+    assert out[3] == 30
+    s = sorted(out)
+    assert all(b - a >= 5 for a, b in zip(s, s[1:]))
+    assert _spread_labels([3, 1, 2], 5)[1] == 1       # lowest stays put
+
+
+def test_transmission_cards_not_fixed_height(client):
+    assert "min-height:0" in client.get("/pasa/transmission").text

@@ -15,6 +15,7 @@ loading pattern unambiguously.
 from __future__ import annotations
 
 import asyncio
+import threading
 import html as html_lib
 import json
 import time
@@ -9213,44 +9214,78 @@ def _pasa_now_content(region: str) -> str:
 # ----------------------------------------------------------------------------
 
 _SLIP_CACHE: dict = {"mtime": None, "val": None}
+_SLIP_LOCK = threading.Lock()
 PASA_SLIP_COLORS = ["#af3029", "#bc5215", "#ad8301", "#66800b", "#24837b",
                     "#205ea6", "#5e409d", "#a02f6f"]
 
 
 def _slippage_data():
-    """(table, paths, publishes) joined to unit names; recomputed only when
-    the history file changes."""
+    """(table, paths, publishes) joined to unit names. Region-independent
+    (filtered afterwards); recomputed once per process when the history file
+    changes."""
     import os
     mtime = os.stat(pasa_data.HISTORY_PATH).st_mtime
-    if _SLIP_CACHE["mtime"] == mtime and _SLIP_CACHE["val"] is not None:
+    with _SLIP_LOCK:
+        if _SLIP_CACHE["mtime"] == mtime and _SLIP_CACHE["val"] is not None:
+            return _SLIP_CACHE["val"]
+        pasa_data._cache.pop(f"mth:{pasa_data.HISTORY_PATH}", None)
+        hist = pasa_data.load_mtpasa_history()
+        units = _pasa_units()
+        pubs = pasa_data.weekly_publishes(hist, 26)
+        table, paths = pasa_data.slippage_table(hist, units, pubs,
+                                                30, PASA_THRESHOLD_MW)
+        info = units[["duid", "site_name", "region", "fuel"]]
+        info = info.assign(fuel=info["fuel"].map(pasa_data.FUEL_DISPLAY))
+        table = table.merge(info, on="duid", how="left")
+        _SLIP_CACHE.update(mtime=mtime, val=(table, paths, pubs))
         return _SLIP_CACHE["val"]
-    hist = pasa_data.load_mtpasa_history()
-    units = _pasa_units()
-    pubs = pasa_data.weekly_publishes(hist, 26)
-    table, paths = pasa_data.slippage_table(hist, units, pubs,
-                                            30, PASA_THRESHOLD_MW)
-    info = units.rename(columns={"duid": "duid"})[
-        ["duid", "site_name", "region", "fuel"]]
-    info = info.assign(fuel=info["fuel"].map(pasa_data.FUEL_DISPLAY))
-    table = table.merge(info, on="duid", how="left")
-    _SLIP_CACHE.update(mtime=mtime, val=(table, paths, pubs))
-    return _SLIP_CACHE["val"]
+
+
+@app.on_event("startup")
+def _warm_pasa_caches() -> None:
+    """Fill the PASA caches in the background so the first page view after a
+    restart does not wait for the slippage computation."""
+    def _run():
+        for fn in (_get_outage_data, _slippage_data, pasa_data.load_mtpasa,
+                   pasa_transmission.load_high_impact):
+            try:
+                fn()
+            except Exception:
+                pass
+    threading.Thread(target=_run, daemon=True).start()
 
 
 def _fmt_d(ts) -> str:
     return "" if pd.isna(ts) else f"{ts:%d %b %Y}"
 
 
-def _slip_table_html(t: pd.DataFrame, latest_pub) -> str:
-    if t.empty:
-        return (_card_h3("Return-date changes")
-                + f'<div style="color:{MUTED};padding:10px">No units out now '
-                  f'or starting within 30 days.</div>')
+def _render_choice_pills(label: str, options: list, active: str,
+                         base_url: str, other_params: dict, key: str) -> str:
+    """Single-choice pill group (same markup as the region pills)."""
+    pills = []
+    for value, text in options:
+        url = _build_url(base_url, **dict(other_params, **{key: value}))
+        cls = "pill active" if value == active else "pill"
+        pills.append(f'<button class="{cls}" hx-get="{url}" '
+                     f'hx-target="#tab-body" hx-push-url="true">{text}</button>')
+    return (f'<div class="pill-bar"><span class="pill-bar-label">{label}</span>'
+            f'<div class="pill-group">{"".join(pills)}</div></div>')
 
-    def _td(v, right=False, extra=""):
+
+def _slip_table_html(t: pd.DataFrame, show: str, n_total: int) -> str:
+    n_changed = int(t["changed"].sum()) if len(t) else 0
+    title = f"Return-date changes &middot; {n_changed} changed of {n_total}"
+    if show != "all" and len(t):
+        t = t[t["changed"]]
+    if t.empty:
+        return (_card_h3(title)
+                + f'<div style="color:{MUTED};padding:10px">No outages '
+                  f'match.</div>')
+
+    def _td(v, right=False):
         al = "right" if right else "left"
-        return (f'<td style="text-align:{al};padding:6px 10px;'
-                f'white-space:nowrap;{extra}">{v}</td>')
+        return (f'<td style="text-align:{al};padding:5px 7px;'
+                f'white-space:nowrap">{v}</td>')
 
     def _prior(ts, is_new):
         if pd.notna(ts):
@@ -9262,62 +9297,91 @@ def _slip_table_html(t: pd.DataFrame, latest_pub) -> str:
              ("Return 1 week ago", 0), ("Return 4 weeks ago", 0),
              ("First listed", 0), ("Original return", 0), ("Slip (days)", 1)]
     header = "".join(
-        f'<th style="text-align:{"right" if r else "left"};padding:6px 10px">'
+        f'<th style="text-align:{"right" if r else "left"};padding:5px 7px">'
         f'{h}</th>' for h, r in heads)
     rows = []
     for r in t.itertuples():
-        up = bool(r.moved_later)
-        mark = (f' <span style="color:#af3029" title="Return moved later in '
-                f'the last week">&#9650;</span>' if up else "")
-        if r.open_ended:
-            ret_now, slip = "open-ended", "&mdash;"
+        mark = (' <span style="color:#af3029" title="Return moved later in '
+                'the last week">&#9650;</span>' if r.moved_later else "")
+        if r.newly_open:
+            was = (f" (was {_fmt_d(r.pre_open_return)})"
+                   if pd.notna(r.pre_open_return) else "")
+            ret_now = f"<b>open-ended{was}</b>{mark}"
+        elif r.open_ended:
+            ret_now = "open-ended" + mark
         else:
             ret_now = _fmt_d(r.return_now) + mark
-            slip = ("&mdash;" if pd.isna(r.slip_days)
-                    else f"{r.slip_days:+.0f}" if r.slip_days else "0")
-            if r.is_new:
-                slip = "new"
         if r.open_ended:
-            ret_now += mark
+            slip = "&mdash;"
+        elif r.is_new:
+            slip = "new"
+        elif pd.isna(r.slip_days) or r.slip_days == 0:
+            slip = "0"
+        elif r.first_is_bound and r.slip_days > 0:
+            slip = f"&ge; {r.slip_days:+.0f}"
+        else:
+            slip = f"{r.slip_days:+.0f}"
+        out_from = (f"before {_fmt_d(r.start)}" if r.start_bound
+                    else _fmt_d(r.start))
+        first = (f"before {_fmt_d(r.first_listed)}" if r.first_is_bound
+                 else _fmt_d(r.first_listed))
         rows.append(
             f'<tr style="border-top:1px solid {BORDER}">'
             + _td(html_lib.escape(str(r.duid)))
             + _td(html_lib.escape(str(r.site_name or "")))
             + _td(REGION_DISPLAY.get(r.region, r.region))
             + _td(r.fuel) + _td(f"{r.mw:,.0f}", True)
-            + _td(r.type) + _td(_fmt_d(r.start)) + _td(ret_now)
+            + _td(r.type) + _td(out_from) + _td(ret_now)
             + _td(_prior(r.ret_1w, r.new_1w)) + _td(_prior(r.ret_4w, r.new_4w))
-            + _td(_fmt_d(r.first_listed)) + _td(_fmt_d(r.orig_return))
+            + _td(first) + _td(_fmt_d(r.orig_return))
             + _td(f"<b>{slip}</b>", True) + "</tr>")
-    return (_card_h3(f"Return-date changes &middot; {len(t)} outages")
+    return (_card_h3(title)
             + '<div style="overflow-x:auto"><table style="width:100%;'
-              'border-collapse:collapse;font-size:13px">'
+              'border-collapse:collapse;font-size:12px">'
             + f'<thead style="background:{BORDER};color:{INK};font-size:11px;'
               f'text-transform:uppercase;letter-spacing:0.4px">'
             + f'<tr>{header}</tr></thead><tbody>{"".join(rows)}</tbody>'
             + '</table></div>')
 
 
+def _spread_labels(ys: list, min_gap) -> list:
+    """Greedy de-overlap: push each y up until it is min_gap above the one
+    below it. Order of the input is preserved."""
+    order = sorted(range(len(ys)), key=lambda i: ys[i])
+    out = list(ys)
+    for k in range(1, len(order)):
+        i, j = order[k], order[k - 1]
+        if out[i] < out[j] + min_gap:
+            out[i] = out[j] + min_gap
+    return out
+
+
 def _slip_path_chart(t: pd.DataFrame, paths: pd.DataFrame) -> str:
-    top = t[t["slip_days"].notna() & (t["slip_days"] > 0)].head(8)
+    if t.empty:
+        return ""
+    cand = t[(t["newly_open"] | (t["slip_days"] > 0))]
+    top = cand.sort_values("slip_chart", ascending=False).head(8)
     if top.empty:
         return (_card_h3("Return-date path")
                 + f'<div style="color:{MUTED};padding:10px">No outage has a '
                   f'later return than when first listed.</div>')
+    hz = t["horizon"].iloc[0]
     fig = go.Figure()
+    ends, names, colors = [], [], []
     for i, r in enumerate(top.itertuples()):
         p = paths[(paths["duid"] == r.duid) & (paths["start"] == r.start)] \
             .sort_values("publish")
+        y = p["return_date"].clip(upper=hz)
         color = PASA_SLIP_COLORS[i % len(PASA_SLIP_COLORS)]
-        text = [""] * (len(p) - 1) + [f" {r.duid}"]
         fig.add_trace(go.Scatter(
-            x=p["publish"], y=p["return_date"], mode="lines+markers+text",
-            name=r.duid, text=text, textposition="middle right",
-            textfont=dict(size=11, color=color),
+            x=p["publish"], y=y, mode="lines+markers",
             line=dict(color=color, width=1.8), marker=dict(size=4),
             hovertemplate=f"{r.duid}: published %{{x|%d %b}}, "
                           f"return %{{y|%d %b %Y}}<extra></extra>",
             showlegend=False))
+        ends.append(y.iloc[-1])
+        names.append(r.duid)
+        colors.append(color)
     lo, hi = paths["publish"].min(), paths["publish"].max()
     fig.add_trace(go.Scatter(
         x=[lo, hi], y=[lo, hi], mode="lines",
@@ -9326,21 +9390,34 @@ def _slip_path_chart(t: pd.DataFrame, paths: pd.DataFrame) -> str:
     fig.add_annotation(x=hi, y=hi, text="return = publish date", showarrow=False,
                        xanchor="right", yanchor="top", yshift=-6,
                        font=dict(size=10, color=MUTED))
+    # Right-end labels, pushed apart by at least 14 px.
+    height, plot_px = 420, 376
+    y_lo = min(min(ends), lo)
+    span = max(max(ends), hi) - y_lo
+    gap = (span * (14 / plot_px)).floor("min")
+    adj = _spread_labels(ends, gap)
+    for name, y, color in zip(names, adj, colors):
+        fig.add_annotation(x=hi, y=y, text=name, showarrow=False,
+                           xanchor="left", xshift=6, yanchor="middle",
+                           font=dict(size=11, color=color))
+    y_hi = max(adj) + gap
     fig.update_layout(
-        paper_bgcolor=PAPER, plot_bgcolor=PAPER, height=420,
-        margin=dict(l=70, r=80, t=8, b=36),
+        paper_bgcolor=PAPER, plot_bgcolor=PAPER, height=height,
+        margin=dict(l=70, r=90, t=8, b=36),
         xaxis=dict(showgrid=False, tickfont=dict(size=10, color=MUTED),
                    title=dict(text="Publish date", font=dict(size=11, color=MUTED))),
         yaxis=dict(gridcolor=BORDER, zeroline=False, type="date",
+                   range=[y_lo - gap, y_hi],
                    tickfont=dict(size=10, color=MUTED),
                    title=dict(text="Expected return", font=dict(size=11, color=MUTED))),
     )
     return _wrap_plot_with_extras(
-        "pasa-slip", "Return-date path &middot; top 8 by slip since first listed",
-        fig).body.decode()
+        "pasa-slip",
+        f"Return-date path &middot; top {len(top)} by slip since first listed "
+        f"(capped at the MT-PASA horizon, {_fmt_d(hz)})", fig).body.decode()
 
 
-def _pasa_slippage_content(region: str) -> str:
+def _pasa_slippage_content(region: str, show: str) -> str:
     try:
         table, paths, pubs = _slippage_data()
     except Exception as exc:
@@ -9358,11 +9435,12 @@ def _pasa_slippage_content(region: str) -> str:
             f'of each of the previous {len(pubs) - 1} weeks &middot; outages '
             f'of &ge;{PASA_THRESHOLD_MW:.0f} MW out now or starting within 30 '
             f'days &middot; &#9650; return moved later in the last week '
-            f'&middot; open-ended = outage runs to the end of the MT-PASA '
-            f'horizon</div>')
+            f'&middot; open-ended = runs to the end of the MT-PASA horizon '
+            f'&middot; "before" = already listed in the earliest data compared '
+            f'(slip is then a lower bound)</div>')
     return (note + '<div class="prices-stack">'
             f'<div class="card">{_slip_path_chart(table, paths)}</div>'
-            f'<div class="card">{_slip_table_html(table, latest)}'
+            f'<div class="card">{_slip_table_html(table, show, len(table))}'
             f'{_attribution("AEMO MT-PASA")}</div></div>')
 
 
@@ -9371,16 +9449,21 @@ def _pasa_slippage_content(region: str) -> str:
 # ----------------------------------------------------------------------------
 
 PASA_TYPE_COLORS = {"Planned": "#205ea6", "Unplanned": "#af3029"}
+PASA_MIN_MW_OPTIONS = [("50", "&ge;50 MW"), ("100", "&ge;100 MW"),
+                       ("200", "&ge;200 MW")]
 
 
-def _extended_gantt(eps: pd.DataFrame, today: pd.Timestamp) -> str:
-    if eps.empty:
+def _extended_gantt(eps: pd.DataFrame, today: pd.Timestamp,
+                    min_mw: float) -> str:
+    rows = pasa_data.unit_rows(eps, min_mw)
+    if rows.empty:
         return (_card_h3("Extended outages")
-                + f'<div style="color:{MUTED};padding:10px">No outages of '
-                  f'7 days or more in the next 12 months.</div>')
-    eps = eps.reset_index(drop=True)
-    labels = [f"{r.duid} · {r.site_name or ''} ({r.mw:,.0f} MW)"
-              for r in eps.itertuples()]
+                + f'<div style="color:{MUTED};padding:10px">No unit has an '
+                  f'outage of 7 days or more at &ge;{min_mw:.0f} MW in the '
+                  f'next 12 months.</div>')
+    label = {r.duid: f"{r.duid} · {r.site_name or ''} ({r.mw:,.0f} MW)"
+             for r in rows.itertuples()}
+    eps = eps[eps["duid"].isin(label)]
     win_end = today + pd.Timedelta(days=365)
     fig = go.Figure()
     for typ, color in PASA_TYPE_COLORS.items():
@@ -9390,7 +9473,7 @@ def _extended_gantt(eps: pd.DataFrame, today: pd.Timestamp) -> str:
         shown_start = sub["start"].clip(lower=today)
         shown_end = (sub["end"] + pd.Timedelta(days=1)).clip(upper=win_end)
         fig.add_trace(go.Bar(
-            y=[labels[i] for i in sub.index],
+            y=[label[d] for d in sub["duid"]],
             x=((shown_end - shown_start).dt.total_seconds() * 1000).tolist(),
             base=shown_start.tolist(), orientation="h", name=typ,
             marker=dict(color=color, line=dict(width=0)),
@@ -9400,18 +9483,20 @@ def _extended_gantt(eps: pd.DataFrame, today: pd.Timestamp) -> str:
             hovertemplate=("%{y}<br>%{customdata[0]}<br>%{customdata[1]:,.0f}"
                            " MW<br>from %{customdata[2]}, back "
                            "%{customdata[3]}<extra></extra>")))
+    order = [label[d] for d in rows["duid"]]
     fig.update_layout(
         paper_bgcolor=PAPER, plot_bgcolor=PAPER, barmode="overlay",
-        height=max(200, 20 * len(eps) + 70), bargap=0.3,
+        height=max(200, 17 * len(rows) + 70), bargap=0.25,
         margin=dict(l=260, r=20, t=24, b=30),
         legend=dict(orientation="h", y=1.04, x=0, font=dict(size=11)),
         xaxis=dict(type="date", range=[today, win_end], side="top",
                    gridcolor=BORDER, tickfont=dict(size=10, color=MUTED)),
         yaxis=dict(autorange="reversed", categoryorder="array",
-                   categoryarray=labels, tickfont=dict(size=10, color=INK)),
+                   categoryarray=order, tickfont=dict(size=10, color=INK)),
     )
     return _wrap_plot_with_extras(
-        "pasa-gantt", f"Outages of 7+ days &middot; {len(eps)} episodes",
+        "pasa-gantt",
+        f"Outages of 7+ days &middot; {len(rows)} units, {len(eps)} episodes",
         fig).body.decode()
 
 
@@ -9435,11 +9520,11 @@ def _extended_weekly(w: pd.DataFrame) -> str:
                    tickfont=dict(size=10, color=MUTED), rangemode="tozero"),
     )
     return _wrap_plot_with_extras(
-        "pasa-weekly", "Mean daily MW out per week, next 52 weeks",
+        "pasa-weekly", "Mean daily MW out per week, next 52 weeks (all outage days)",
         fig).body.decode()
 
 
-def _pasa_extended_content(region: str) -> str:
+def _pasa_extended_content(region: str, min_mw: float) -> str:
     try:
         mt = pasa_data.load_mtpasa()
         units = _pasa_units()
@@ -9466,9 +9551,11 @@ def _pasa_extended_content(region: str) -> str:
     fresh = (f'<div style="color:{MUTED};font-size:12px;padding:8px 24px 0">'
              f'MT-PASA published {_fmt_dt(pub)} &middot; outage days = '
              f'&ge;{PASA_THRESHOLD_MW:.0f} MW below capacity in an outage or '
-             f'derating state &middot; episodes merge gaps of one day</div>')
+             f'derating state &middot; episodes merge gaps of one day '
+             f'&middot; one row per unit; the MW filter keeps units whose '
+             f'largest episode reaches it</div>')
     return (fresh + '<div class="prices-stack">'
-            f'<div class="card">{_extended_gantt(eps, today)}</div>'
+            f'<div class="card">{_extended_gantt(eps, today, min_mw)}</div>'
             f'<div class="card">{_extended_weekly(weekly)}{foot}'
             f'{_attribution("AEMO MT-PASA")}</div></div>')
 
@@ -9480,10 +9567,12 @@ def _pasa_extended_content(region: str) -> str:
 TX_MAX_ROWS = 40
 
 
-def _tx_table(title: str, df: pd.DataFrame, empty: str) -> str:
+def _tx_table(title: str, df: pd.DataFrame, empty: str, note: str = "") -> str:
+    note_html = (f'<div style="color:{MUTED};font-size:11px;margin:6px 10px 0">'
+                 f'{note}</div>' if note else "")
     if df.empty:
         return (_card_h3(title) + f'<div style="color:{MUTED};padding:10px">'
-                f'{empty}</div>')
+                f'{empty}</div>{note_html}')
     shown = df.head(TX_MAX_ROWS)
     heads = ["Region", "NSP", "Network asset", "Start", "Finish", "Status"]
     header = "".join(f'<th style="text-align:left;padding:6px 10px">{h}</th>'
@@ -9499,16 +9588,17 @@ def _tx_table(title: str, df: pd.DataFrame, empty: str) -> str:
         rows.append(f'<tr style="border-top:1px solid {BORDER}">'
                     + "".join(f'<td style="padding:6px 10px;white-space:nowrap">'
                               f'{c}</td>' for c in cells) + '</tr>')
-    more = (f'<div style="color:{MUTED};font-size:11px;margin:6px 10px 0">'
-            f'Showing {len(shown)} of {len(df)}</div>'
+    more = (f"Showing {len(shown)} of {len(df)}. "
             if len(df) > len(shown) else "")
+    foot = (f'<div style="color:{MUTED};font-size:11px;margin:6px 10px 0">'
+            f'{more}{note}</div>' if (more or note) else "")
     return (_card_h3(f"{title} &middot; {len(df)}")
             + '<div style="overflow-x:auto"><table style="width:100%;'
               'border-collapse:collapse;font-size:13px">'
             + f'<thead style="background:{BORDER};color:{INK};font-size:11px;'
               f'text-transform:uppercase;letter-spacing:0.4px">'
             + f'<tr>{header}</tr></thead><tbody>{"".join(rows)}</tbody>'
-            + f'</table></div>{more}')
+            + f'</table></div>{foot}')
 
 
 def _pasa_transmission_content(region: str) -> str:
@@ -9522,64 +9612,75 @@ def _pasa_transmission_content(region: str) -> str:
                   f'({html_lib.escape(type(exc).__name__)})</div></div></div>')
     tx = pasa_transmission
     now = pasa_data.nem_now()
+    rd = tx.report_date(hi)
     hi = tx.filter_region(hi, region)
+    ir = tx.inter_regional(hi, now)
+    ir_near = tx.within(ir, now, 365)
+    hidden = len(ir) - len(ir_near)
+    ir_note = (f"{hidden} later inter-regional outages (to "
+               f"{ir['Start'].max():%Y}) not shown" if hidden else "")
     sections = [
         _tx_table("In progress", tx.in_progress(hi, now), "No outages in progress."),
         _tx_table("Unplanned", tx.unplanned(hi, now), "No unplanned outages listed."),
         _tx_table("Planned, next 30 days",
                   tx.consolidate(tx.upcoming(hi, now, 30)),
                   "No planned outages starting in the next 30 days."),
-        _tx_table("Inter-regional", tx.consolidate(tx.inter_regional(hi, now)),
-                  "No inter-regional outages listed."),
+        _tx_table("Inter-regional, next 12 months", tx.consolidate(ir_near),
+                  "No inter-regional outages listed.", ir_note),
     ]
-    rd = tx.report_date(tx.load_high_impact())
     fresh = (f'<div style="color:{MUTED};font-size:12px;padding:8px 24px 0">'
              f'AEMO High Impact Outages report of {_fmt_d(rd)} (weekly) '
              f'&middot; consecutive outages of one asset within 2 days are '
              f'merged</div>')
+    card = '<div class="card" style="min-height:0">'
     return (fresh + '<div class="prices-stack">'
-            + "".join(f'<div class="card">{s}</div>' for s in sections)
-            + f'<div class="card" style="min-height:0">'
-              f'{_attribution("AEMO High Impact Outages")}</div></div>')
+            + "".join(f'{card}{s}</div>' for s in sections)
+            + f'{card}{_attribution("AEMO High Impact Outages")}</div></div>')
 
 
 @app.get("/pasa/{sub}", response_class=HTMLResponse)
-def pasa_sub(sub: str, request: Request, region: str = "NEM") -> HTMLResponse:
+def pasa_sub(sub: str, request: Request, region: str = "NEM",
+             show: str = "changed", minmw: str = "100") -> HTMLResponse:
     label, subtabs = TAB_LOOKUP["pasa"]
     sub_labels = dict(subtabs)
     if sub not in sub_labels:
         return HTMLResponse(status_code=404, content="Not found")
     if region not in GENMIX_REGION_LIST:
         region = "NEM"
+    if show not in ("changed", "all"):
+        show = "changed"
+    if minmw not in {v for v, _ in PASA_MIN_MW_OPTIONS}:
+        minmw = "100"
 
-    subtab_html = _render_subtab_nav("pasa", subtabs, sub,
-                                     carry_params={"region": region}
-                                     if sub in ("now", "slippage", "extended", "transmission")
-                                     else None)
+    subtab_html = _render_subtab_nav(
+        "pasa", subtabs, sub,
+        carry_params={"region": region}
+        if sub in ("now", "slippage", "extended", "transmission") else None)
+    base = f"/pasa/{sub}"
+    region_pills = _render_region_pills(base, region, {}, regions=GENMIX_REGION_LIST) \
+        if sub in ("now", "slippage", "extended", "transmission") else ""
     if sub == "now":
-        selectors = _render_selector_strip(
-            _render_region_pills("/pasa/now", region, {},
-                                 regions=GENMIX_REGION_LIST))
-        content = selectors + _pasa_now_content(region)
-    elif sub == "transmission":
-        selectors = _render_selector_strip(
-            _render_region_pills("/pasa/transmission", region, {},
-                                 regions=GENMIX_REGION_LIST))
-        content = selectors + _pasa_transmission_content(region)
-    elif sub == "extended":
-        selectors = _render_selector_strip(
-            _render_region_pills("/pasa/extended", region, {},
-                                 regions=GENMIX_REGION_LIST))
-        content = selectors + _pasa_extended_content(region)
+        content = (_render_selector_strip(region_pills)
+                   + _pasa_now_content(region))
     elif sub == "slippage":
-        selectors = _render_selector_strip(
-            _render_region_pills("/pasa/slippage", region, {},
-                                 regions=GENMIX_REGION_LIST))
-        content = selectors + _pasa_slippage_content(region)
-    else:
-        content = ('<div class="placeholder"><p><strong>PASA &middot; '
-                   f'{sub_labels[sub]}</strong></p>'
-                   f'<p>{_PASA_PLACEHOLDERS[sub]}</p></div>')
+        region_pills = _render_region_pills(
+            base, region, {"show": show}, regions=GENMIX_REGION_LIST)
+        show_pills = _render_choice_pills(
+            "Show", [("changed", "Changed"), ("all", "All")], show, base,
+            {"region": region}, "show")
+        content = (_render_selector_strip(region_pills, show_pills)
+                   + _pasa_slippage_content(region, show))
+    elif sub == "extended":
+        region_pills = _render_region_pills(
+            base, region, {"minmw": minmw}, regions=GENMIX_REGION_LIST)
+        mw_pills = _render_choice_pills(
+            "Min MW", PASA_MIN_MW_OPTIONS, minmw, base,
+            {"region": region}, "minmw")
+        content = (_render_selector_strip(region_pills, mw_pills)
+                   + _pasa_extended_content(region, float(minmw)))
+    elif sub == "transmission":
+        content = (_render_selector_strip(region_pills)
+                   + _pasa_transmission_content(region))
     body = _render_tab_body(subtab_html, content)
     if _is_htmx(request):
         return HTMLResponse(body)
