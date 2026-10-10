@@ -7,8 +7,10 @@ Pure pandas: no FastAPI imports. Definitions:
   PASA availability is physical (includes recallable plant); MAX availability
   is 0 for units offline for economic reasons, so it is not used.
 - A unit is out when MW out >= threshold.
-- "Now" is the first ST-PASA interval at or after the current NEM time, else
-  the latest interval in the store.
+- "Now" is the first interval at or after the current NEM time, else the
+  latest interval in the store. Intervals come from PD-PASA (every 30 minutes,
+  run time to the end of the next trading day) spliced with ST-PASA for the
+  intervals after PD-PASA ends; ST-PASA alone starts at the next trading day.
 - Outage type and the longer return date come from MT-PASA unit state.
 """
 from __future__ import annotations
@@ -22,6 +24,7 @@ import pandas as pd
 
 DATA_DIR = Path("/Users/davidleitch/aemo_production/data")
 STPASA_PATH = DATA_DIR / "outages_stpasa.parquet"
+PDPASA_PATH = DATA_DIR / "outages_pdpasa.parquet"
 MTPASA_PATH = DATA_DIR / "outages_mtpasa.parquet"
 
 NEM_TZ = timezone(timedelta(hours=10))
@@ -66,6 +69,39 @@ def load_stpasa(path: Path | str | None = None) -> pd.DataFrame:
             "GENERATION_RECALL_PERIOD"]
     return _cached(f"st:{p}", lambda: _latest_stpasa(
         pd.read_parquet(p, columns=cols)))
+
+
+def load_pdpasa(path: Path | str | None = None) -> pd.DataFrame:
+    """Latest PD-PASA run (the collector keeps one run). Cached for 5 minutes."""
+    p = Path(path) if path else PDPASA_PATH
+    cols = ["RUN_DATETIME", "DUID", "INTERVAL_DATETIME",
+            "GENERATION_MAX_AVAILABILITY", "GENERATION_PASA_AVAILABILITY",
+            "GENERATION_RECALL_PERIOD"]
+    return _cached(f"pd:{p}", lambda: _latest_run(
+        pd.read_parquet(p, columns=cols)))
+
+
+def _latest_run(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df
+    return df[df["RUN_DATETIME"] == df["RUN_DATETIME"].max()]
+
+
+def combine_pasa(pd_df: pd.DataFrame, st_df: pd.DataFrame) -> pd.DataFrame:
+    """PD-PASA rows of its latest run, plus ST-PASA rows (latest run per DUID
+    and interval) for intervals after PD-PASA's last. Adds SOURCE ('PD'/'ST').
+    ST-PASA rows inside PD-PASA's range are dropped, so downstream dedup keeps
+    one row per (DUID, interval) and PD values win."""
+    st = _latest_stpasa(st_df) if len(st_df) else st_df.copy()
+    pdl = _latest_run(pd_df) if len(pd_df) else pd_df
+    if pdl.empty:
+        return st.assign(SOURCE="ST")
+    pd_end = pdl["INTERVAL_DATETIME"].max()
+    if st.empty:
+        return pdl.assign(SOURCE="PD").reset_index(drop=True)
+    st = st[st["INTERVAL_DATETIME"] > pd_end]
+    return pd.concat([pdl.assign(SOURCE="PD"), st.assign(SOURCE="ST")],
+                     ignore_index=True)
 
 
 def load_mtpasa(path: Path | str | None = None) -> pd.DataFrame:
@@ -487,3 +523,50 @@ def weekly_mw_out(days: pd.DataFrame, units: pd.DataFrame,
     out = daily.groupby(wk).mean()
     out.index = idx[::7][:len(out)]
     return out
+
+
+# ---------------------------------------------------------------------------
+# Supply impact: scheduled outages against demand and price
+# ---------------------------------------------------------------------------
+
+REGIONS = ("NSW1", "QLD1", "VIC1", "SA1", "TAS1")
+DISPLAY_FUELS = ("Coal", "Gas", "Hydro")
+
+
+def supply_impact(cur: pd.DataFrame, units: pd.DataFrame,
+                  demand_by_region: dict, price_by_region: dict) -> pd.DataFrame:
+    """One row per region plus 'NEM'.
+
+    cur: current_outages() output (display fuels). units: in-scope scheduled
+    units (raw fuel labels; coal capacity is fuel == 'Coal'). demand and price
+    are {region: value}. NEM demand is the sum over regions; NEM price is the
+    demand-weighted mean over regions that have both. coal_pct is NaN where a
+    region has no coal capacity."""
+    rows = {}
+    for r in REGIONS:
+        c = cur[cur["region"] == r]
+        coal_cap = float(units.loc[(units["region"] == r)
+                                   & (units["fuel"] == "Coal"),
+                                   "capacity_mw"].astype(float).sum())
+        row = {"coal_capacity_mw": coal_cap,
+               "coal_out_mw": float(c.loc[c["fuel"] == "Coal", "mw_out"].sum()),
+               "sched_out_mw": float(c["mw_out"].sum()),
+               "demand_mw": float(demand_by_region.get(r, np.nan)),
+               "price": float(price_by_region.get(r, np.nan))}
+        for f in DISPLAY_FUELS:
+            row[f"out_{f}"] = float(c.loc[c["fuel"] == f, "mw_out"].sum())
+        rows[r] = row
+    df = pd.DataFrame.from_dict(rows, orient="index")
+
+    both = df[df["demand_mw"].notna() & df["price"].notna()]
+    nem = df.drop(columns=["demand_mw", "price"]).sum()
+    nem["demand_mw"] = (df["demand_mw"].sum(min_count=1))
+    nem["price"] = (float((both["price"] * both["demand_mw"]).sum()
+                          / both["demand_mw"].sum())
+                    if len(both) and both["demand_mw"].sum() > 0 else np.nan)
+    df.loc["NEM"] = nem
+    cap = df["coal_capacity_mw"].where(df["coal_capacity_mw"] > 0)
+    df["coal_pct"] = df["coal_out_mw"] / cap * 100.0
+    dem = df["demand_mw"].where(df["demand_mw"] > 0)
+    df["out_pct_demand"] = df["sched_out_mw"] / dem * 100.0
+    return df
