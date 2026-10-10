@@ -21,9 +21,35 @@ def test_pasa_redirects_to_now(client):
 def test_pasa_now_renders(client):
     r = client.get("/pasa/now")
     assert r.status_code == 200
-    for text in ("Now &amp; 7 days", "Units out now", "ST-PASA run",
-                 "MW out over the next 7 days", "Data: AEMO ST-PASA, MT-PASA"):
+    for text in ("Now &amp; 7 days", "Units out now", "PD-PASA run", "ST-PASA run",
+                 "MW out, now to 7 days",
+                 "Data: AEMO PD-PASA, ST-PASA, MT-PASA"):
         assert text in r.text or text.replace("&amp;", "&") in r.text
+    assert "over the next 7 days" not in r.text
+
+
+def test_pasa_now_region_filters_units_table(client):
+    r = client.get("/pasa/now?region=QLD1")
+    assert r.status_code == 200
+    units_tbl = r.text[r.text.index("Units out now"):]
+    assert ">NSW</td>" not in units_tbl and ">VIC</td>" not in units_tbl
+    assert ">QLD</td>" in units_tbl
+    # the NEM-wide table above still lists every region
+    assert 'data-supply-row="NSW"' in r.text
+
+
+def test_pasa_now_supply_strip(client):
+    r = client.get("/pasa/now")
+    for text in ("Supply impact", "Coal out", "All scheduled plant out",
+                 "Operational demand", "Out as % of demand", "Spot price"):
+        assert text in r.text
+    # one table row per region plus NEM
+    for reg in ("NSW", "QLD", "VIC", "SA", "TAS", "NEM"):
+        assert f'data-supply-row="{reg}"' in r.text
+    # selected region is tinted
+    q = client.get("/pasa/now?region=QLD1").text
+    assert 'data-supply-row="QLD" data-selected="1"' in q
+    assert 'data-supply-row="NSW" data-selected="1"' not in q
 
 
 @pytest.mark.parametrize("region", ["NSW1", "QLD1", "VIC1", "SA1", "TAS1"])

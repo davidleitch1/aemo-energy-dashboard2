@@ -8941,7 +8941,7 @@ def _build_market_notices() -> HTMLResponse:
 
 
 # ============================================================================
-# Generator outages  (ST-PASA / MT-PASA; logic in pasa_data.py)
+# Generator outages  (PD-PASA / ST-PASA / MT-PASA; logic in pasa_data.py)
 # ============================================================================
 
 # Match production palette in pasa/pasa_tab.py REGION_COLORS for the segments.
@@ -8966,10 +8966,16 @@ def _pasa_units() -> pd.DataFrame:
 
 
 def _get_outage_data() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame] | None:
-    """(ST-PASA, units without mothballed/retired, MT-PASA or empty,
-    mothballed units); None if the store is unreadable."""
+    """(PD-PASA spliced with ST-PASA, units without mothballed/retired,
+    MT-PASA or empty, mothballed units); None if the store is unreadable.
+    The 'now' interval comes from PD-PASA; ST-PASA covers the intervals after
+    it. Without a PD-PASA file the frame is ST-PASA alone."""
     try:
-        st = pasa_data.load_stpasa()
+        try:
+            pdf = pasa_data.load_pdpasa()
+        except Exception:
+            pdf = pd.DataFrame()
+        st = pasa_data.combine_pasa(pdf, pasa_data.load_stpasa())
         units = _pasa_units()
         try:
             mt = pasa_data.load_mtpasa()
@@ -9091,7 +9097,7 @@ def _fmt_dt(ts) -> str:
 
 def _pasa_timeseries_chart(ts: pd.DataFrame, region: str) -> str:
     if ts.empty or float(ts.to_numpy().sum()) == 0:
-        return (_card_h3("MW out over the next 7 days")
+        return (_card_h3("MW out, now to 7 days")
                 + f'<div style="color:{MUTED};padding:10px">'
                   f'No units above {PASA_THRESHOLD_MW:.0f} MW out.</div>')
     fig = go.Figure()
@@ -9113,7 +9119,7 @@ def _pasa_timeseries_chart(ts: pd.DataFrame, region: str) -> str:
         yaxis=dict(gridcolor=BORDER, zeroline=False, ticksuffix=" MW",
                    tickfont=dict(size=10, color=MUTED), rangemode="tozero"),
     )
-    title = ("MW out over the next 7 days &middot; "
+    title = ("MW out, now to 7 days &middot; "
              + ("NEM" if region == "NEM" else region[:-1]))
     resp = _wrap_plot_with_extras("pasa-ts", title, fig)
     return resp.body.decode()
@@ -9171,6 +9177,101 @@ def _pasa_table(tbl: pd.DataFrame) -> str:
             + '</table></div>')
 
 
+def _supply_now() -> tuple[dict, dict, pd.Timestamp | None, pd.Timestamp | None]:
+    """(demand by region, price by region, demand interval, price interval):
+    latest operational demand (demand30, 30-min) and latest spot price
+    (prices5, 5-min) per region. Empty dicts if the read fails."""
+    since = (pasa_data.nem_now() - pd.Timedelta(hours=3)).to_pydatetime()
+    regs = "('NSW1','QLD1','VIC1','SA1','TAS1')"
+    try:
+        d = q(f"SELECT settlementdate, regionid, demand FROM demand30 "
+              f"WHERE settlementdate >= ? AND regionid IN {regs}", [since])
+        p = q(f"SELECT settlementdate, regionid, rrp FROM prices5 "
+              f"WHERE settlementdate >= ? AND regionid IN {regs}", [since])
+    except Exception:
+        return {}, {}, None, None
+    d_ts = d["settlementdate"].max() if len(d) else None
+    p_ts = p["settlementdate"].max() if len(p) else None
+    dem = (d[d["settlementdate"] == d_ts].set_index("regionid")["demand"].to_dict()
+           if d_ts is not None else {})
+    pri = (p[p["settlementdate"] == p_ts].set_index("regionid")["rrp"].to_dict()
+           if p_ts is not None else {})
+    return dem, pri, d_ts, p_ts
+
+
+def _pasa_supply_strip(si: pd.DataFrame, region: str, d_ts, p_ts) -> str:
+    """KPI figures for the selected region and a per-region table. `si` is
+    pasa_data.supply_impact()."""
+    sel = region if region in si.index else "NEM"
+    k = si.loc[sel]
+    label = "NEM" if sel == "NEM" else REGION_DISPLAY.get(sel, sel)
+
+    def num(v, fmt="{:,.0f}", suffix=""):
+        return "&ndash;" if pd.isna(v) else fmt.format(v) + suffix
+
+    coal = (f'{k["coal_out_mw"]:,.0f} MW of {k["coal_capacity_mw"]:,.0f} MW '
+            f'({k["coal_pct"]:.0f}%)' if k["coal_capacity_mw"] > 0
+            else "No coal capacity")
+    split = " &middot; ".join(
+        f'{f} {k[f"out_{f}"]:,.0f}' for f in pasa_data.DISPLAY_FUELS)
+    price_lbl = "Spot price now" + (" (demand-weighted)" if sel == "NEM" else "")
+    d_lbl = f' &middot; {d_ts:%H:%M}' if d_ts is not None else ""
+    p_lbl = f' &middot; {p_ts:%H:%M}' if p_ts is not None else ""
+
+    def kpi(title, big, small=""):
+        sm = (f'<div style="color:{MUTED};font-size:11px;margin-top:2px">'
+              f'{small}</div>' if small else "")
+        return (f'<div style="flex:1 1 170px;padding:8px 12px">'
+                f'<div style="color:{MUTED};font-size:11px;text-transform:'
+                f'uppercase;letter-spacing:0.4px">{title}</div>'
+                f'<div style="color:{INK};font-size:17px;font-weight:600;'
+                f'margin-top:2px">{big}</div>{sm}</div>')
+
+    kpis = (kpi("Coal out", coal)
+            + kpi("All scheduled plant out", num(k["sched_out_mw"], suffix=" MW"),
+                  split)
+            + kpi("Operational demand now", num(k["demand_mw"], suffix=" MW"),
+                  f'30-min interval{d_lbl}')
+            + kpi("Out as % of demand", num(k["out_pct_demand"], "{:.1f}", "%"))
+            + kpi(price_lbl, num(k["price"], "{:,.0f}", " $/MWh"),
+                  f'5-min interval{p_lbl}'))
+
+    heads = ["Region", "Coal capacity MW", "Coal out MW", "Coal % out",
+             "Scheduled out MW", "Demand MW", "Price $/MWh"]
+    header = "".join(
+        f'<th style="text-align:{"left" if i == 0 else "right"};'
+        f'padding:6px 12px">{h}</th>' for i, h in enumerate(heads))
+    rows = []
+    for code in list(si.index):
+        r = si.loc[code]
+        name = "NEM" if code == "NEM" else REGION_DISPLAY.get(code, code)
+        selected = code == sel
+        bg = "background:#dde8ef;" if selected else ""
+        top = f"border-top:2px solid {BORDER};" if code == "NEM" else \
+              f"border-top:1px solid {BORDER};"
+        weight = "600" if (selected or code == "NEM") else "400"
+        sel_attr = ' data-selected="1"' if selected else ""
+        cells = [name,
+                 num(r["coal_capacity_mw"]) if r["coal_capacity_mw"] > 0 else "&ndash;",
+                 num(r["coal_out_mw"]) if r["coal_capacity_mw"] > 0 else "&ndash;",
+                 num(r["coal_pct"], "{:.0f}", "%"),
+                 num(r["sched_out_mw"]), num(r["demand_mw"]),
+                 num(r["price"])]
+        tds = "".join(
+            f'<td style="text-align:{"left" if i == 0 else "right"};'
+            f'padding:6px 12px">{c}</td>' for i, c in enumerate(cells))
+        rows.append(f'<tr data-supply-row="{name}"{sel_attr} '
+                    f'style="{bg}{top}font-weight:{weight}">{tds}</tr>')
+    table = ('<div style="overflow-x:auto"><table style="width:100%;'
+             'border-collapse:collapse;font-size:13px">'
+             f'<thead style="background:{BORDER};color:{INK};font-size:11px;'
+             f'text-transform:uppercase;letter-spacing:0.4px"><tr>{header}</tr>'
+             f'</thead><tbody>{"".join(rows)}</tbody></table></div>')
+    return (_card_h3(f"Supply impact &middot; {label}")
+            + f'<div style="display:flex;flex-wrap:wrap">{kpis}</div>'
+            + table)
+
+
 def _pasa_now_content(region: str) -> str:
     data = _get_outage_data()
     if data is None:
@@ -9179,15 +9280,33 @@ def _pasa_now_content(region: str) -> str:
                 + f'<div style="color:{MUTED};padding:10px">'
                   'PASA data unavailable</div></div></div>')
     st, units, mt, moth = data
-    run = st["RUN_DATETIME"].max()
     mt_pub = mt["PUBLISH_DATETIME"].max() if len(mt) else pd.NaT
+    pd_rows = st[st["SOURCE"] == "PD"]
+    st_rows = st[st["SOURCE"] == "ST"]
+    if len(pd_rows):
+        pd_txt = (f'PD-PASA run {_fmt_dt(pd_rows["RUN_DATETIME"].max())} '
+                  f'(to {_fmt_dt(pd_rows["INTERVAL_DATETIME"].max())})')
+    else:
+        pd_txt = "PD-PASA run n/a"
+    st_run = st_rows["RUN_DATETIME"].max() if len(st_rows) else pd.NaT
     fresh = (f'<div style="color:{MUTED};font-size:12px;padding:8px 24px 0">'
-             f'ST-PASA run {_fmt_dt(run)} &middot; MT-PASA published '
+             f'{pd_txt} &middot; ST-PASA run '
+             f'{_fmt_dt(st_run) if pd.notna(st_run) else "n/a"} &middot; '
+             f'MT-PASA published '
              f'{_fmt_dt(mt_pub) if pd.notna(mt_pub) else "n/a"} '
              f'&middot; times AEST &middot; units out = '
              f'&ge;{PASA_THRESHOLD_MW:.0f} MW below capacity</div>')
 
-    cur = pasa_data.current_outages(st, units, PASA_THRESHOLD_MW)
+    # Supply strip uses the whole NEM; the bars and units table follow the
+    # selected region.
+    cur_nem = pasa_data.current_outages(st, units, PASA_THRESHOLD_MW)
+    dem, pri, d_ts, p_ts = _supply_now()
+    si = pasa_data.supply_impact(cur_nem, units, dem, pri)
+    strip = _pasa_supply_strip(si, region, d_ts, p_ts)
+
+    units_r = units if region == "NEM" else units[units["region"] == region]
+    cur = (cur_nem if region == "NEM"
+           else pasa_data.current_outages(st, units_r, PASA_THRESHOLD_MW))
     if cur.empty:
         bars = (_card_h3("Generator outages")
                 + f'<div style="color:{MUTED};padding:10px">No outages above '
@@ -9197,15 +9316,16 @@ def _pasa_now_content(region: str) -> str:
 
     ts = pasa_data.outage_timeseries(st, units, PASA_THRESHOLD_MW,
                                      region=None if region == "NEM" else region)
-    tbl = pasa_data.outage_table(st, units, mt, PASA_THRESHOLD_MW)
+    tbl = pasa_data.outage_table(st, units_r, mt, PASA_THRESHOLD_MW)
     note = pasa_data.mothballed_note(moth)
     moth_note = (f'<div style="color:{MUTED};font-size:11px;margin:6px 14px 0">'
                  f'{html_lib.escape(note)}</div>' if note else "")
     return (fresh + '<div class="prices-stack">'
+            f'<div class="card">{strip}</div>'
             f'<div class="card">{bars}</div>'
             f'<div class="card">{_pasa_timeseries_chart(ts, region)}</div>'
             f'<div class="card">{_pasa_table(tbl)}{moth_note}'
-            f'{_attribution("AEMO ST-PASA, MT-PASA")}</div>'
+            f'{_attribution("AEMO PD-PASA, ST-PASA, MT-PASA")}</div>'
             '</div>')
 
 
