@@ -13,9 +13,25 @@ Covers the NEM dashboard (FastAPI/HTMX app on .71) and the AEMO data collector. 
 - **Generation mix subtabs:** Yr on yr, Stack, Compare regions, Time of day, Trends, Transmission.
 - **Futures data:** `~/aemo_production/data/futures.csv`, weekly Sunday 00:00 rows, runs to 29 Sep 2026. Update by dropping a NEM-Review export in `~/futures_updates/` and running `~/aemo_production/data/update_futures.py` (merge: union of dates and columns, new wins). The Monday launchd job `com.aemo.update-futures` has not run since 4 May 2026.
 - **duid_mapping:** audited 8 Oct against AEMO sources; weekly refresh (cron Sun 05:10) fills gaps and emails conflicts — first live run 11 Oct. Pump loads carry fuel NULL and are out of all generation totals. **Open:** 14 refresh conflicts to review; stale `tests/api` fixture DB.
-- **PASA tab:** rebuilt 10 Oct with four subtabs (Now & 7 days, Extended outages, Return-date changes, Transmission); logic in `web/pasa_data.py` and `web/pasa_transmission.py`; the Today outage tile uses the same code and `duid_mapping`. Feeds come from the outage monitor (tmux window 7, `~/aemo_production/outage_monitor`, local git only); see SYSTEM.md "PASA data".
+- **PASA tab:** "now" comes from PD-PASA (`outages_pdpasa.parquet`, every 30 min) spliced with ST-PASA after PD's horizon; Now has a supply-impact strip (coal % out, MW out vs demand, price by region). Rebuilt 10 Oct with four subtabs (Now & 7 days, Extended outages, Return-date changes, Transmission); logic in `web/pasa_data.py` and `web/pasa_transmission.py`; the Today outage tile uses the same code and `duid_mapping`. Feeds come from the outage monitor (tmux window 7, `~/aemo_production/outage_monitor`, local git only); see SYSTEM.md "PASA data".
 - **Open:** the futures launchd job is dead; not investigated (it only merges a file dropped by hand, so manual runs lose nothing).
 - **Open:** whether to relabel Batteries-tab Util % as cycles a day (it is discharge ÷ storage per day × 100).
+
+## 2026-10-10 (evening) — PASA Now: live availability, region filter, supply-impact strip
+
+**Asked.** The Now subtab showed 7,039 MW of coal out, which looked high: test it against actual generation. Then: fix "now", fix the region selector, and show the % of coal out in the selected region, to judge how far outages affect supply and price.
+
+**Found.**
+- SCADA agreed with the tab. All 10 coal units at 0 MW PASA availability generated 0 MW over 24 h, and the 4 partly derated units generated at or below their declared availability. Coal fleet 21,255 MW, output 12,616 MW at 18:30. GSTONE1 was at 0 MW but declared available (economic shutdown, correctly not counted).
+- ST-PASA starts at the next trading day, so the "now" interval came from the previous day's run (about 30 h old). ER01 showed 66 MW available while at 0 MW.
+- On Now, only the 7-day chart applied the region; the bars and units table were always NEM-wide.
+- Live unit availability exists in `PDPASA_DUIDAvailability` on NEMweb Current: same columns as ST-PASA, half-hourly, run every 30 min, covering from now to about 04:00 two days ahead. DispatchIS and P5MIN carry no unit rows; `bids.duckdb` `bid_volume5.pasaavailability` lags (next-day bid file).
+
+**Produced.** Outage monitor 3ba6e04: `collectors/pdpasa.py` keeps the latest run only in `outages_pdpasa.parquet` (scheduled every 0.48 h; not fed to the change detector). Dashboard da86780, 9f5d003: `pasa_data.combine_pasa` (PD rows, then ST rows after PD's last interval) feeds the Today tile and Now; region filter on the bars and table; `supply_impact()` strip with per-region coal capacity, coal out, coal % out, scheduled out, demand (`demand30`, latest 30-min) and price (`prices5`, NEM demand-weighted). 130 tests pass. At 18:55 AEST: coal out 7,105 of 21,255 MW (33%); NSW 4,625 of 8,305 MW (56%); scheduled out 10,293 MW, 45% of operational demand; NEM price 131 $/MWh (NSW 166).
+
+**Decided.** Coal % out uses the same 50 MW threshold as the bars, and the denominator excludes mothballed/retired units. Demand is 30-min operational demand because there is no 5-min demand table.
+
+**Open.** "Out as % of demand" sets scheduled MW out against demand, not against required reserve. A price-vs-%-coal-out history needs a stored PD/ST-PASA series, which is not kept (latest run only).
 
 ## 2026-10-10 — PASA tab rebuilt; MT-PASA collector fixed and history backfilled
 

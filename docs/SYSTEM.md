@@ -88,6 +88,7 @@ Other hand-maintained data: `~/aemo_production/data/futures.csv` (merge NEM-Revi
 
 **PASA data (outage monitor, tmux window 7).** Separate from the DuckDB pipeline; writes parquet in `~/aemo_production/data/`:
 - `outages_stpasa.parquet` — latest ST-PASA run per (DUID, half-hour), about 7 days of runs kept.
+- `outages_pdpasa.parquet` — PD-PASA DUID availability, latest run only, refreshed every 30 min; supplies the "now" interval (ST-PASA starts at the next trading day).
 - `outages_mtpasa.parquet` — latest MT-PASA publish per (DUID, DAY), days from today on. AEMO publishes about 4 times a day; a publish starts about 2 days after its publish date.
 - `outages_mtpasa_history.parquet` — MT-PASA revision history, change-compressed: one row per (DUID, DAY) only when availability or unit state changes. Rebuild a view at any publish with `outage_monitor/mtpasa_history.py:mtpasa_asof`. Backfilled from the last publish of each day since 1 Oct 2025 (`outage_monitor/scripts/backfill_mtpasa_history.py`; NEMweb Current keeps every MT-PASA file since Aug 2020).
 - `outages_high_impact.parquet` — AEMO High Impact Outages (transmission), weekly.
