@@ -4,18 +4,46 @@ Covers the NEM dashboard (FastAPI/HTMX app on .71) and the AEMO data collector. 
 
 **Protocol.** Start any dashboard or collector session by reading `docs/SYSTEM.md` (how the system runs now), then the state block and the last two entries here. When a session changes how something runs, rewrite the affected part of SYSTEM.md. End it by appending an entry at the top of the log and rewriting the state block. Each entry is a handoff: what was asked, what was produced, what was decided and why, what was corrected and must not be undone, what is open.
 
-## State now (10 Oct 2026)
+## State now (13 Oct 2026)
 
 - **Dashboard code:** `~/aemo-redesign` on .71 (davidleitch@192.168.68.71), branch `web-dashboard-redesign`, remote `davidleitch1/aemo-energy-dashboard2`. The whole app is one file, `src/aemo_dashboard/web/app.py` (~9,000 lines). Tests for the web app are in `tests/web/`; run with `/Users/davidleitch/aemo_production/aemo-energy-dashboard2/.venv/bin/python -m pytest tests/web -q` from the repo root.
 - **Live service:** tmux `services:1`, `uvicorn app:app --port 5008 --workers 4`, run from `src/aemo_dashboard/web`. No `--reload`, so code changes need a restart of that window. The launch line exists in both `~/tmux_files/start_services.sh` (boot) and `~/tmux_files/restart_dashboards.sh` (nightly 00:15); a change to how it launches must go in both, plus the process signature in `monitor_services.py`.
 - **Testing a change before deploy:** run a second uvicorn from the same directory on port 5099, check it at `http://192.168.68.71:5099/...`, then kill it and restart `services:1`.
 - **Collector:** `~/aemo_production/aemo-data-updater` on .71, tmux `services:0`.
+- **Integrity check:** `scripts/weekly_integrity.py` now runs daily at 04:17 over all 12 base tables (5-minute: prices5, scada5, transmission5, bdu5, curtailment_regional5, curtailment5, curtailment_duid5; 30-minute: prices30, scada30, transmission30, demand30, rooftop30; plus `demand30.demand_less_snsg`). It takes the DuckDB lock between collector cycles and does not stop the collector. Sunday emails the full report; other days email only if something was missing. 175 unreachable historic intervals are in `~/aemo_production/logs/integrity_known_gaps.json`. Survey time is NEM time (UTC+10): the host clock is on daylight saving. Detail in SYSTEM.md "Data integrity".
 - **Generation mix subtabs:** Yr on yr, Stack, Compare regions, Time of day, Trends, Transmission.
 - **Futures data:** `~/aemo_production/data/futures.csv`, weekly Sunday 00:00 rows, runs to 29 Sep 2026. Update by dropping a NEM-Review export in `~/futures_updates/` and running `~/aemo_production/data/update_futures.py` (merge: union of dates and columns, new wins). The Monday launchd job `com.aemo.update-futures` has not run since 4 May 2026.
 - **duid_mapping:** audited 8 Oct against AEMO sources; weekly refresh (cron Sun 05:10) fills gaps and emails conflicts — first live run 11 Oct. Pump loads carry fuel NULL and are out of all generation totals. **Open:** 14 refresh conflicts to review; stale `tests/api` fixture DB.
 - **PASA tab:** "now" comes from PD-PASA (`outages_pdpasa.parquet`, every 30 min) spliced with ST-PASA after PD's horizon; Now has a supply-impact strip (coal % out, MW out vs demand, price by region). Rebuilt 10 Oct with four subtabs (Now & 7 days, Extended outages, Return-date changes, Transmission); logic in `web/pasa_data.py` and `web/pasa_transmission.py`; the Today outage tile uses the same code and `duid_mapping`. Feeds come from the outage monitor (tmux window 7, `~/aemo_production/outage_monitor`, local git only); see SYSTEM.md "PASA data".
 - **Open:** the futures launchd job is dead; not investigated (it only merges a file dropped by hand, so manual runs lose nothing).
 - **Open:** whether to relabel Batteries-tab Util % as cycles a day (it is discharge ÷ storage per day × 100).
+
+## 2026-10-13 (afternoon) — integrity check extended to all 12 base tables, daily, no collector stop
+
+**Asked.** The outage at 01:05-07:10 left holes in bdu5, demand30, rooftop30 and curtailment_regional5 that the weekly check did not survey, and two bugs in its collector stop/start. Extend survey and repair to every collector-written table, fix the lock handling, run it daily.
+
+**Found.**
+- Production held 458 bdu5 and 512 curtailment_regional5 missing intervals, nearly all isolated singles and short runs from Jan-Oct 2026 (Feb-Mar worst), none of them surveyed before. rooftop30 had 178 (172 from Aug-2024 to Aug-2025, before nemweb ARCHIVE starts), demand_less_snsg had 20 NULL rows from 11 Oct, and scada30 had 2 absent labels.
+- `pgrep -f unified_collector_duckdb` matched the ssh shell that ran the script, and `stop_collector(150)` is shorter than one collector cycle. The start command typed after a failed stop queues in the collector's terminal.
+- The collector closes its DuckDB connection for the 4.5 min sleep and retries a lock conflict for 30 s (`_open_conn`), so stopping it is unnecessary.
+- The host clock follows Sydney daylight saving (AEDT, UTC+11) while every settlementdate is AEST (UTC+10). The old survey compared `datetime.now()` to NEM timestamps, which made each table look an hour behind from October to April. The new survey uses `nem_now()`; `tests/test_gap_repair.py` was changed to match.
+- Operational_Demand_Less_SNSG CURRENT holds every file since 30-Jan-2025; Next_Day_Dispatch CURRENT holds one daily zip back to Sep-2025 (the monthly ARCHIVE zips are 230 MB); ROOFTOP_PV MEASUREMENT files are stamped 30 minutes after the interval they hold.
+
+**Produced.** Repo commit 14b2dde (`aemo-data-updater`): per-table config in `gap_repair.py`; survey of all 12 tables plus the SNSG column; repair from CURRENT/ARCHIVE (MMSDM for prices5/scada5 only); anti-join inserts; `acquire_primary()` replaces stop/start; precise collector match and a 600 s stop wait kept behind `--stop-collector`; known-unreachable ledger; email policy (Sunday always, other days only when something was missing); 124 offline tests in `tests/test_integrity_all_tables.py`. Live parsers were checked against production rows for the new feeds through both CURRENT and ARCHIVE (0 value mismatches). First production run inserted 2,245 bdu5, 2,515 curtailment_regional5, 30 rooftop30 and 516 scada30 rows and filled 20 demand_less_snsg; the collector was not touched. Crontab now `17 4 * * *` (backup `~/aemo_production/logs/crontab.bak_20261013`).
+
+**Decided.**
+- Lock by waiting for the collector's gap, not by stopping it: no keystrokes into its terminal, and the insert takes seconds against a 30 s tolerance. The replica-copy check (replica mtime equals primary mtime, no `.tmp`) stops a write landing inside the collector's close-then-copy window.
+- Gaps older than 4 days that survive a repair go to the ledger (daily runs ignore them, Sunday retries them) instead of capping the survey window: the full-history survey takes under a second.
+- curtailment5/curtailment_duid5 are repaired from Next_Day_Dispatch CURRENT only. The collector's parsers fuse download and parse, so `_parse_nextday` mirrors them line for line and a test runs both on one synthetic file.
+- prices30/scada30/transmission30 are not downloaded; a (label, key) row is replaced only when a 5-minute row for it was newly inserted.
+
+**Corrected — do not undo.** Survey time is NEM time. 30-minute labels are interval-end. Inserts are anti-joins; never reintroduce the DELETE-range-then-INSERT of the legacy backfill functions. The SNSG NULL check starts at the first non-NULL value and ignores the newest 3 h (the collector fills the column a cycle later).
+
+**Open.**
+- The first Sunday run (18 Oct) is the first full retry of the ledger.
+- 8 failures and 4 errors already present in `tests/` (alerts SMTP sink, nemweb URL checks, `test_collectors.py` fixtures) are unrelated and untouched.
+- The initial survey reads the replica, which can be up to one collector cycle stale after a repair; the after-survey reads the primary under the lock.
+- `repair_after_outage.py`, `recalc_30min_duckdb.py` and the one-off scripts in `~/aemo_production` still use the shifted 30-minute bucket and DELETE-range inserts; none is scheduled.
 
 ## 2026-10-10 (evening) — PASA Now: live availability, region filter, supply-impact strip
 

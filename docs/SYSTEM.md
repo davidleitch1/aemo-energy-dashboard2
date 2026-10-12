@@ -10,7 +10,7 @@ Everything runs on daves_mini (.71, `ssh davidleitch@192.168.68.71`), in tmux se
 |---|---|---|
 | `~/aemo-redesign` (branch `web-dashboard-redesign`) | `davidleitch1/aemo-energy-dashboard2` | `src/aemo_dashboard/web/app.py` only — the live web app file |
 | `~/aemo_production/aemo-energy-dashboard2` (branch `main`) | same repo, different branch | every `aemo_dashboard.*` module the web app imports (evening_peak, penetration, generation_comparison, shared/...), the iOS API, the standalone gauge, spot prices |
-| `~/aemo_production/aemo-data-updater` | own repo | the collector, alert plugins, gap repair, weekly integrity, duid_mapping refresh |
+| `~/aemo_production/aemo-data-updater` | own repo | the collector, alert plugins, gap repair, daily integrity check, duid_mapping refresh |
 | `~/aemo_production/outage_monitor` (+ entry `~/aemo_production/run_outage_monitor.py`) | local git only, no remote (since 10 Oct 2026) | PASA / High Impact Outages collector feeding the PASA tab |
 
 **Import trap.** The dashboard2 venv has `aemo_dashboard` installed editable from `aemo-energy-dashboard2/src`, so `app.py` in aemo-redesign imports its helper modules from the *other* checkout. A fix to a shared module goes in `aemo-energy-dashboard2`; a fix to `app.py` goes in `aemo-redesign`. `shared/fuel_categories.py` exists in both and must be kept identical.
@@ -81,10 +81,16 @@ Other hand-maintained data: `~/aemo_production/data/futures.csv` (merge NEM-Revi
 | every 30 min | `itk-infrastructure/clients/ops/run_job.sh health` |
 | 11:00 daily | STTM gas prices |
 | 12:00 / 19:00 or 19:30 | midday / evening reports; `itk_mail send_daily.py` sends them 5 min later |
+| 04:17 daily | `weekly_integrity.py` (despite the name: daily survey + repair of all 12 base tables; Sunday emails the full report and retries the known-unreachable ledger, other days email only if something was missing; see "Data integrity") |
 | Sun 03:00 | IEA dashboard backup |
-| Sun 04:17 | `weekly_integrity.py` (gap survey + repair, email) |
 | Sun 05:10 | `refresh_duid_mapping.py` (email) |
 | Mon 06:40, 09:30, 18:00 | intl_energy collection |
+
+**Data integrity (`aemo-data-updater/scripts/weekly_integrity.py`, `gap_repair.py`; tests `tests/test_integrity_all_tables.py`).** Surveys every collector-written base table from its own first row to `now - lag` by absolute enumeration of expected intervals (never LAG between rows, never bounded by MAX): prices5, scada5, transmission5, bdu5, curtailment_regional5 (lag 20 min); curtailment5 and curtailment_duid5 (lag 30 h, they come from Next_Day_Dispatch, published about 04:30 the next day); prices30, scada30, transmission30 (45 min); demand30 (90 min); rooftop30 (120 min); plus `demand30.demand_less_snsg` NULLs (from 30-Jan-2025, older than 3 h). "Now" is NEM time (UTC+10), not the host clock, which follows Sydney daylight saving. Tables on the five-region pattern also count a timestamp as a gap when a main region is absent.
+Repair sources: DispatchIS (prices5, transmission5, bdu5, curtailment_regional5) and Dispatch_SCADA (scada5) from CURRENT, then daily ARCHIVE zips (about 12 months), then MMSDM for prices5/scada5 only; demand30 from Operational_Demand CURRENT (about 60 days) then weekly ARCHIVE zips; rooftop30 from ROOFTOP_PV MEASUREMENT CURRENT (about 14 days) then weekly ARCHIVE zips (from Sep-2025; the file stamped T+30 min holds interval T); demand_less_snsg from Operational_Demand_Less_SNSG CURRENT (every file since 30-Jan-2025); curtailment5 and curtailment_duid5 from the Next_Day_Dispatch daily zip in CURRENT (back to Sep-2025; the monthly ARCHIVE zips are 230 MB and not used). prices30/scada30/transmission30 are never downloaded: labels are rebuilt from the 5-minute table with the end-labelled bucket (label-30 min, label], only where all six intervals exist.
+Writes are anti-join inserts on each table's key, so an existing row is never deleted or changed; the one UPDATE fills a NULL `demand_less_snsg`. Derived rows are replaced only for a (label, key) that received a newly inserted 5-minute row.
+Locking: the script does not stop the collector. It waits for the gap between collector cycles (the collector closes its connection for the 4.5 min sleep and retries a lock conflict for about 30 s), checks the replica copy is not mid-flight, takes the primary, inserts, re-surveys the primary under the same lock and releases. `--stop-collector` keeps the older Ctrl-C-via-tmux route, with a precise process match and a 600 s wait, and never types the start command into a collector that failed to stop.
+Known-unreachable ledger: `~/aemo_production/logs/integrity_known_gaps.json` holds gaps older than 4 days that survived a repair (172 rooftop30 intervals from Aug-2024 to Aug-2025, before nemweb ARCHIVE starts, plus single scada30/transmission30/demand30 labels from 2024). Daily runs exclude them; Sunday runs retry them. Gaps under 4 days old sit in the CURRENT/ARCHIVE seam and are retried next run.
 
 **PASA data (outage monitor, tmux window 7).** Separate from the DuckDB pipeline; writes parquet in `~/aemo_production/data/`:
 - `outages_stpasa.parquet` — latest ST-PASA run per (DUID, half-hour), about 7 days of runs kept.
