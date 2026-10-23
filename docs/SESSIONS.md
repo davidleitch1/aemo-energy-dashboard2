@@ -4,7 +4,7 @@ Covers the NEM dashboard (FastAPI/HTMX app on .71) and the AEMO data collector. 
 
 **Protocol.** Start any dashboard or collector session by reading `docs/SYSTEM.md` (how the system runs now), then the state block and the last two entries here. When a session changes how something runs, rewrite the affected part of SYSTEM.md. End it by appending an entry at the top of the log and rewriting the state block. Each entry is a handoff: what was asked, what was produced, what was decided and why, what was corrected and must not be undone, what is open.
 
-## State now (13 Oct 2026)
+## State now (23 Oct 2026)
 
 - **Dashboard code:** `~/aemo-redesign` on .71 (davidleitch@192.168.68.71), branch `web-dashboard-redesign`, remote `davidleitch1/aemo-energy-dashboard2`. The whole app is one file, `src/aemo_dashboard/web/app.py` (~9,000 lines). Tests for the web app are in `tests/web/`; run with `/Users/davidleitch/aemo_production/aemo-energy-dashboard2/.venv/bin/python -m pytest tests/web -q` from the repo root.
 - **Live service:** tmux `services:1`, `uvicorn app:app --port 5008 --workers 4`, run from `src/aemo_dashboard/web`. No `--reload`, so code changes need a restart of that window. The launch line exists in both `~/tmux_files/start_services.sh` (boot) and `~/tmux_files/restart_dashboards.sh` (nightly 00:15); a change to how it launches must go in both, plus the process signature in `monitor_services.py`.
@@ -16,7 +16,24 @@ Covers the NEM dashboard (FastAPI/HTMX app on .71) and the AEMO data collector. 
 - **duid_mapping:** audited 8 Oct against AEMO sources; weekly refresh (cron Sun 05:10) fills gaps and emails conflicts — first live run 11 Oct. Pump loads carry fuel NULL and are out of all generation totals. **Open:** 14 refresh conflicts to review; stale `tests/api` fixture DB.
 - **PASA tab:** "now" comes from PD-PASA (`outages_pdpasa.parquet`, every 30 min) spliced with ST-PASA after PD's horizon; Now has a supply-impact strip (coal % out, MW out vs demand, price by region). Rebuilt 10 Oct with four subtabs (Now & 7 days, Extended outages, Return-date changes, Transmission); logic in `web/pasa_data.py` and `web/pasa_transmission.py`; the Today outage tile uses the same code and `duid_mapping`. Feeds come from the outage monitor (tmux window 7, `~/aemo_production/outage_monitor`, local git only); see SYSTEM.md "PASA data".
 - **Open:** the futures launchd job is dead; not investigated (it only merges a file dropped by hand, so manual runs lose nothing).
+- **Open:** collector scada30 catch-up bug (23 Oct): `collect_30min_scada` only builds endpoints newer than `MAX(scada30)`, so a scada5 file that lands after a later endpoint has been built leaves that label empty, and `gap_repair` does not rebuild it because no 5-minute row was newly inserted. Hit once after the 23 Oct NEMweb stall; fixed by hand.
 - **Open:** whether to relabel Batteries-tab Util % as cycles a day (it is discharge ÷ storage per day × 100).
+
+## 2026-10-23 — NEMweb publishing stall 12:30–13:35; collector caught up; scada30 label rebuilt
+
+**Asked.** dash_services emailed stale-data alerts (scada5, prices5, transmission5 over 45 min). Is it the collector or AEMO? Then: poll every 15 min, make sure the backfill lands, run the integrity check.
+
+**Found.**
+- Collector healthy: cycles every 5 min, no errors, DB matched the newest NEMweb files (DispatchIS 12:30, Dispatch_SCADA 12:25 NEM time). Every NEMweb Current feed (DispatchIS, SCADA, TradingIS, P5MIN, PredispatchIS, Dispatch_Reports, Operational_Demand, Market_Notice) stopped at the same point, seen identically from .71 and the Studio.
+- The aemo.com.au NEM dashboard kept updating (13:25): it is fed by the visualisations API (`visualisations.aemo.com.au/aemo/apps/api/report/ELEC_NEM_SUMMARY`), which had 13:25 while NEMweb had 12:30. Open Electricity (NEMweb-fed) stopped at 12:25 and forward-fills its price after that. No market notice about the stall.
+- NEMweb resumed by 14:40 AEDT (13:40 NEM) with every 12:35–13:35 file present. The collector worked through the backlog at 12 files a cycle; all 5-minute tables complete from 12:00 by 14:48.
+- scada30 12:30 was left empty: the 12:30 scada5 file arrived in a cycle after the 13:00 and 13:30 endpoints were built, and `collect_30min_scada` only looks past `MAX(scada30)`. The integrity repair did not rebuild it either (it rebuilds a derived label only when it inserted a 5-minute row).
+
+**Produced.** Integrity run 14:51 (`--email-policy always`, emailed): 0 recovered, scada30 1 and rooftop30 1 remaining. Rebuilt scada30 12:30 by hand under `acquire_primary`: AVG(scadavalue) over 12:05–12:30 per DUID, anti-join insert, 517 rows (all six scada5 intervals had 517 DUIDs). rooftop30 13:30 arrived on its own with the next rooftop file. Check-only at 15:08: every table 0 missing except rooftop30 20 Oct 03:00, which predates the stall, is absent from AEMO's file, and will go to the ledger once older than 4 days.
+
+**Decided.** No fallback to the visualisations API: it has regional price and demand but no unit SCADA, and this was a one-hour stall.
+
+**Open.** Fix the scada30 catch-up bug: build any endpoint whose six scada5 intervals are complete and which has no scada30 row, rather than only endpoints past the max; or have `gap_repair` survey derived labels against complete 5-minute windows. prices30/transmission30 re-aggregate a trailing window each cycle and were complete this time.
 
 ## 2026-10-13 (evening) — futures refresh; 2029–30 contracts restored
 
