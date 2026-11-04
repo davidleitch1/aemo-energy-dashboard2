@@ -4,7 +4,7 @@ Covers the NEM dashboard (FastAPI/HTMX app on .71) and the AEMO data collector. 
 
 **Protocol.** Start any dashboard or collector session by reading `docs/SYSTEM.md` (how the system runs now), then the state block and the last two entries here. When a session changes how something runs, rewrite the affected part of SYSTEM.md. End it by appending an entry at the top of the log and rewriting the state block. Each entry is a handoff: what was asked, what was produced, what was decided and why, what was corrected and must not be undone, what is open.
 
-## State now (23 Oct 2026)
+## State now (5 Nov 2026)
 
 - **Dashboard code:** `~/aemo-redesign` on .71 (davidleitch@192.168.68.71), branch `web-dashboard-redesign`, remote `davidleitch1/aemo-energy-dashboard2`. The whole app is one file, `src/aemo_dashboard/web/app.py` (~9,000 lines). Tests for the web app are in `tests/web/`; run with `/Users/davidleitch/aemo_production/aemo-energy-dashboard2/.venv/bin/python -m pytest tests/web -q` from the repo root.
 - **Live service:** tmux `services:1`, `uvicorn app:app --port 5008 --workers 4`, run from `src/aemo_dashboard/web`. No `--reload`, so code changes need a restart of that window. The launch line exists in both `~/tmux_files/start_services.sh` (boot) and `~/tmux_files/restart_dashboards.sh` (nightly 00:15); a change to how it launches must go in both, plus the process signature in `monitor_services.py`.
@@ -15,9 +15,25 @@ Covers the NEM dashboard (FastAPI/HTMX app on .71) and the AEMO data collector. 
 - **Futures data:** `~/aemo_production/data/futures.csv`, weekly Sunday 00:00 rows, runs to 11 Oct 2026. Update by saving the NEM-Review export in `~/futures_updates/` as `nemreview_raw_<date>.csv.raw`, keeping only its weekly 00:00 rows (drop the trailing part-week row stamped with the export date), and running `~/aemo_production/data/update_futures.py <file>` (merge: union of dates and columns, new wins). **Since Aug 2026 the export gives the newest 16 contracts (2029 Q3–2030 Q2) only as daily 17:00 rows**: average them Mon–Fri into the following Sunday (NEM-Review's own weekly rule, checked exact) — `~/futures_updates/build_futures_update.py` does this. Six mid-week part-week rows from Mar–Jul 2026 remain. The Monday launchd job `com.aemo.update-futures` has not run since 4 May 2026.
 - **duid_mapping:** audited 8 Oct against AEMO sources; weekly refresh (cron Sun 05:10) fills gaps and emails conflicts — first live run 11 Oct. Pump loads carry fuel NULL and are out of all generation totals. **Open:** 14 refresh conflicts to review; stale `tests/api` fixture DB.
 - **PASA tab:** "now" comes from PD-PASA (`outages_pdpasa.parquet`, every 30 min) spliced with ST-PASA after PD's horizon; Now has a supply-impact strip (coal % out, MW out vs demand, price by region). Rebuilt 10 Oct with four subtabs (Now & 7 days, Extended outages, Return-date changes, Transmission); logic in `web/pasa_data.py` and `web/pasa_transmission.py`; the Today outage tile uses the same code and `duid_mapping`. Feeds come from the outage monitor (tmux window 7, `~/aemo_production/outage_monitor`, local git only); see SYSTEM.md "PASA data".
+- **Battery time of day (prototype, 5 Nov):** `web/battery_tod.py` (query + chart, framework-free) and `web/battery_tod_app.py` (standalone test server), tmux session `battery_tod` on port 5097, not in the boot or nightly scripts. Not yet in `app.py`; to merge, import it like `pasa_data` and add a route or Batteries subtab that returns `battery_tod.content_html(region, range)`.
 - **Open:** the futures launchd job is dead; not investigated (it only merges a file dropped by hand, so manual runs lose nothing).
 - **Open:** collector scada30 catch-up bug (23 Oct): `collect_30min_scada` only builds endpoints newer than `MAX(scada30)`, so a scada5 file that lands after a later endpoint has been built leaves that label empty, and `gap_repair` does not rebuild it because no 5-minute row was newly inserted. Hit once after the 23 Oct NEMweb stall; fixed by hand.
 - **Open:** whether to relabel Batteries-tab Util % as cycles a day (it is discharge ÷ storage per day × 100).
+
+## 2026-11-05 — Battery time-of-day prototype (port 5097)
+
+**Asked.** A time-of-day view of battery charge and discharge, with period (7D/30D/90D/YTD/1Y) and region (NEM, states) selectors and charge/discharge prices on a second axis. Build it standalone first; it may be added to the main dashboard later.
+
+**Produced.** `src/aemo_dashboard/web/battery_tod.py` and `battery_tod_app.py`. 48 half-hour slots from scada30 × duid_mapping (fuel Battery Storage): average discharge MW above zero, charge MW below. Charge and discharge prices are volume-weighted (each DUID's MW × own-region RRP ÷ MW) per slot; the spot reference line is regional RRP, demand-weighted for NEM. Tiles: GWh charged and discharged, discharge ÷ charge, average charge and discharge price, spread, net energy revenue. Queries run in 0.05–0.2 s for a year, so no caching. Served from tmux session `battery_tod`: `uvicorn battery_tod_app:app --host 0.0.0.0 --port 5097`.
+
+**Decided.**
+- Slots are labelled by interval end, like the rest of the dashboard; the 00:00 label is plotted at 24:00.
+- A slot's charge or discharge price is left off the chart when that side runs below 10% of its peak MW (`MIN_VOLUME_SHARE`). Over 90 days the NEM fleet discharges about 70 MW at 15:00 and earns about $800/MWh on it, which set the price axis and flattened the evening prices. The tiles still include every MWh.
+- TAS dropped from the region pills: duid_mapping has no TAS batteries.
+
+**Corrected — do not undo.** The plot div id is unique per render. With a fixed id, htmx's settle step copied the old element's attributes onto the new div and Plotly drew a garbled chart after a pill click (unstyled modebar, axis titles spread down the page). `app.py` already uses timestamped ids for the same reason.
+
+**Open.** Whether and where to add it to `app.py` (Batteries subtab or Generation mix › Time of day). No tests yet in `tests/web/`.
 
 ## 2026-10-23 — NEMweb publishing stall 12:30–13:35; collector caught up; scada30 label rebuilt
 
