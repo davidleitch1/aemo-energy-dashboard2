@@ -16,9 +16,25 @@ Covers the NEM dashboard (FastAPI/HTMX app on .71) and the AEMO data collector. 
 - **duid_mapping:** audited 8 Oct against AEMO sources; weekly refresh (cron Sun 05:10) fills gaps and emails conflicts — first live run 11 Oct. Pump loads carry fuel NULL and are out of all generation totals. **Open:** 14 refresh conflicts to review; stale `tests/api` fixture DB.
 - **PASA tab:** "now" comes from PD-PASA (`outages_pdpasa.parquet`, every 30 min) spliced with ST-PASA after PD's horizon; Now has a supply-impact strip (coal % out, MW out vs demand, price by region). Rebuilt 10 Oct with four subtabs (Now & 7 days, Extended outages, Return-date changes, Transmission); logic in `web/pasa_data.py` and `web/pasa_transmission.py`; the Today outage tile uses the same code and `duid_mapping`. Feeds come from the outage monitor (tmux window 7, `~/aemo_production/outage_monitor`, local git only); see SYSTEM.md "PASA data".
 - **Battery time of day (prototype, 5 Nov):** `web/battery_tod.py` (query + chart, framework-free) and `web/battery_tod_app.py` (standalone test server), tmux session `battery_tod` on port 5097, not in the boot or nightly scripts. Not yet in `app.py`; to merge, import it like `pasa_data` and add a route or Batteries subtab that returns `battery_tod.content_html(region, range)`.
+- **Demand time of day (prototype, 5 Nov):** `web/demand_tod.py` + `web/demand_tod_app.py`, tmux session `demand_tod` on port 5096, not in the boot or nightly scripts. This year vs 52 weeks earlier, with operational/total demand and storage-load checkboxes. Not yet in `app.py`.
 - **Open:** the futures launchd job is dead; not investigated (it only merges a file dropped by hand, so manual runs lose nothing).
 - **Open:** collector scada30 catch-up bug (23 Oct): `collect_30min_scada` only builds endpoints newer than `MAX(scada30)`, so a scada5 file that lands after a later endpoint has been built leaves that label empty, and `gap_repair` does not rebuild it because no 5-minute row was newly inserted. Hit once after the 23 Oct NEMweb stall; fixed by hand.
 - **Open:** whether to relabel Batteries-tab Util % as cycles a day (it is discharge ÷ storage per day × 100).
+
+## 2026-11-05 (later) — Demand time-of-day prototype (port 5096)
+
+**Asked.** A second small dashboard: demand by time of day for the same regions and periods, with a line for the same period a year earlier, checkboxes for total demand, operational demand and whether to include charging. Purpose: see whether storage charging or other demand changes explain the change in price.
+
+**Produced.** `src/aemo_dashboard/web/demand_tod.py` and `demand_tod_app.py`, tmux session `demand_tod`, `uvicorn demand_tod_app:app --host 0.0.0.0 --port 5096`. Components per half-hour slot (mean MW over the window): operational demand (`demand30.demand`), rooftop PV (`rooftop30`, parent regions only), battery charging and discharge (scada30, Battery Storage), pump load (scada30 for PUMP1, PUMP2, SNOWYP, SHPUMP, KIDSPHL1/2, which carry fuel NULL). Checkboxes: operational and/or total (operational + rooftop) as the base lines; add battery charging, add pump load, subtract battery discharge. Three panels sharing the time axis: demand lines (solid this period, dashed a year earlier), spot price both years (NEM demand-weighted by operational demand), and the stacked year-on-year change in each component the checkboxes include, with a net line. Table: each component's mean this period, a year earlier, and the change all day, 10:00–15:00 and 17:00–21:00. All 30 region × period combinations run in 0.2–0.5 s with no missing slots in either window; regional changes sum to the NEM change.
+
+**Decided.**
+- Year-earlier window is 52 weeks back so 7D compares the same weekdays; YTD uses the same calendar span a year earlier.
+- Pump load is its own checkbox (default off): it is storage charging like the batteries, and Tumut 3 alone pumps up to about 590 MW.
+- The form posts back to `/` with `HX-Request`, which returns only the content; the URL carries every setting, and `v=1` marks a submitted form so unticked boxes are not replaced by defaults.
+
+**Found (NSW, 30 days to 5 Nov 2026 vs a year earlier).** At 10:00–15:00 operational demand −361 MW and rooftop PV +799 MW, battery charging +784 MW, pump load −168 MW, spot +$119/MWh (midday floor from about $10 to about $75). At 17:00–21:00 battery discharge +643 MW, spot −$33/MWh. The view is demand-side only; supply changes (outages, fuel prices, bidding) are not in it.
+
+**Open.** Price panel uses the mean, so single spike days (15:00 this year) dominate a slot; a median toggle would separate the floor from the spikes. Legend sits to the right and is cramped at phone width. Whether either prototype goes into `app.py`.
 
 ## 2026-11-05 — Battery time-of-day prototype (port 5097)
 
