@@ -49,7 +49,7 @@ Covers the NEM dashboard (FastAPI/HTMX app on .71) and the AEMO data collector. 
 
 **Open.** Sunny-days-only comparison (days with rooftop above about 80% of the month's clear-day peak, both years) to separate weather from trend and estimate how much household charging depends on the weather. Modelled household charging/discharge line from monthly CER capacity by state, flagged as an estimate. Compare with AEMO's 2026 ESOO/IASR estimate of home battery operation.
 
-## 2026-11-05 (later) — Demand time-of-day prototype (port 5096)
+## 2026-11-05 (late morning) — Demand time-of-day prototype (port 5096)
 
 **Asked.** A second small dashboard: demand by time of day for the same regions and periods, with a line for the same period a year earlier, checkboxes for total demand, operational demand and whether to include charging. Purpose: see whether storage charging or other demand changes explain the change in price.
 
@@ -64,7 +64,7 @@ Covers the NEM dashboard (FastAPI/HTMX app on .71) and the AEMO data collector. 
 
 **Open.** Price panel uses the mean, so single spike days (15:00 this year) dominate a slot; a median toggle would separate the floor from the spikes. Legend sits to the right and is cramped at phone width. Whether either prototype goes into `app.py`.
 
-## 2026-11-05 — Battery time-of-day prototype (port 5097)
+## 2026-11-05 (morning) — Battery time-of-day prototype (port 5097)
 
 **Asked.** A time-of-day view of battery charge and discharge, with period (7D/30D/90D/YTD/1Y) and region (NEM, states) selectors and charge/discharge prices on a second axis. Build it standalone first; it may be added to the main dashboard later.
 
