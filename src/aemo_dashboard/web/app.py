@@ -140,9 +140,12 @@ app = FastAPI(title="NEM Today mockup")
 
 try:                       # tests import aemo_dashboard.web.app
     from . import pasa_data, pasa_transmission
+    from . import battery_tod, demand_tod
 except ImportError:        # uvicorn runs `app:app` from this directory
     import pasa_data
     import pasa_transmission
+    import battery_tod
+    import demand_tod
 
 
 def q(sql: str, params: list | None = None) -> pd.DataFrame:
@@ -182,7 +185,9 @@ TABS = [
     ("prices",           "Prices",           [("analysis", "Price Analysis"),
                                               ("bands",    "Price Bands"),
                                               ("compare",  "Period Compare")]),
-    ("batteries",        "Batteries",        []),  # moved
+    ("demand",           "Demand",           []),
+    ("batteries",        "Batteries",        [("fleet", "Fleet"),
+                                              ("tod",   "Time of day")]),  # moved
     ("futures",          "Futures",          []),  # moved
     ("generators",       "Generators",       []),
     # Station Analysis is no longer in the top nav. The pivot table /
@@ -677,6 +682,7 @@ def _render_shell(body_html: str) -> str:
   <script src="https://unpkg.com/tabulator-tables@6.3.1/dist/js/tabulator.min.js"></script>
   <style>{SHELL_CSS}</style>
   <style>{PIVOT_TABULATOR_CSS}</style>
+  <style>{battery_tod.CSS}{demand_tod.CSS}</style>
   <!-- Privacy-friendly analytics by Plausible -->
   <script async src="https://plausible.io/js/pa-SHRLe35GBBWYcyXSqR7pc.js"></script>
   <script>
@@ -733,7 +739,7 @@ RANGE_OPTIONS = [("1h", "1H"), ("24h", "24H"), ("7d", "7D"),
                   ("all", "All")]
 
 
-def _build_url(base: str, **params) -> str:
+def _build_url(base: str, /, **params) -> str:
     clean = {k: v for k, v in params.items() if v is not None and v != ""}
     return f"{base}?{urlencode(clean)}" if clean else base
 
@@ -7261,6 +7267,7 @@ def _batteries_content(g_dims: list[str], regions: list[str],
 
 
 @app.get("/batteries", response_class=HTMLResponse)
+@app.get("/batteries/fleet", response_class=HTMLResponse)
 def batteries_page(request: Request,
                    g1: str = "region", g2: str = "owner", g3: str = "",
                    range: str = "1y",
@@ -7354,6 +7361,104 @@ def batteries_page(request: Request,
     )
     content = _batteries_content(g_dims, region_list, range, start, end,
                                  metric, topn)
+    _, bat_subtabs = TAB_LOOKUP["batteries"]
+    subtab_html = _render_subtab_nav("batteries", bat_subtabs, "fleet")
+    body = _render_tab_body(subtab_html, selectors + content)
+    if _is_htmx(request):
+        return HTMLResponse(body)
+    return HTMLResponse(_render_shell(body))
+
+
+@app.get("/batteries/tod", response_class=HTMLResponse)
+def batteries_tod_page(request: Request, region: str = "NEM",
+                       range: str = "30d") -> HTMLResponse:
+    """Battery charge/discharge by time of day (battery_tod module)."""
+    if region not in dict(battery_tod.REGIONS):
+        region = "NEM"
+    if range not in dict(battery_tod.RANGES):
+        range = "30d"
+    _, bat_subtabs = TAB_LOOKUP["batteries"]
+    subtab_html = _render_subtab_nav("batteries", bat_subtabs, "tod")
+    base = "/batteries/tod"
+    selectors = _render_selector_strip(
+        _render_region_pills(base, region, {"range": range},
+                             regions=[r for r, _ in battery_tod.REGIONS]),
+        _render_choice_pills("Period", battery_tod.RANGES, range, base,
+                             {"region": region}, "range"))
+    content = battery_tod.content_html(region, range)
+    body = _render_tab_body(subtab_html, selectors + content)
+    if _is_htmx(request):
+        return HTMLResponse(body)
+    return HTMLResponse(_render_shell(body))
+
+
+# ----------------------------------------------------------------------------
+# /demand — operational / total demand by time of day (demand_tod module)
+# ----------------------------------------------------------------------------
+
+DEMAND_BASES = [("op", "Operational"), ("total", "Total (incl. rooftop)")]
+DEMAND_ADDERS = [("chg", "+ Battery charging"), ("pump", "+ Pump load"),
+                 ("dis", "\u2212 Battery discharge")]
+
+
+def _render_demand_toggle_pills(base_url: str, bases: list[str],
+                                flags: dict, params: dict) -> str:
+    """'Demand' (base list) and 'Storage' (adder flags) toggle pill bars.
+    `params` is the full current param dict; each pill flips one entry.
+    The base list can never become empty."""
+    def _url(**changes) -> str:
+        return _build_url(base_url, **dict(params, **changes))
+
+    def _pill(url: str, text: str, active: bool) -> str:
+        cls = "pill active" if active else "pill"
+        return (f'<button class="{cls}" hx-get="{url}" hx-target="#tab-body" '
+                f'hx-push-url="true">{text}</button>')
+
+    base_pills = []
+    for slug, label in DEMAND_BASES:
+        is_on = slug in bases
+        if is_on and len(bases) > 1:
+            new = [b for b in bases if b != slug]
+        elif is_on:
+            new = bases                      # last one stays on
+        else:
+            new = [b for b, _ in DEMAND_BASES if b in bases or b == slug]
+        base_pills.append(_pill(_url(base=",".join(new)), label, is_on))
+    add_pills = [
+        _pill(_url(**{k: "0" if flags[k] else "1"}), label, flags[k])
+        for k, label in DEMAND_ADDERS]
+    return (f'<div class="pill-bar"><span class="pill-bar-label">Demand</span>'
+            f'<div class="pill-group">{"".join(base_pills)}</div></div>'
+            f'<div class="pill-bar"><span class="pill-bar-label">Storage</span>'
+            f'<div class="pill-group">{"".join(add_pills)}</div></div>')
+
+
+@app.get("/demand", response_class=HTMLResponse)
+def demand_page(request: Request, region: str = "NEM", range: str = "30d",
+                base: str = "op,total", chg: str = "1", pump: str = "0",
+                dis: str = "0") -> HTMLResponse:
+    if region not in dict(demand_tod.REGIONS):
+        region = "NEM"
+    if range not in dict(demand_tod.RANGES):
+        range = "30d"
+    valid = [b for b, _ in DEMAND_BASES]
+    picked = {b for b in (base or "").split(",") if b in valid}
+    bases = [b for b in valid if b in picked] or ["op"]
+    flags = {"chg": chg != "0", "pump": pump == "1", "dis": dis == "1"}
+
+    params = {"region": region, "range": range, "base": ",".join(bases),
+              **{k: "1" if v else "0" for k, v in flags.items()}}
+    url_base = "/demand"
+    selectors = _render_selector_strip(
+        _render_region_pills(url_base, region,
+                             {k: v for k, v in params.items() if k != "region"},
+                             regions=[r for r, _ in demand_tod.REGIONS]),
+        _render_choice_pills("Period", demand_tod.RANGES, range, url_base,
+                             {k: v for k, v in params.items() if k != "range"},
+                             "range"),
+        _render_demand_toggle_pills(url_base, bases, flags, params))
+    content = demand_tod.content_html(region, range, bases, flags["chg"],
+                                      flags["pump"], flags["dis"])
     body = _render_tab_body("", selectors + content)
     if _is_htmx(request):
         return HTMLResponse(body)
@@ -8104,7 +8209,7 @@ def _make_flat_route(slug: str, label: str):
 for _slug, _label, _subs in TABS:
     if _slug in ("today", "prices", "generation-mix", "evening-peak",
                  "gas", "generators", "futures", "batteries",
-                 "curtailment") or _subs:
+                 "curtailment", "demand") or _subs:
         continue
     _make_flat_route(_slug, _label)
 

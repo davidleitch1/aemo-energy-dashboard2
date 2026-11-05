@@ -26,13 +26,6 @@ h1 { font-size:20px; font-weight:600; margin:4px 0 12px; }
         cursor:pointer; text-decoration:none; }
 .pill.active { background:var(--accent); border-color:var(--accent);
                color:#fffcf0; }
-.sub, .note { color:var(--muted); font-size:12px; margin:6px 0; }
-.strip { display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr));
-         gap:8px; margin:10px 0 4px; }
-.tile { border:1px solid var(--border); border-radius:6px; padding:8px 10px; }
-.tile .k { color:var(--muted); font-size:11px; }
-.tile .v { font-size:17px; font-weight:600; margin-top:2px; }
-.placeholder { padding:40px; text-align:center; color:var(--muted); }
 .htmx-request #content { opacity:.5; }
 """
 
@@ -74,7 +67,7 @@ def page(region: str = Query("NEM"), range: str = Query("30d")):
 <title>Battery time of day</title>
 <script src="https://unpkg.com/htmx.org@2.0.4"></script>
 <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
-<style>{CSS}</style></head><body><main>
+<style>{CSS}{bt.CSS}</style></head><body><main>
 <h1>Battery charge and discharge by time of day</h1>
 <div id="body">{_body(region, rng)}</div>
 </main></body></html>"""

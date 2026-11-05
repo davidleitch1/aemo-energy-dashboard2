@@ -34,6 +34,26 @@ REGIONS = [("NEM", "NEM"), ("NSW1", "NSW"), ("QLD1", "QLD"),
            ("VIC1", "VIC"), ("SA1", "SA"), ("TAS1", "TAS")]
 RANGES = [("7d", "7D"), ("30d", "30D"), ("90d", "90D"),
           ("ytd", "YTD"), ("1y", "1Y")]
+# Rules the HTML above relies on, every selector scoped to the .dtod wrapper so
+# the module can be embedded in the main dashboard shell without clashes.
+CSS = """
+.dtod { padding: 8px 24px 24px; }
+.dtod .sub, .dtod .note { color:#878580; font-size:12px; margin:6px 0; }
+.dtod .note { line-height:1.45; }
+.dtod table.summ { border-collapse:collapse; font-size:13px; margin:10px 0;
+                   font-variant-numeric: tabular-nums; }
+.dtod table.summ th { color:#878580; font-weight:500; font-size:11px;
+                      text-align:right; padding:4px 12px;
+                      border-bottom:1px solid #e6e4d9; }
+.dtod table.summ td { text-align:right; padding:4px 12px;
+                      border-bottom:1px solid #e6e4d9; }
+.dtod table.summ td:first-child { text-align:left; }
+.dtod table.summ .u { color:#878580; font-size:11px; }
+.dtod .placeholder { padding:40px; text-align:center; color:#878580; }
+@media (max-width:700px) { .dtod table.summ { font-size:11px; }
+  .dtod table.summ th, .dtod table.summ td { padding:3px 5px; } }
+"""
+
 MAINLAND = ("NSW1", "QLD1", "VIC1", "SA1", "TAS1")
 PUMP_DUIDS = ("PUMP1", "PUMP2", "SNOWYP", "SHPUMP", "KIDSPHL1", "KIDSPHL2")
 
@@ -174,13 +194,14 @@ def build_figure(cur, pri, bases, chg, pump, dis, cur_lbl, pri_lbl):
     span = [f"{_hhmm(x - 0.5)}–{_hhmm(x)}" for x in cur.index]
 
     for base in bases:
-        lbl = line_label(base, chg, pump, dis)
+        lbl = line_label(base, chg, pump, dis)   # full label, hover only
+        short = "Total" if base == "total" else "Operational"
         col = BASE_COLORS[base]
         for df, period, dash, w in [(cur, cur_lbl, "solid", 2.4),
                                     (pri, pri_lbl, "dash", 1.8)]:
             fig.add_trace(go.Scatter(
                 x=df.index, y=demand_line(df, base, chg, pump, dis),
-                name=f"{lbl} · {period}", mode="lines",
+                name=f"{short} · {period}", mode="lines",
                 line=dict(color=col, width=w, dash=dash),
                 legendgroup="demand", customdata=span,
                 hovertemplate=f"{period}: %{{y:,.0f}} MW<extra>{lbl}</extra>",
@@ -208,7 +229,7 @@ def build_figure(cur, pri, bases, chg, pump, dis, cur_lbl, pri_lbl):
             hovertemplate=f"Δ {name}: %{{y:+,.0f}} MW<extra></extra>",
         ), row=3, col=1)
     fig.add_trace(go.Scatter(
-        x=cur.index, y=net, name="Δ net of components shown", mode="lines",
+        x=cur.index, y=net, name="Δ net", mode="lines",
         line=dict(color=INK, width=1.6), legendgroup="delta",
         hovertemplate="Δ net: %{y:+,.0f} MW<extra></extra>",
     ), row=3, col=1)
@@ -228,7 +249,11 @@ def build_figure(cur, pri, bases, chg, pump, dis, cur_lbl, pri_lbl):
     fig.update_xaxes(title=dict(text="Time of day (NEM time, half-hour "
                                 "ending)", font=dict(size=11, color=MUTED)),
                      row=3, col=1)
-    for row, title, fmt in [(1, "Average MW", ",.0f"),
+    # Storage options in the axis title keep the legend names short.
+    adds = " ".join((["+ charging"] if chg else []) + (["+ pumping"] if pump
+                    else []) + (["− discharge"] if dis else []))
+    demand_title = "Demand, average MW" + (f"<br>{adds}" if adds else "")
+    for row, title, fmt in [(1, demand_title, ",.0f"),
                             (2, "Spot $/MWh", "$,.0f"),
                             (3, "Change vs last year, MW", "+,.0f")]:
         fig.update_yaxes(title=dict(text=title, font=dict(size=11,
@@ -271,7 +296,7 @@ def summary_table(cur, pri) -> str:
     return f'<table class="summ">{head}{"".join(body)}</table>'
 
 
-def content_html(region: str, range_slug: str, bases: list[str],
+def _content_body(region: str, range_slug: str, bases: list[str],
                  chg: bool, pump: bool, dis: bool) -> str:
     (s, e), (ps, pe), range_label = windows(range_slug)
     cur = load_components(region, s, e)
@@ -280,8 +305,8 @@ def content_html(region: str, range_slug: str, bases: list[str],
     if cur["op"].isna().all():
         return f'<div class="placeholder">No demand data for {region_label}.</div>'
     fmt = "%-d %b %Y"
-    cur_lbl = f"{s:%-d %b %y}–{e:%-d %b %y}"
-    pri_lbl = f"{ps:%-d %b %y}–{pe:%-d %b %y}"
+    # Short legend names; the subtitle carries both date ranges.
+    cur_lbl, pri_lbl = "this period", "year earlier"
     div_id = f"demand-tod-plot-{int(datetime.now().timestamp() * 1000)}"
     fig = build_figure(cur, pri, bases, chg, pump, dis, cur_lbl, pri_lbl)
     cfg = json.dumps({"displaylogo": False, "responsive": True})
@@ -309,3 +334,10 @@ def content_html(region: str, range_slug: str, bases: list[str],
         f'. The year-earlier window is 52 weeks back (YTD: the same calendar '
         f'span).</div>'
     )
+
+
+def content_html(region: str, range_slug: str, bases: list[str], chg: bool,
+                 pump: bool, dis: bool) -> str:
+    """Scoped wrapper: the CSS above only applies inside .dtod."""
+    return (f'<div class="dtod">'
+            f'{_content_body(region, range_slug, bases, chg, pump, dis)}</div>')

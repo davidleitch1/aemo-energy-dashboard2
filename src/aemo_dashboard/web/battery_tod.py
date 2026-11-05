@@ -31,6 +31,19 @@ REGIONS = [("NEM", "NEM"), ("NSW1", "NSW"), ("QLD1", "QLD"),
            ("VIC1", "VIC"), ("SA1", "SA")]   # TAS: no registered batteries
 RANGES = [("7d", "7D"), ("30d", "30D"), ("90d", "90D"),
           ("ytd", "YTD"), ("1y", "1Y")]
+# Rules the HTML above relies on, every selector scoped to the .btod wrapper so
+# the module can be embedded in the main dashboard shell without clashes.
+CSS = """
+.btod { padding: 8px 24px 24px; }
+.btod .sub, .btod .note { color:#878580; font-size:12px; margin:6px 0; }
+.btod .strip { display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr));
+               gap:8px; margin:10px 0 4px; }
+.btod .tile { border:1px solid #e6e4d9; border-radius:6px; padding:8px 10px; }
+.btod .tile .k { color:#878580; font-size:11px; }
+.btod .tile .v { font-size:17px; font-weight:600; margin-top:2px; }
+.btod .placeholder { padding:40px; text-align:center; color:#878580; }
+"""
+
 MAINLAND = ("NSW1", "QLD1", "VIC1", "SA1", "TAS1")
 MIN_VOLUME_SHARE = 0.10   # hide a slot's price below 10% of that side's peak MW
 
@@ -234,7 +247,7 @@ def _fmt(v: float, fmt: str) -> str:
     return fmt.format(v)
 
 
-def content_html(region: str, range_slug: str) -> str:
+def _content_body(region: str, range_slug: str) -> str:
     """Stats strip + chart, ready to drop into a page or an HTMX swap.
 
     The plot div id is unique per render: htmx's settle step copies the old
@@ -277,3 +290,8 @@ def content_html(region: str, range_slug: str) -> str:
         f'{MIN_VOLUME_SHARE:.0%} of its peak MW; the tiles include every '
         f'MWh.</div>'
     )
+
+
+def content_html(region: str, range_slug: str) -> str:
+    """Scoped wrapper: the CSS below only applies inside .btod."""
+    return f'<div class="btod">{_content_body(region, range_slug)}</div>'

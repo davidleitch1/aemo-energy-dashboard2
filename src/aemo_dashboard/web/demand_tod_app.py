@@ -29,21 +29,7 @@ form { display:flex; flex-wrap:wrap; gap:10px 20px; margin-bottom:8px;
                            color:#fffcf0; }
 .chk { font-size:13px; display:flex; gap:5px; align-items:center;
        cursor:pointer; }
-.sub, .note { color:var(--muted); font-size:12px; margin:6px 0; }
-.note { line-height:1.45; }
-table.summ { border-collapse:collapse; font-size:13px; margin:10px 0;
-             font-variant-numeric: tabular-nums; }
-table.summ th { color:var(--muted); font-weight:500; font-size:11px;
-                text-align:right; padding:4px 12px;
-                border-bottom:1px solid var(--border); }
-table.summ td { text-align:right; padding:4px 12px;
-                border-bottom:1px solid var(--border); }
-table.summ td:first-child { text-align:left; }
-table.summ .u { color:var(--muted); font-size:11px; }
-.placeholder { padding:40px; text-align:center; color:var(--muted); }
 .htmx-request#content, .htmx-request #content { opacity:.5; }
-@media (max-width:700px) { table.summ { font-size:11px; }
-  table.summ th, table.summ td { padding:3px 5px; } }
 """
 
 BASES = [("op", "Operational demand"),
@@ -103,7 +89,7 @@ def page(request: Request, region: str = Query("NEM"),
 <title>Demand time of day</title>
 <script src="https://unpkg.com/htmx.org@2.0.4"></script>
 <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
-<style>{CSS}</style></head><body><main>
+<style>{CSS}{dt.CSS}</style></head><body><main>
 <h1>Demand by time of day, this year against last</h1>
 {_form(region, rng, bases, flags)}
 <div id="content">{content}</div>
