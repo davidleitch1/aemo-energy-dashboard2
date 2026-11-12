@@ -4,7 +4,7 @@ Covers the NEM dashboard (FastAPI/HTMX app on .71) and the AEMO data collector. 
 
 **Protocol.** Start any dashboard or collector session by reading `docs/SYSTEM.md` (how the system runs now), then the state block and the last two entries here. When a session changes how something runs, rewrite the affected part of SYSTEM.md. End it by appending an entry at the top of the log and rewriting the state block. Each entry is a handoff: what was asked, what was produced, what was decided and why, what was corrected and must not be undone, what is open.
 
-## State now (5 Nov 2026)
+## State now (13 Nov 2026)
 
 - **Dashboard code:** `~/aemo-redesign` on .71 (davidleitch@192.168.68.71), branch `web-dashboard-redesign`, remote `davidleitch1/aemo-energy-dashboard2`. The whole app is one file, `src/aemo_dashboard/web/app.py` (~9,000 lines). Tests for the web app are in `tests/web/`; run with `/Users/davidleitch/aemo_production/aemo-energy-dashboard2/.venv/bin/python -m pytest tests/web -q` from the repo root.
 - **Live service:** tmux `services:1`, `uvicorn app:app --port 5008 --workers 4`, run from `src/aemo_dashboard/web`. No `--reload`, so code changes need a restart of that window. The launch line exists in both `~/tmux_files/start_services.sh` (boot) and `~/tmux_files/restart_dashboards.sh` (nightly 00:15); a change to how it launches must go in both, plus the process signature in `monitor_services.py`.
@@ -20,7 +20,18 @@ Covers the NEM dashboard (FastAPI/HTMX app on .71) and the AEMO data collector. 
 - **Open (analysis):** battery earnings vs WACC rerun on full-year operating batteries only; SA utility solar −19% (Aug–Nov 2026 vs 2025) unexplained. Figures in the 5 Nov (late afternoon) entry.
 - **Open:** the futures launchd job is dead; not investigated (it only merges a file dropped by hand, so manual runs lose nothing).
 - **Open:** collector scada30 catch-up bug (23 Oct): `collect_30min_scada` only builds endpoints newer than `MAX(scada30)`, so a scada5 file that lands after a later endpoint has been built leaves that label empty, and `gap_repair` does not rebuild it because no 5-minute row was newly inserted. Hit once after the 23 Oct NEMweb stall; fixed by hand.
+- **Open:** collector backlog order (13 Nov): after downtime it fetches the newest 12 files per feed, leaving holes behind them; the daily 04:17 integrity run repairs these, but only the next morning. Run `weekly_integrity.py` by hand after any outage.
 - **Open:** whether to relabel Batteries-tab Util % as cycles a day (it is discharge ÷ storage per day × 100).
+
+## 2026-11-13 — Power outage: reboot of .71/.68/.69, collector catch-up, integrity repair
+
+**Asked.** After a power outage, watch the servers come back, confirm the dashboards run, and confirm the backfill and integrity check.
+
+**Found.** .71, .68 and .69 all rebooted at about 08:30 AEDT; the Studio stayed up. On .71 `start_services.sh` (@reboot) created all 15 `services` windows; ports 5008, 5009, 8081, 5202, 5500, 8095, 8098, 5201 answered. On .68 the launchd jobs (django, nginx, panel, aiindicators) came up; 8089 and 8092 answered. nemgen, spot_fcst and ai_dash returned 200 through Cloudflare. .69 runs no services. Data stopped at 06:10 NEM (scada5 06:05). The collector's first cycle (08:30) ran before the network was up ("No route to host") and wrote nothing new. From the 08:35 cycle it fetched 12 files per feed. Those were the newest 12, not the oldest, so prices5/transmission5/bdu5/curtailment_regional5 06:15–06:40, scada5 06:10–06:35, scada30 06:30 and prices30/transmission30 06:30 and 07:00 were left empty while later intervals filled. The 04:17 daily integrity run predates the outage, so nothing automatic would have repaired this until 04:17 the next day.
+
+**Produced.** `weekly_integrity.py --email-policy always` at 08:48: 36 missing, 35 recovered (from CURRENT, one scada interval from ARCHIVE), emailed. The one remaining is scada5 12 Nov 02:45, which predates the outage, is absent from CURRENT and ARCHIVE, and will go to the ledger after 4 days. A `--check-only` run straight after still showed 36 missing because it surveyed before the collector's next replica copy; the 08:55 copy put `aemo_readonly` at 0 missing for 05:00–07:30 NEM in every 5- and 30-minute table.
+
+**Open.** After downtime longer than one 12-file batch, the collector leaves holes behind its newest files. Either fetch oldest-first when the backlog exceeds the batch, or have the collector run the integrity repair after a cycle that found a backlog (or once at startup). Until then, run `weekly_integrity.py` by hand after any outage.
 
 ## 2026-11-05 (late afternoon) — Battery economics and the solar price table (analysis, no dashboard code)
 
