@@ -20,8 +20,18 @@ Covers the NEM dashboard (FastAPI/HTMX app on .71) and the AEMO data collector. 
 - **Open (analysis):** battery earnings vs WACC rerun on full-year operating batteries only; SA utility solar −19% (Aug–Nov 2026 vs 2025) unexplained. Figures in the 5 Nov (late afternoon) entry.
 - **Open:** the futures launchd job is dead; not investigated (it only merges a file dropped by hand, so manual runs lose nothing).
 - **Open:** collector scada30 catch-up bug (23 Oct): `collect_30min_scada` only builds endpoints newer than `MAX(scada30)`, so a scada5 file that lands after a later endpoint has been built leaves that label empty, and `gap_repair` does not rebuild it because no 5-minute row was newly inserted. Hit once after the 23 Oct NEMweb stall; fixed by hand.
-- **Open:** collector backlog order (13 Nov): after downtime it fetches the newest 12 files per feed, leaving holes behind them; the daily 04:17 integrity run repairs these, but only the next morning. Run `weekly_integrity.py` by hand after any outage.
+- **Catch-up repair (13 Nov):** `scripts/catchup_repair.py` in aemo-data-updater, cron every 15 min, runs the integrity repair and emails once the collector has caught up after downtime but left holes. See SYSTEM.md "Data integrity". The collector still fetches newest-first; this repairs after it rather than changing it.
 - **Open:** whether to relabel Batteries-tab Util % as cycles a day (it is discharge ÷ storage per day × 100).
+
+## 2026-11-13 (late morning) — Automatic repair after a collector catch-up
+
+**Asked.** Run the repair automatically after a catch-up and email a summary. Do not interfere with the collector, which runs reliably, or introduce artefacts.
+
+**Produced.** `aemo-data-updater/scripts/catchup_repair.py` and `tests/test_catchup_repair.py` (13 tests: hole detection, waiting while behind, newest labels ignored, 12 h window, once per hole, 24 h expiry, 04:00–05:00 quiet, two-hole threshold, end-to-end `main()` with a fake integrity script). Commit 7d28e36 in aemo-data-updater. Cron line `2-59/15 * * * *` added to .71's crontab; backup at `~/tmux_files/crontab.bak_pre_catchup_20261113`. A live run against the replica found no holes and exited silently.
+
+**Decided.** A separate cron job rather than a change to the collector loop: the collector is untouched, the watcher reads only the read-only replica, and the existing integrity script does every write with its proven lock handling. Trigger on holes, not on reading the collector log, so it also catches holes from any other cause. Watch only the seven tables the collector keeps current every cycle; lagging feeds (curtailment5, rooftop30, demand30) would give false triggers and are covered once the integrity run starts. Threshold two holes: over the previous 14 days these seven tables had one hole (scada5 12 Nov 02:45, never published by AEMO), which would otherwise have sent a needless 3 a.m. email.
+
+**Open.** None from this change. If an outage ends while it is 04:00–05:00 host time, the repair waits until the 05:02 run.
 
 ## 2026-11-13 — Power outage: reboot of .71/.68/.69, collector catch-up, integrity repair
 

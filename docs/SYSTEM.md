@@ -82,6 +82,7 @@ Other hand-maintained data: `~/aemo_production/data/futures.csv` (merge NEM-Revi
 | 11:00 daily | STTM gas prices |
 | 12:00 / 19:00 or 19:30 | midday / evening reports; `itk_mail send_daily.py` sends them 5 min later |
 | 04:17 daily | `weekly_integrity.py` (despite the name: daily survey + repair of all 12 base tables; Sunday emails the full report and retries the known-unreachable ledger, other days email only if something was missing; see "Data integrity") |
+| :02/:17/:32/:47 | `catchup_repair.py` (runs `weekly_integrity.py --email-policy always` when the collector has caught up but left two or more holes; see "Data integrity") |
 | Sun 03:00 | IEA dashboard backup |
 | Sun 05:10 | `refresh_duid_mapping.py` (email) |
 | Mon 06:40, 09:30, 18:00 | intl_energy collection |
@@ -91,6 +92,8 @@ Repair sources: DispatchIS (prices5, transmission5, bdu5, curtailment_regional5)
 Writes are anti-join inserts on each table's key, so an existing row is never deleted or changed; the one UPDATE fills a NULL `demand_less_snsg`. Derived rows are replaced only for a (label, key) that received a newly inserted 5-minute row.
 Locking: the script does not stop the collector. It waits for the gap between collector cycles (the collector closes its connection for the 4.5 min sleep and retries a lock conflict for about 30 s), checks the replica copy is not mid-flight, takes the primary, inserts, re-surveys the primary under the same lock and releases. `--stop-collector` keeps the older Ctrl-C-via-tmux route, with a precise process match and a 600 s wait, and never types the start command into a collector that failed to stop.
 Known-unreachable ledger: `~/aemo_production/logs/integrity_known_gaps.json` holds gaps older than 4 days that survived a repair (172 rooftop30 intervals from Aug-2024 to Aug-2025, before nemweb ARCHIVE starts, plus single scada30/transmission30/demand30 labels from 2024). Daily runs exclude them; Sunday runs retry them. Gaps under 4 days old sit in the CURRENT/ARCHIVE seam and are retried next run.
+
+Catch-up repair (`scripts/catchup_repair.py`, tests `tests/test_catchup_repair.py`, cron every 15 min, added 13-Nov-2026): after downtime longer than one 12-file batch the collector fetches the newest files first and leaves a hole behind them. The script opens only `aemo_readonly.duckdb`, read-only, and does nothing while the newest prices5 row is more than 20 min old (collector still catching up, or an AEMO stall). Once current, it lists missing labels over the last 12 h in prices5, scada5, transmission5, bdu5, prices30, scada30 and transmission30, ignoring the newest label of each step. Two or more holes not tried before run `weekly_integrity.py --email-policy always` (which takes the lock between cycles and emails the summary). Each hole is tried once; tried holes are kept for 24 h in `~/aemo_production/logs/catchup_repair_state.json`. A single missing label is left to the 04:17 run, and the script is quiet 04:00–05:00 host time. Log: `~/aemo_production/logs/catchup_repair.log` (empty unless it acted). The collector code is not changed by it.
 
 **PASA data (outage monitor, tmux window 7).** Separate from the DuckDB pipeline; writes parquet in `~/aemo_production/data/`:
 - `outages_stpasa.parquet` — latest ST-PASA run per (DUID, half-hour), about 7 days of runs kept.
