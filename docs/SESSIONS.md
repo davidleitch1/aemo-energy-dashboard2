@@ -4,7 +4,7 @@ Covers the NEM dashboard (FastAPI/HTMX app on .71) and the AEMO data collector. 
 
 **Protocol.** Start any dashboard or collector session by reading `docs/SYSTEM.md` (how the system runs now), then the state block and the last two entries here. When a session changes how something runs, rewrite the affected part of SYSTEM.md. End it by appending an entry at the top of the log and rewriting the state block. Each entry is a handoff: what was asked, what was produced, what was decided and why, what was corrected and must not be undone, what is open.
 
-## State now (13 Nov 2026)
+## State now (17 Nov 2026)
 
 - **Dashboard code:** `~/aemo-redesign` on .71 (davidleitch@192.168.68.71), branch `web-dashboard-redesign`, remote `davidleitch1/aemo-energy-dashboard2`. The whole app is one file, `src/aemo_dashboard/web/app.py` (~9,000 lines). Tests for the web app are in `tests/web/`; run with `/Users/davidleitch/aemo_production/aemo-energy-dashboard2/.venv/bin/python -m pytest tests/web -q` from the repo root.
 - **Live service:** tmux `services:1`, `uvicorn app:app --port 5008 --workers 4`, run from `src/aemo_dashboard/web`. No `--reload`, so code changes need a restart of that window. The launch line exists in both `~/tmux_files/start_services.sh` (boot) and `~/tmux_files/restart_dashboards.sh` (nightly 00:15); a change to how it launches must go in both, plus the process signature in `monitor_services.py`.
@@ -21,7 +21,18 @@ Covers the NEM dashboard (FastAPI/HTMX app on .71) and the AEMO data collector. 
 - **Open:** the futures launchd job is dead; not investigated (it only merges a file dropped by hand, so manual runs lose nothing).
 - **Open:** collector scada30 catch-up bug (23 Oct): `collect_30min_scada` only builds endpoints newer than `MAX(scada30)`, so a scada5 file that lands after a later endpoint has been built leaves that label empty, and `gap_repair` does not rebuild it because no 5-minute row was newly inserted. Hit once after the 23 Oct NEMweb stall; fixed by hand.
 - **Catch-up repair (13 Nov):** `scripts/catchup_repair.py` in aemo-data-updater, cron every 15 min, runs the integrity repair and emails once the collector has caught up after downtime but left holes. See SYSTEM.md "Data integrity". The collector still fetches newest-first; this repairs after it rather than changing it.
+- **Catch-up repair, first live use (17 Nov):** after a ~16 h outage it recovered 1,073 of 1,104 holes and then, by design, did not retry the other 31 inside 24 h; a manual `weekly_integrity.py --no-email` filled them. Open: whether a second attempt after an hour would be better than waiting for 04:17.
 - **Open:** whether to relabel Batteries-tab Util % as cycles a day (it is discharge ÷ storage per day × 100).
+
+## 2026-11-17 — Power outage: .71/.68 down ~16 h, catch-up repair first live use
+
+**Asked.** Check and monitor recovery of nem-dash (.71) and JohnsM2 (.68) after a power failure.
+
+**Found.** Both machines rebooted about 07:58 AEDT. On .71 all 15 `services` windows came back from the `@reboot` start script, the cloudflared launchd job was running, and the collector was current by 08:15. On .68 the launchd jobs com.itk.django, nginx, panel and aiindicators were running. Public hostnames nemgen, bids, spot_fcst and ai_dash answered 200.
+
+**Data gap.** The collector missed 190 five-minute intervals (16 Nov ~15:35 to 17 Nov ~07:45 NEM). `catchup_repair.py` fired at 08:17 (its first live trigger): 1,104 missing, 1,073 recovered, 31 remaining, emailed. The 31 were mostly rooftop30 (16 Nov 14:00–22:00, not yet in the files fetched at 08:17) and two scada5 intervals that returned HTTP 403 from CURRENT, plus their scada30 slot. The script then stayed silent because the holes were in its 24 h attempted ledger, which is the intended design. A manual `weekly_integrity.py --no-email` at 08:51 found 20 holes and recovered all 20; the replica copied at 08:56 shows zero gaps from 16 Nov 12:00 onward in prices5, scada5, transmission5, scada30, rooftop30, prices30 and demand30.
+
+**Open.** A second attempt about an hour after the first would have filled these without anyone stepping in; consider a shorter retry for the first retry only.
 
 ## 2026-11-13 (late morning) — Automatic repair after a collector catch-up
 
