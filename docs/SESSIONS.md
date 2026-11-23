@@ -22,8 +22,20 @@ Covers the NEM dashboard (FastAPI/HTMX app on .71) and the AEMO data collector. 
 - **Open:** collector scada30 catch-up bug (23 Oct): `collect_30min_scada` only builds endpoints newer than `MAX(scada30)`, so a scada5 file that lands after a later endpoint has been built leaves that label empty, and `gap_repair` does not rebuild it because no 5-minute row was newly inserted. Hit once after the 23 Oct NEMweb stall; fixed by hand.
 - **Catch-up repair (13 Nov):** `scripts/catchup_repair.py` in aemo-data-updater, cron every 15 min, runs the integrity repair and emails once the collector has caught up after downtime but left holes. See SYSTEM.md "Data integrity". The collector still fetches newest-first; this repairs after it rather than changing it.
 - **Catch-up repair, first live use (17 Nov):** after a ~16 h outage it recovered 1,073 of 1,104 holes and then, by design, did not retry the other 31 inside 24 h; a manual `weekly_integrity.py --no-email` filled them. Open: whether a second attempt after an hour would be better than waiting for 04:17.
-- **Proposed, not built (24 Nov): network congestion data and a Network tab.** Plan and collector scope at `snakeplay/AEMO_spot/plans/congestion_data_plan.md` (iCloud, Studio). Awaiting David: go-ahead for Phase 0 (proof on one month of MMSDM data on the Studio, no collector change) and history start date.
+- **Network congestion (24 Nov): Phase 0 done on the Studio, nothing built on .71.** Plan, scope and Phase 0 results at `snakeplay/AEMO_spot/plans/congestion_data_plan.md` (section 11); code in `AEMO_spot/analysis_code/congestion_phase0/`, scratch DB `~/data/congestion_phase0/phase0.duckdb` (Studio), charts in `AEMO_spot/pngs/congestion_phase0/`. Gates G1 and G2 passed. History start decided: 1 Jul 2024, earlier years as a post-build addition. Awaiting David: hotspot grouping rule and page layout (G3), then go-ahead for Phase 1 (backfill into a new `constraints.duckdb`).
 - **Open:** whether to relabel Batteries-tab Util % as cycles a day (it is discharge ÷ storage per day × 100).
+
+## 2026-11-24 (later) — Network congestion Phase 0: proof on two months of archive data
+
+**Asked.** Go ahead with Phase 0; history from 1 July 2024, with more history as a planned post-build addition.
+
+**Produced (all on the Studio, no change on .71).** Sep-Oct 2026 MMSDM tables loaded to a scratch DuckDB; four scripts in `AEMO_spot/analysis_code/congestion_phase0/`; five charts in `AEMO_spot/pngs/congestion_phase0/` (hotspots under two grouping rules, causes, unit league, one unit page). Results and scope changes are section 11 of the plan.
+
+**Gates.** G1 passed: our join reproduces AEMO's DISPATCH_LOCAL_PRICE adjustment in 99.7% of 1.28 million unit-intervals. G2 passed: battery constraint exposure matches NEMPulse within about 1% for five batteries, 20 of 25 constraint counts exact. Rule: positive energy weight on a binding <= network constraint is discharge-limited; exclude `F_`, `#`, `$` constraints.
+
+**Found, and must carry into the build.** (1) GENCONDATA, SPD*CONSTRAINT and GENCONSET monthly files are incremental: only versions effective that month. The definitions backfill must sweep the archive from 2015; 2012-2014 exist only as whole-month zips. (2) Constraint weights are keyed by connection point; DUDETAILSUMMARY is needed to reach DUIDs. (3) MARGINALVALUE is not a cost measure (floor bidding and violation penalties); cost must come from curtailed energy x RRP via `curtailment_duid5`. (4) nemweb drops connections on large archive files; use curl with retries.
+
+**Open.** G3 (David picks grouping and layout). 23,208 unit-intervals where we compute an adjustment and AEMO publishes none (Pelican Point, Torrens B, some wind farms). A weighting rule for "units behind" a constraint.
 
 ## 2026-11-24 — Network congestion: assessment of NEMPulse, use plan and collector scope (no code)
 
