@@ -4,7 +4,7 @@ Covers the NEM dashboard (FastAPI/HTMX app on .71) and the AEMO data collector. 
 
 **Protocol.** Start any dashboard or collector session by reading `docs/SYSTEM.md` (how the system runs now), then the state block and the last two entries here. When a session changes how something runs, rewrite the affected part of SYSTEM.md. End it by appending an entry at the top of the log and rewriting the state block. Each entry is a handoff: what was asked, what was produced, what was decided and why, what was corrected and must not be undone, what is open.
 
-## State now (17 Nov 2026)
+## State now (24 Nov 2026)
 
 - **Dashboard code:** `~/aemo-redesign` on .71 (davidleitch@192.168.68.71), branch `web-dashboard-redesign`, remote `davidleitch1/aemo-energy-dashboard2`. The whole app is one file, `src/aemo_dashboard/web/app.py` (~9,000 lines). Tests for the web app are in `tests/web/`; run with `/Users/davidleitch/aemo_production/aemo-energy-dashboard2/.venv/bin/python -m pytest tests/web -q` from the repo root.
 - **Live service:** tmux `services:1`, `uvicorn app:app --port 5008 --workers 4`, run from `src/aemo_dashboard/web`. No `--reload`, so code changes need a restart of that window. The launch line exists in both `~/tmux_files/start_services.sh` (boot) and `~/tmux_files/restart_dashboards.sh` (nightly 00:15); a change to how it launches must go in both, plus the process signature in `monitor_services.py`.
@@ -22,7 +22,20 @@ Covers the NEM dashboard (FastAPI/HTMX app on .71) and the AEMO data collector. 
 - **Open:** collector scada30 catch-up bug (23 Oct): `collect_30min_scada` only builds endpoints newer than `MAX(scada30)`, so a scada5 file that lands after a later endpoint has been built leaves that label empty, and `gap_repair` does not rebuild it because no 5-minute row was newly inserted. Hit once after the 23 Oct NEMweb stall; fixed by hand.
 - **Catch-up repair (13 Nov):** `scripts/catchup_repair.py` in aemo-data-updater, cron every 15 min, runs the integrity repair and emails once the collector has caught up after downtime but left holes. See SYSTEM.md "Data integrity". The collector still fetches newest-first; this repairs after it rather than changing it.
 - **Catch-up repair, first live use (17 Nov):** after a ~16 h outage it recovered 1,073 of 1,104 holes and then, by design, did not retry the other 31 inside 24 h; a manual `weekly_integrity.py --no-email` filled them. Open: whether a second attempt after an hour would be better than waiting for 04:17.
+- **Proposed, not built (24 Nov): network congestion data and a Network tab.** Plan and collector scope at `snakeplay/AEMO_spot/plans/congestion_data_plan.md` (iCloud, Studio). Awaiting David: go-ahead for Phase 0 (proof on one month of MMSDM data on the Studio, no collector change) and history start date.
 - **Open:** whether to relabel Batteries-tab Util % as cycles a day (it is discharge ÷ storage per day × 100).
+
+## 2026-11-24 — Network congestion: assessment of NEMPulse, use plan and collector scope (no code)
+
+**Asked.** Whether the NEMPulse site and its MCP server give data we lack, especially on network congestion; then a plan for how constraint data would be used (dashboard page, model) and a scope for collecting it.
+
+**Found.** NEMPulse (`https://nempulse.com.au/mcp`, no auth, 14 tools) is battery-only, gives constraint exposure as percentages over 30+ day windows, and has no marginal values or interval data. Its source is public AEMO data that we do not store: the dashboard databases have no constraint tables. The DispatchIS file the collector already downloads each cycle contains `DISPATCH,CONSTRAINT` (1,065 rows in the 24 Nov 08:55 file, 25 binding) and `DISPATCH,LOCAL_PRICE` (117 units with AEMO's own local price adjustment); only PRICE, INTERCONNECTORRES and REGIONSUM are parsed. `Reports/Current/Network` carries NETWORK_OUTAGEDETAIL and NETWORK_OUTAGECONSTRAINTSET (outage to constraint set). Definitions (GENCONDATA, SPD*CONSTRAINT, GENCONSET) exist only in MMSDM monthly, latest 2026_10.
+
+**Produced.** `snakeplay/AEMO_spot/plans/congestion_data_plan.md`: questions answered, a four-subtab Network page (Hotspots, Causes, Units, Now), four uses in the forecasting model, sources, storage design, phases with gates G1-G4, decisions and risks.
+
+**Decided (proposed).** Separate `constraints.duckdb` on the bids pattern, so the per-cycle copy of `aemo_test.duckdb` does not grow. Store binding rows only plus an interval ledger. Phase 0 is a proof on the Studio before any collector change. Predispatch constraints, MCC and a map are out of scope for now.
+
+**Open.** David to approve Phase 0 and the history start (proposed 1 Jul 2024). When DISPATCH_LOCAL_PRICE history begins is unchecked.
 
 ## 2026-11-17 — Power outage: .71/.68 down ~16 h, catch-up repair first live use
 
