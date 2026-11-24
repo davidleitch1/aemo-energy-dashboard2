@@ -43,3 +43,8 @@ def test_units_sort_carried_by_other_pills(client):
 def test_units_sort_htmx(client):
     r = client.get("/network/units?sort=value", headers={"HX-Request": "true"})
     assert r.status_code == 200 and "<!doctype" not in r.text.lower()
+
+
+@pytest.mark.parametrize("url", ["/network/units", "/network/hotspots", "/network/map"])
+def test_selector_strips_can_wrap_on_phones(client, url):
+    assert 'class="selector-strip netw-strip"' in client.get(url).text

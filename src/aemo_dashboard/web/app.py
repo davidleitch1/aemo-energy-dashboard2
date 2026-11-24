@@ -7412,6 +7412,12 @@ def _network_page(request: Request, active: str, selectors: str,
     return HTMLResponse(_render_shell(body))
 
 
+def _netw_strip(*pill_bars: str) -> str:
+    """Selector strip whose pill groups wrap at phone width."""
+    return _render_selector_strip(*pill_bars).replace(
+        'class="selector-strip"', 'class="selector-strip netw-strip"', 1)
+
+
 def _network_region_pills(base: str, region: str, other: dict) -> str:
     return _render_region_pills(base, region, other,
                                 regions=[r for r, _ in network.REGIONS])
@@ -7424,7 +7430,7 @@ def network_hotspots_page(request: Request, region: str = "NEM",
     region, range = network.normalise_region(region), network.normalise_range(range)
     sort = network.normalise_sort(sort, "hours")
     base = "/network/hotspots"
-    selectors = _render_selector_strip(
+    selectors = _netw_strip(
         _network_region_pills(base, region, {"range": range, "sort": sort}),
         _render_choice_pills("Period", network.RANGES, range, base,
                              {"region": region, "sort": sort}, "range"),
@@ -7502,7 +7508,7 @@ def network_units_page(request: Request, region: str = "NEM", fuel: str = "all",
     fuel = network.normalise_fuel(fuel)
     sort = network.normalise_unit_sort(sort)
     base = "/network/units"
-    selectors = _render_selector_strip(
+    selectors = _netw_strip(
         _network_region_pills(base, region, {"fuel": fuel, "range": range, "sort": sort}),
         _render_choice_pills("Fuel", network.FUELS, fuel, base,
                              {"region": region, "range": range, "sort": sort}, "fuel"),
