@@ -86,3 +86,8 @@ def test_map_banned_words(client):
                         r"genuine\w*|robust\w*|honest\w*)\b", re.I)
     t = re.sub(r"<script>.*?</script>", "", client.get("/network/map").text, flags=re.S)
     assert not banned.search(re.sub(r"<[^>]+>", " ", t.split('id="tab-body"')[1]))
+
+
+def test_map_selector_strip_can_wrap(client):
+    r = client.get("/network/map")
+    assert 'class="selector-strip netw-strip"' in r.text

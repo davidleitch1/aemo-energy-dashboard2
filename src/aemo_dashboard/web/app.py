@@ -7458,7 +7458,9 @@ def network_map_page(request: Request, region: str = "NEM", range: str = "90d",
         pills.append(_render_choice_pills("Measure", network.MEASURES, measure, base,
                                           dict(carry, region=region, range=range),
                                           "measure"))
-    return _network_page(request, "map", _render_selector_strip(*pills),
+    strip = _render_selector_strip(*pills).replace(
+        'class="selector-strip"', 'class="selector-strip netw-strip"', 1)
+    return _network_page(request, "map", strip,
                          network.map_html(region, range, measure, area))
 
 

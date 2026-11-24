@@ -122,6 +122,8 @@ CSS = """
                   border-radius:2px; margin-right:5px; }
 .netw .row3 { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }
 .netw .row3 h3 { margin-top:10px; }
+.netw-strip .pill-bar { flex-wrap:wrap; }
+.netw-strip .pill-group { flex-wrap:wrap; border-radius:12px; }
 .netw .selbar { margin:8px 0; padding:8px 10px; border:1px solid #e6e4d9;
                 border-radius:6px; font-size:13px; }
 .netw .mapwrap { display:grid; grid-template-columns:minmax(0,1fr) 300px; gap:14px;
@@ -1279,7 +1281,7 @@ _geo_cache: dict = {}
 MAP_RANGES = RANGES + [("now", "Now")]
 MEASURES = [("pct", "% of intervals held back"),
             ("gwh", "GWh curtailed while constrained")]
-MAP_BASE_VIEWS = {"NEM": (146.0, -32.0, 3.3), "NSW1": (147.5, -32.8, 5.0),
+MAP_BASE_VIEWS = {"NEM": (146.0, -27.5, 3.5), "NSW1": (147.5, -32.8, 5.0),
                   "QLD1": (146.0, -22.5, 4.2), "VIC1": (144.8, -37.0, 6.0),
                   "SA1": (135.0, -32.5, 4.5), "TAS1": (146.6, -42.0, 6.3)}
 MAP_RAMP = ["#ECCB60", "#DA702C", "#AF3029", "#6C201C"]
@@ -1450,7 +1452,7 @@ def _line_lonlat(features: list[dict]) -> tuple[list, list]:
 
 
 def _add_area_features(fig, features: list[dict], color: str, width: int, name: str,
-                       hover: str, aid: str | None, legend: bool = True) -> None:
+                       hover: str, aid: str | None, legend: bool = False) -> None:
     lon, lat = _line_lonlat([f for f in features if f.get("kind") == "line"])
     cd = [f"a:{aid}"] * len(lon) if aid else None
     if lon:
