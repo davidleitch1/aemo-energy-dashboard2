@@ -385,16 +385,17 @@ def stacked_monthly(p: Period, series: dict[str, pd.Series], colors: dict[str, s
                     ytitle: str, height: int = 340) -> str:
     """series: name -> Series indexed by month-start Timestamp (hours)."""
     months = _month_axis(p)
+    labels = [m.strftime("%b %Y") for m in months]   # categories: bars sit on the tick
     fig = go.Figure()
     for name, s in series.items():
         s = s.reindex(months).fillna(0.0)
         fig.add_trace(go.Bar(
-            x=months, y=s.values, name=name, marker_color=colors[name],
-            hovertemplate=f"{esc(name)}<br>%{{x|%b %Y}}: %{{y:,.1f}}<extra></extra>"))
+            x=labels, y=s.values, name=name, marker_color=colors[name],
+            hovertemplate=f"{esc(name)}<br>%{{x}}: %{{y:,.1f}}<extra></extra>"))
     _layout(fig, height, barmode="stack", bargap=0.2)
     fig.update_yaxes(title=dict(text=ytitle, font=dict(size=11, color=MUTED)),
                      tickformat=",.0f")
-    fig.update_xaxes(tickformat="%b %Y")
+    fig.update_xaxes(type="category")
     return plot_html(fig, height)
 
 
