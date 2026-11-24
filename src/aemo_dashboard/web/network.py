@@ -28,6 +28,7 @@ import itertools
 import json
 import math
 import os
+import re
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from urllib.parse import quote
@@ -38,7 +39,7 @@ import pandas as pd
 import plotly.graph_objects as go
 
 DATA_DIR = "/Users/davidleitch/aemo_production/data"
-SUMMARY_DB = f"{DATA_DIR}/network_summary.duckdb"
+SUMMARY_DB = os.environ.get("NETWORK_SUMMARY_DB", f"{DATA_DIR}/network_summary.duckdb")
 CONSTRAINTS_DB = f"{DATA_DIR}/constraints_readonly.duckdb"
 AEMO_DB = f"{DATA_DIR}/aemo_readonly.duckdb"
 _DBS = {"summary": "SUMMARY_DB", "constraints": "CONSTRAINTS_DB", "aemo": "AEMO_DB"}
@@ -124,6 +125,33 @@ CSS = """
 .netw .row3 h3 { margin-top:10px; }
 .netw-strip .pill-bar { flex-wrap:wrap; }
 .netw-strip .pill-group { flex-wrap:wrap; border-radius:12px; }
+.netw .vswitch { display:inline-flex; border:1px solid #e6e4d9; border-radius:14px;
+                 overflow:hidden; margin:8px 0 2px; }
+.netw .vsw { padding:4px 14px; font-size:13px; color:#403E3C; border-right:1px solid #e6e4d9; }
+.netw .vsw:last-child { border-right:none; }
+.netw .vsw.active { background:#24837B; color:#fffcf0; }
+.netw .vsw:hover { text-decoration:none; }
+.netw .cpick { display:flex; flex-wrap:wrap; gap:6px; margin:6px 0; }
+.netw .cpick a { border:1px solid #e6e4d9; border-radius:4px; padding:3px 8px; font-size:12px; color:#403E3C; }
+.netw .cpick a.on { background:#f2f0e5; border-color:#b7b5ac; font-weight:600; }
+.netw .lead { background:#f2f0e5; border-radius:4px; padding:10px 12px; font-size:13px; margin:8px 0; }
+.netw .lead .idm { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:13px; }
+.netw .eq { display:grid; grid-template-columns:1fr auto 1fr; gap:14px; align-items:center;
+            border-top:1px solid #b7b5ac; border-bottom:1px solid #b7b5ac; padding:14px 0;
+            font-size:14px; color:#100f0f; }
+.netw .eq > div:first-child { border-left:4px solid #205EA6; padding-left:10px; }
+.netw .eq > div:last-child { border-left:4px solid #AF3029; padding-left:10px; }
+.netw .eq .lab { display:block; font-size:11px; letter-spacing:0.08em; text-transform:uppercase;
+                 color:#6f6e69; font-weight:700; margin-bottom:2px; }
+.netw .eq .rel { font-size:24px; font-weight:600; border:none; padding:0; }
+.netw .note-eq { max-width:70ch; font-size:15px; color:#100f0f; margin:0; }
+.netw .stale { color:#878580; font-size:12px; margin:0 0 6px; }
+.netw .hbars { display:flex; align-items:flex-end; gap:3px; height:48px; max-width:520px; }
+.netw .hbars span { flex:1; background:#AF3029; border-radius:1px; min-width:4px; }
+.netw .haxis { display:flex; justify-content:space-between; max-width:520px; font-size:11px;
+               color:#878580; }
+.netw td.mono { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px;
+                white-space:nowrap; color:#403E3C; }
 .netw .selbar { margin:8px 0; padding:8px 10px; border:1px solid #e6e4d9;
                 border-radius:6px; font-size:13px; }
 .netw .mapwrap { display:grid; grid-template-columns:minmax(0,1fr) 300px; gap:14px;
@@ -166,6 +194,35 @@ def q(sql: str, params: list | None = None, db: str = "summary") -> pd.DataFrame
 
 def _columns(table: str) -> set[str]:
     return set(q(f"DESCRIBE {table}")["column_name"])
+
+
+def _tables() -> set[str]:
+    try:
+        return set(q("SELECT table_name FROM information_schema.tables")["table_name"])
+    except Exception:
+        return set()
+
+
+SORTS = [("hours", "Binding hours"), ("energy", "Energy held back")]
+
+
+def normalise_sort(sort: str, default: str = "hours") -> str:
+    return sort if sort in dict(SORTS) else default
+
+
+def normalise_view(view: str) -> str:
+    return view if view in ("overview", "equation") else "overview"
+
+
+def fw(v, d: int = 3) -> str:
+    """Thousands separators, up to d decimals, trailing decimal zeros dropped.
+    Zeros of whole numbers are never dropped (350 stays 350)."""
+    if _isnan(v):
+        return "–"
+    t = f"{abs(v):,.{d}f}"
+    if "." in t:
+        t = t.rstrip("0").rstrip(".")
+    return ("−" if v < 0 and float(t.replace(",", "") or 0) != 0 else "") + t
 
 
 def _nem_now() -> pd.Timestamp:
@@ -344,8 +401,16 @@ def link(url: str, text: str) -> str:
             f'hx-push-url="true">{esc(text)}</a>')
 
 
-def area_url(area_id: str, rng: str) -> str:
-    return f"/network/area?id={quote(str(area_id), safe='')}&range={rng}"
+def area_url(area_id: str, rng: str, view: str | None = None,
+             constraint: str | None = None, all_terms: bool = False) -> str:
+    u = f"/network/area?id={quote(str(area_id), safe='')}&range={rng}"
+    if view and view != "overview":
+        u += f"&view={view}"
+    if constraint:
+        u += f"&constraint={quote(str(constraint), safe='')}"
+    if all_terms:
+        u += "&all=1"
+    return u
 
 
 def unit_url(duid: str, rng: str) -> str:
@@ -514,8 +579,9 @@ def _monthly(df: pd.DataFrame, day_col: str, val_col: str) -> pd.Series:
 # Hotspots
 # ---------------------------------------------------------------------------
 
-def hotspot_areas(p: Period, region: str) -> pd.DataFrame:
-    """One row per area that bound in the period, most binding hours first."""
+def hotspot_areas(p: Period, region: str, sort: str = "hours") -> pd.DataFrame:
+    """One row per area that bound in the period, ranked by binding hours or by
+    energy held back (ties fall back to the other measure)."""
     cols = _columns("area")
     mw = "a.units_mw" if "units_mw" in cols else "a.weighted_mw"
     reg_sql, params = "", [p.start, p.end]
@@ -523,6 +589,8 @@ def hotspot_areas(p: Period, region: str) -> pd.DataFrame:
     if ar:
         reg_sql, params = "WHERE a.region = ?", params + [ar]
     ic = "a.interconnectors" if "interconnectors" in cols else "NULL"
+    order = ("COALESCE(ad.mwh, 0) DESC, ad.n DESC" if sort == "energy" else
+             "ad.n DESC, COALESCE(ad.mwh, 0) DESC")
     df = q(f"""
         WITH ad AS (
             SELECT area_id, SUM(n_intervals) AS n, SUM(n_sysnormal) AS sn,
@@ -533,10 +601,68 @@ def hotspot_areas(p: Period, region: str) -> pd.DataFrame:
         SELECT ad.*, COALESCE(a.name, ad.area_id) AS name, a.region, a.limittype,
                a.n_units, {mw} AS units_mw, {ic} AS interconnectors
           FROM ad JOIN area a USING (area_id) {reg_sql}
-         ORDER BY ad.n DESC, ad.area_id""", params)
+         ORDER BY {order}, ad.area_id""", params)
     df["hours"] = df["n"] / 12
     df["pct_period"] = df["n"] / p.n_intervals * 100
     return df
+
+
+def load_ranks() -> dict | None:
+    """{window: DataFrame indexed by area_id} from area_rank, or None when the
+    table is absent."""
+    if "area_rank" not in _tables():
+        return None
+    try:
+        df = q('SELECT "window" AS win, area_id, gwh, hours, rank_energy, rank_hours '
+               "FROM area_rank")
+    except Exception:
+        return None
+    return {w: g.set_index("area_id") for w, g in df.groupby("win")}
+
+
+def rank_movement(rank, prev) -> str:
+    """Movement of a rank against the earlier window: ▲n up, ▼n down, – no
+    change, new when the area was not ranked before."""
+    if _isnan(rank):
+        return "–"
+    if _isnan(prev):
+        return "new"
+    d = int(prev) - int(rank)
+    return f"▲{d}" if d > 0 else f"▼{-d}" if d < 0 else "–"
+
+
+def _rank_of(ranks: dict, window: str, area_id: str, col: str):
+    df = ranks.get(window)
+    if df is None or area_id not in df.index:
+        return None
+    v = df.loc[area_id, col]
+    return None if _isnan(v) else int(v)
+
+
+def rising_areas(ranks: dict | None, top: int = 5) -> set[str]:
+    """Areas in the 90-day top five by energy that are not in the 12-month top five."""
+    if not ranks or "90d" not in ranks:
+        return set()
+    out = set()
+    for aid, r in ranks["90d"]["rank_energy"].items():
+        if _isnan(r) or int(r) > top:
+            continue
+        r12 = _rank_of(ranks, "12m", aid, "rank_energy")
+        if r12 is None or r12 > top:
+            out.add(aid)
+    return out
+
+
+def rank_cell(ranks: dict, area_id: str, sort: str) -> str:
+    col = "rank_energy" if sort == "energy" else "rank_hours"
+    r = _rank_of(ranks, "12m", area_id, col)
+    if r is None:
+        return "–"
+    mv = rank_movement(r, _rank_of(ranks, "12m_prev", area_id, col))
+    return f'{r} <span class="muted">{mv}</span>'
+
+
+RISING_TAG = '<span class="tag">rising</span>'
 
 
 def _sum_cause(df: pd.DataFrame) -> tuple[float, float, float]:
@@ -564,10 +690,13 @@ def _region_text(region: str) -> str:
     return "NEM" if region == "NEM" else dict(REGIONS)[region]
 
 
-def hotspots_html(region: str, range_slug: str) -> str:
+def hotspots_html(region: str, range_slug: str, sort: str = "hours") -> str:
     try:
+        sort = normalise_sort(sort)
         p = get_period(range_slug)
-        df = hotspot_areas(p, region)
+        df = hotspot_areas(p, region, sort)
+        ranks = load_ranks()
+        rising = rising_areas(ranks)
         if df.empty:
             return placeholder(f"No constraint bound in {_region_text(region)} "
                                f"for the {p.label}.")
@@ -590,19 +719,30 @@ def hotspots_html(region: str, range_slug: str) -> str:
                 units_cells = [Span(f'<span class="muted">{esc(ic)}</span>', 2)]
             else:
                 units_cells = [fnum(r["n_units"]), fnum(r["units_mw"])]
-            rows.append([
-                link(area_url(r["area_id"], p.slug), r["name"]),
+            name_cell = link(area_url(r["area_id"], p.slug), r["name"]) \
+                + (" " + RISING_TAG if r["area_id"] in rising else "")
+            rows.append(([rank_cell(ranks, r["area_id"], sort)] if ranks else []) + [
+                name_cell,
                 esc(r["region"] or "–"),
                 fhours(r["hours"]), fpct(r["pct_period"]),
                 cause_bar(r["sn"], r["ou"], r["us"]),
                 *units_cells,
                 esc(r["limittype"] or "–"),
                 fgwh(r["mwh"] / 1000), fnum(r["val"] / 1e6, 1)])
-        table = table_html(
-            [("Area", False, "wrap360"), ("Region", False), ("Hours", True),
-             ("% of period", True), ("Cause split", False),
-             ("Units in constraints", True), ("MW in constraints", True),
-             ("Limit type", False), ("GWh curtailed", True), ("$m", True)], rows)
+        heads = ([("12-month rank", True)] if ranks else []) + [
+            ("Area", False, "wrap360"), ("Region", False), ("Hours", True),
+            ("% of period", True), ("Cause split", False),
+            ("Units in constraints", True), ("MW in constraints", True),
+            ("Limit type", False), ("GWh curtailed", True), ("$m", True)]
+        table = table_html(heads, rows)
+        if ranks:
+            measure_txt = "energy held back" if sort == "energy" else "binding hours"
+            table += ('<div class="sub">12-month rank is the area’s position over the last '
+                      f'12 months by {measure_txt}, whatever period is selected. The mark beside it '
+                      'shows movement against the 12 months before: ▲ moved up, ▼ moved down, '
+                      '– no change, new = not ranked then. “rising” marks an area in the top five '
+                      'by energy held back over the last 90 days that is outside the 12-month top '
+                      'five.</div>')
         top = list(df.head(8)["area_id"])
         m = _area_monthly(top, p)
         names = dict(zip(df["area_id"], df["name"]))
@@ -619,7 +759,7 @@ def hotspots_html(region: str, range_slug: str) -> str:
         return wrap(
             _period_sub(p, f"{_region_text(region)} network congestion")
             + tiles + cause_key()
-            + '<h3>Top 25 congestion areas by binding hours</h3>' + cause_legend()
+            + f'<h3>Top 25 congestion areas by {"energy held back" if sort == "energy" else "binding hours"}</h3>' + cause_legend()
             + table
             + '<h3>Monthly binding hours, top 8 areas of the period</h3>' + chart
             + note_html())
@@ -671,7 +811,8 @@ def outage_rows(df: pd.DataFrame, with_area: bool = False) -> list[list[str]]:
     return rows
 
 
-def area_html(area_id: str, range_slug: str) -> str:
+def area_html(area_id: str, range_slug: str, view: str = "overview",
+              constraint: str | None = None, show_all: bool = False) -> str:
     try:
         p = get_period(range_slug)
         cols = _columns("area")
@@ -753,7 +894,16 @@ def area_html(area_id: str, range_slug: str) -> str:
                 + (f'<div class="sub">Most frequent constraint: {esc(desc)}</div>' if desc else
                    '<div class="sub">Most frequent constraint: description pending</div>')
                 + _period_sub(p))
-        return wrap(head + tiles
+        view = normalise_view(view)
+        switch = ('<div class="vswitch">' + "".join(
+            f'<a class="vsw{" active" if v == view else ""}" href="{esc(area_url(area_id, p.slug, v))}" '
+            f'hx-get="{esc(area_url(area_id, p.slug, v))}" hx-target="#tab-body" '
+            f'hx-push-url="true">{lab}</a>' for v, lab in
+            (("overview", "Overview"), ("equation", "Equation"))) + "</div>")
+        if view == "equation":
+            return wrap(head + switch
+                        + equation_html(area_id, p, constraint, show_all) + note_html())
+        return wrap(head + switch + tiles
                     + cause_key()
                     + '<h3>Constraint-hours by cause, per month</h3>' + cause_legend() + chart
                     + '<h3>Constraints that bound in the period</h3>' + ctable
@@ -761,6 +911,238 @@ def area_html(area_id: str, range_slug: str) -> str:
                     + '<h3>Associated outages</h3>' + otable + note_html())
     except NoData as e:
         return placeholder(str(e))
+
+
+# ---------------------------------------------------------------------------
+# Equation view (area page)
+# ---------------------------------------------------------------------------
+
+EQUATION_NOT_BUILT = "The equation data has not been built yet."
+LHS_SHOWN = 12
+
+
+def equation_available() -> bool:
+    t = _tables()
+    return "constraint_equation" in t and "constraint_equation_meta" in t
+
+
+def constraint_picker(area_id: str, p: Period) -> pd.DataFrame:
+    """The area's constraints that bound in the period, most energy held back
+    first, then most hours."""
+    e = "SUM(d.constrained_mwh)" if "constrained_mwh" in _columns("constraint_daily") else "NULL"
+    df = q(f"""SELECT d.constraintid, SUM(d.n_intervals) AS n, {e} AS mwh
+                 FROM constraint_daily d JOIN constraint_meta m USING (constraintid)
+                WHERE m.area_id = ? AND d.day BETWEEN ? AND ?
+                GROUP BY d.constraintid
+                ORDER BY mwh DESC NULLS LAST, n DESC, d.constraintid""",
+           [area_id, p.start, p.end])
+    df["hours"] = df["n"] / 12
+    df["gwh"] = df["mwh"] / 1000
+    return df
+
+
+def _lead_constraint(area_id: str) -> str | None:
+    if "lead_constraintid" not in _columns("area"):
+        return None
+    r = q("SELECT lead_constraintid FROM area WHERE area_id = ?", [area_id])
+    if r.empty or _isnan(r.iloc[0]["lead_constraintid"]):
+        return None
+    return str(r.iloc[0]["lead_constraintid"])
+
+
+def _belongs(area_id: str, constraintid: str) -> bool:
+    return not q("SELECT 1 FROM constraint_meta WHERE constraintid = ? AND area_id = ?",
+                 [constraintid, area_id]).empty
+
+
+def equation_block(meta: dict) -> str:
+    """The two-column left <= right block, worded from the meta row."""
+    rel = {"<=": "≤", ">=": "≥"}.get(str(meta.get("constrainttype")), "=")
+    n_u = int(meta.get("n_lhs_units") or 0)
+    n_i = int(meta.get("n_lhs_interconnectors") or 0)
+    n_fb = int(meta.get("n_feedback") or 0)
+    scale = meta.get("scale")
+    scale = 1.0 if _isnan(scale) else float(scale)
+    left = f"weighted output of {n_u} generators and batteries"
+    if n_i:
+        left += f" + weighted flow on {n_i} interconnector{'s' if n_i != 1 else ''}"
+    right = (f"{fw(scale, 3)} × " if abs(scale - 1) > 1e-9 else "") \
+        + "( the limit − measured flows − margin )"
+    if n_fb:
+        right += f" + the same weighted sum at current output ({n_fb} terms)"
+    return (f'<div class="eq"><div><span class="lab">Left side</span>{esc(left)}</div>'
+            f'<div class="rel">{rel}</div>'
+            f'<div><span class="lab">Right side</span>{esc(right)}</div></div>')
+
+
+def lhs_rows(constraintid: str, p: Period) -> pd.DataFrame:
+    """Left-side terms: units by largest absolute weight, then interconnectors.
+    Adds absf and gwh (energy held back in the period across all limits)."""
+    df = q("""SELECT * FROM constraint_equation
+               WHERE constraintid = ? AND side = 'lhs' AND kind IN ('unit', 'interconnector')
+               ORDER BY ord""", [constraintid])
+    if df.empty:
+        return df.assign(absf=[], gwh=[])
+    ud = q("""SELECT duid, SUM(constrained_mwh) / 1000 AS gwh FROM unit_daily
+               WHERE day BETWEEN ? AND ? GROUP BY duid""", [p.start, p.end])
+    df["gwh"] = df["duid"].map(dict(zip(ud["duid"], ud["gwh"])))
+    df["absf"] = df["factor"].abs()
+    df["_ic"] = (df["kind"] == "interconnector").astype(int)
+    df = df.sort_values(["_ic", "absf", "ord"], ascending=[True, False, True],
+                        kind="stable").drop(columns="_ic")
+    return df.reset_index(drop=True)
+
+
+def _reading(r) -> str:
+    if "reading" in r.index and not _isnan(r["reading"]) and str(r["reading"]).strip():
+        return esc(r["reading"])
+    f = r["factor"]
+    if _isnan(f):
+        return "–"
+    return (f"Each extra MW adds {fw(f, 2)} to the left side" if f > 0
+            else f"Each extra MW takes {fw(-f, 2)} off the left side")
+
+
+def _hour_bars(constraintid: str) -> str:
+    h = q("SELECT hour, n_intervals FROM constraint_hour WHERE constraintid = ?",
+          [constraintid])
+    s = h.set_index("hour")["n_intervals"].reindex(range(24)).fillna(0)
+    mx = max(float(s.max()), 1.0)
+    bars = "".join(f'<span title="{i:02d}:00  {fnum(x / 12)} h" '
+                   f'style="height:{max(2, 46 * x / mx):.0f}px"></span>' for i, x in s.items())
+    return (f'<div class="hbars">{bars}</div><div class="haxis"><span>00</span><span>06</span>'
+            '<span>12</span><span>18</span><span>23</span></div>')
+
+
+def equation_html(area_id: str, p: Period, constraint: str | None, show_all: bool) -> str:
+    if not equation_available():
+        return f'<div class="placeholder">{EQUATION_NOT_BUILT}</div>'
+    pk = constraint_picker(area_id, p)
+    chosen = None
+    if constraint and _belongs(area_id, constraint):
+        chosen = constraint
+    if chosen is None:
+        lead = _lead_constraint(area_id)
+        chosen = lead if lead and _belongs(area_id, lead) else (
+            pk.iloc[0]["constraintid"] if len(pk) else None)
+    if chosen is None:
+        return '<div class="sub">No constraint of this area bound in the period.</div>'
+    picks = "".join(
+        f'<a class="{"on" if r["constraintid"] == chosen else ""}" '
+        f'href="{esc(area_url(area_id, p.slug, "equation", r["constraintid"]))}" '
+        f'hx-get="{esc(area_url(area_id, p.slug, "equation", r["constraintid"]))}" '
+        f'hx-target="#tab-body" hx-push-url="true">{esc(r["constraintid"])} · '
+        f'{"–" if _isnan(r["gwh"]) else fgwh(r["gwh"])} GWh · {fhours(r["hours"])} h</a>'
+        for _, r in pk.head(20).iterrows())
+    picker = '<h3>Constraint</h3><div class="cpick">' + picks + "</div>"
+    mcols = _columns("constraint_equation_meta")
+    order = " ORDER BY effectivedate DESC" if "effectivedate" in mcols else ""
+    meta = q(f"SELECT * FROM constraint_equation_meta WHERE constraintid = ?{order} LIMIT 1",
+             [chosen])
+    if meta.empty:
+        return picker + '<div class="sub">No equation is stored for this constraint.</div>'
+    meta = meta.iloc[0].to_dict()
+    cm = q("SELECT limittype, cause, description, definition_rule FROM constraint_meta "
+           "WHERE constraintid = ?", [chosen])
+    cm = cm.iloc[0] if len(cm) else None
+    hrs = pk.loc[pk["constraintid"] == chosen, "hours"]
+    lead = (f'<div class="lead"><span class="lab">Constraint</span> '
+            f'<span class="idm">{esc(chosen)}</span>'
+            + (f' · bound for {fhours(float(hrs.iloc[0]))} hours' if len(hrs) else "")
+            + (f' · {esc(cm["limittype"] or "–")} · {esc(cdisp(cm["cause"]))}' if cm is not None else "")
+            + ('<br><span class="muted">AEMO: “' + esc(re.sub(r"\s+", " ", str(cm["description"]))) + '”</span>'
+               if cm is not None and not _isnan(cm["description"])
+               and cm["definition_rule"] != "none" else "") + "</div>")
+    # plain English
+    note_html_ = ""
+    if "area_note" in _tables():
+        nt = q("SELECT * FROM area_note WHERE area_id = ? AND constraintid = ?",
+               [area_id, chosen])
+        if len(nt) and not _isnan(nt.iloc[0]["note"]) and str(nt.iloc[0]["note"]).strip():
+            n0 = nt.iloc[0]
+            stale = "is_stale" in nt.columns and bool(n0["is_stale"]) \
+                and not _isnan(n0["is_stale"])
+            banner = ""
+            if stale:
+                d = "" if _isnan(n0.get("written_effectivedate")) \
+                    else pd.Timestamp(n0["written_effectivedate"]).strftime("%Y-%m-%d")
+                banner = (f'<p class="stale">Written for the version effective {d}. AEMO has '
+                          "since changed this equation's structure; the paragraph is awaiting "
+                          "review.</p>")
+            note_html_ = (f'<h3>In plain English</h3>{banner}'
+                          f'<p class="note-eq">{esc(n0["note"])}</p>')
+    # equation and its sentence
+    med, p10, p90 = meta.get("rhs_med"), meta.get("rhs_p10"), meta.get("rhs_p90")
+    sent = "When the constraint binds, the two sides are equal."
+    if not _isnan(med):
+        sent += f" Over the year the right side sat at {fw(med, 0)} (middle value)"
+        if not _isnan(p10) and not _isnan(p90):
+            sent += f", between {fw(p10, 0)} and {fw(p90, 0)} for 80% of binding intervals"
+        sent += "."
+    if meta.get("has_operations") is not None and not _isnan(meta.get("has_operations")) \
+            and bool(meta["has_operations"]):
+        sent += (" The right side chooses between alternatives with a short sequence of "
+                 "operations; the rows marked as calculation steps show it.")
+    eq = (f'<h3>The equation</h3>{equation_block(meta)}<p class="sub">{esc(sent)}</p>')
+    # left side
+    rows = lhs_rows(chosen, p)
+    units = rows[rows["kind"] == "unit"]
+    ics = rows[rows["kind"] == "interconnector"]
+    n_pos, n_neg = int((units["factor"] > 0).sum()), int((units["factor"] < 0).sum())
+    shown = units if show_all else units.head(LHS_SHOWN)
+    more = len(units) - len(shown)
+    lhs_rows_html = []
+    for _, r in shown.iterrows():
+        gwh = r["gwh"]
+        lhs_rows_html.append([
+            esc(r["site"] if not _isnan(r["site"]) else r["duid"] if not _isnan(r["duid"]) else r["spd_id"]),
+            esc(fuel_label(r["fuel"])),
+            "–" if _isnan(r["capacity_mw"]) else fw(r["capacity_mw"], 0),
+            fw(r["factor"], 3), _reading(r),
+            "–" if _isnan(gwh) or gwh < 0.05 else fgwh(gwh)])
+    for _, r in ics.iterrows():
+        lhs_rows_html.append([
+            esc(r["aemo_description"] if not _isnan(r["aemo_description"]) else r["spd_id"]),
+            "interconnector", "", fw(r["factor"], 3), _reading(r), ""])
+    counts = (f"{n_pos} units add to the left side and {n_neg} reduce it. "
+              + (f"All {len(units)} are shown." if show_all or len(units) <= LHS_SHOWN else
+                 f"The {LHS_SHOWN} largest weights are shown, of {len(units)}.")
+              + " A weight near 1 means the unit’s output flows almost entirely through the "
+                "limited equipment.")
+    left = (f'<h3>Left side: what AEMO can change</h3><p class="sub">{esc(counts)}</p>'
+            + table_html([("Unit", False), ("Fuel", False), ("MW", True), ("Weight", True),
+                          ("Reading", False), ("GWh held back, all limits", True)], lhs_rows_html,
+                         "No left-side terms are stored."))
+    if more > 0:
+        left += (f'<div class="sub">{more} more unit{"s" if more != 1 else ""} not shown. '
+                 + link(area_url(area_id, p.slug, "equation", chosen, True), "Show all")
+                 + "</div>")
+    # right side
+    rcols = _columns("constraint_equation")
+    fb_clause = " AND NOT COALESCE(is_feedback, false)" if "is_feedback" in rcols else ""
+    rhs = q(f"SELECT * FROM constraint_equation WHERE constraintid = ? AND side = 'rhs'"
+            f"{fb_clause} ORDER BY ord", [chosen])
+    rrows = [[f'<span class="mono">{esc(r["spd_id"])}</span>' if False else esc(r["spd_id"]),
+              fw(r["factor"], 3), _reading(r)] for _, r in rhs.iterrows()]
+    rtable = table_html([("AEMO’s term", False, "mono"), ("Weight", True),
+                         ("What it is", False)], rrows, "No right-side terms are stored.")
+    n_fb = int(meta.get("n_feedback") or 0)
+    right = ("<h3>Right side: the limit</h3>" + rtable
+             + (f'<p class="sub">The right side also repeats {n_fb} of the left-side terms with '
+                "the same weights, measured at their current output. This is what AEMO calls a "
+                "feedback constraint: the limit each five minutes is what the units are producing "
+                "now plus the room left on the equipment.</p>" if n_fb else ""))
+    hours = "<h3>When it binds, by hour of day</h3>" + _hour_bars(chosen)
+    ed = meta.get("effectivedate")
+    ed_txt = "" if _isnan(ed) else pd.Timestamp(ed).strftime("%Y-%m-%d")
+    vn = meta.get("versionno")
+    rule = ("the exact version" if meta.get("version_rule") == "exact" else
+            "an earlier version; AEMO's archive does not yet hold the current one")
+    foot = (f'<p class="sub">Constraint version effective {ed_txt}'
+            + ("" if _isnan(vn) else f" (version {int(vn)})")
+            + f". This is {rule}. Right-side terms from AEMO's GENERICCONSTRAINTRHS table, "
+              "dispatch scope; descriptions from AEMO's EMSMASTER table.</p>")
+    return picker + lead + note_html_ + eq + left + right + hours + foot
 
 
 # ---------------------------------------------------------------------------
@@ -1436,8 +1818,11 @@ def unit_frame(geo: dict, values: dict[str, float]) -> tuple[pd.DataFrame, int]:
     return df.reset_index(drop=True), int(len(missing))
 
 
-def map_url(region: str, range_slug: str, measure: str, area: str | None = None) -> str:
+def map_url(region: str, range_slug: str, measure: str, area: str | None = None,
+            sort: str | None = None) -> str:
     u = f"/network/map?region={region}&range={range_slug}&measure={measure}"
+    if sort:
+        u += f"&sort={sort}"
     return u + (f"&area={quote(area, safe='')}" if area else "")
 
 
@@ -1491,12 +1876,14 @@ def _now_state() -> dict:
     return {"ts": ts, "areas": areas, "adj": adj}
 
 
-def build_map(region: str, range_slug: str, measure: str, area_id: str | None) -> dict:
+def build_map(region: str, range_slug: str, measure: str, area_id: str | None,
+              sort: str = "energy") -> dict:
     """Everything the map page shows, as a dict (the figure plus the side list,
     selection and counts). Raises NoData for a missing geo file or period."""
     geo = load_geo()
     if geo is None:
         raise NoData("The map reference file is not available.")
+    sort = normalise_sort(sort, "energy")
     now_mode = range_slug == "now"
     p = get_period(DEFAULT_RANGE if now_mode else range_slug)
     ar = area_region(region)
@@ -1515,7 +1902,7 @@ def build_map(region: str, range_slug: str, measure: str, area_id: str | None) -
             ["n", "area_id"], ascending=[False, True]).reset_index(drop=True)
         df["hours"] = np.nan
     else:
-        df = hotspot_areas(p, region)
+        df = hotspot_areas(p, region, sort)
     names = dict(zip(df["area_id"], df["name"]))
 
     # -- 1. reference network (off until the reader turns it on)
@@ -1560,9 +1947,10 @@ def build_map(region: str, range_slug: str, measure: str, area_id: str | None) -
                                    f"{names[aid]} · binding now", aid)
     else:
         top = top_line_areas(df, geo)
-        cols = ramp_colors(list(top["hours"]))
+        cols = ramp_colors(list(top["mwh"].fillna(0) if sort == "energy" else top["hours"]))
         for (_, r), col in zip(top.iterrows(), cols):
-            hover = f"{r['name']} · {r['hours']:,.0f} h · {fpct(r['pct_period'])}"
+            hover = (f"{r['name']} · {r['hours']:,.0f} h · {fpct(r['pct_period'])}"
+                     + ("" if _isnan(r["mwh"]) else f" · {fgwh(r['mwh'] / 1000)} GWh"))
             _add_area_features(fig, _drawable(geo, r["area_id"]), col, 5,
                                str(r["name"]), hover, r["area_id"])
 
@@ -1663,16 +2051,19 @@ def build_map(region: str, range_slug: str, measure: str, area_id: str | None) -
     side = []
     for _, r in df.head(MAP_SIDE_LIST).iterrows():
         side.append({"area_id": r["area_id"], "name": r["name"],
+                     "gwh": None if "mwh" not in df.columns or _isnan(r["mwh"]) else float(r["mwh"]) / 1000,
                      "hours": None if pd.isna(r["hours"]) else float(r["hours"]),
                      "tag": area_tag(geo, r["area_id"])})
-    return {"fig": fig, "side": side, "selected": sel, "n_missing": n_missing,
+    return {"fig": fig, "side": side, "selected": sel, "sort": sort,
+            "rising": rising_areas(load_ranks()), "n_missing": n_missing,
             "center": (lon, lat), "zoom": zoom, "period": p, "geo": geo,
             "now_ts": now["ts"] if now else None, "range": range_slug}
 
 
-def map_html(region: str, range_slug: str, measure: str, area_id: str | None) -> str:
+def map_html(region: str, range_slug: str, measure: str, area_id: str | None,
+             sort: str = "energy") -> str:
     try:
-        m = build_map(region, range_slug, measure, area_id or None)
+        m = build_map(region, range_slug, measure, area_id or None, sort)
     except NoData as e:
         return placeholder(str(e))
     except Exception:
@@ -1704,15 +2095,23 @@ def map_html(region: str, range_slug: str, measure: str, area_id: str | None) ->
             else f'{fhours(sel["hours"])} hours in the period'
         sel_html = (f'<div class="selbar"><b>{esc(sel["name"])}</b> · {hrs} · '
                     f'{esc(sel["status"])} · '
-                    + link(map_url(region, range_slug, measure), "Clear selection") + ' · '
+                    + link(map_url(region, range_slug, measure, None, m["sort"]), "Clear selection") + ' · '
                     + link(area_url(sel["area_id"], link_range), "Area page") + '</div>')
     items = []
     for r in m["side"]:
-        h = "now" if r["hours"] is None else f'{fhours(r["hours"])} h'
-        items.append(f'<li>{link(map_url(region, range_slug, measure, r["area_id"]), r["name"])}'
-                     f'<span class="side-meta"><span class="tag">{esc(r["tag"])}</span> {h}</span></li>')
-    side = (f'<div class="side"><h3>Areas with the most '
-            f'{"constraints binding now" if now_mode else "binding hours"}</h3>'
+        if r["hours"] is None:
+            h = "binding now"
+        else:
+            h = (f'{fgwh(r["gwh"])} GWh · ' if r["gwh"] is not None else "") + f'{fhours(r["hours"])} h'
+        rise = (" " + RISING_TAG) if r["area_id"] in m["rising"] else ""
+        eq = link(area_url(r["area_id"], link_range, "equation"), "equation")
+        items.append(
+            f'<li>{link(map_url(region, range_slug, measure, r["area_id"], m["sort"]), r["name"])}'
+            f'{rise}<span class="side-meta"><span class="tag">{esc(r["tag"])}</span> {h}'
+            f' · {eq}</span></li>')
+    heading = ("constraints binding now" if now_mode else
+               "energy held back" if m["sort"] == "energy" else "binding hours")
+    side = (f'<div class="side"><h3>Top areas by {heading}</h3>'
             f'<ul>{"".join(items) or "<li>None in this selection.</li>"}</ul></div>')
     note = (f'<div class="note">{esc(MAP_SENTENCE)} {fnum(m["n_missing"])} units of 5 MW '
             f'and over are not drawn for lack of coordinates. {esc(geo.get("attribution", ""))}'
