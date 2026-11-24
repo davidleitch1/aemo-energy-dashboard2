@@ -22,8 +22,20 @@ Covers the NEM dashboard (FastAPI/HTMX app on .71) and the AEMO data collector. 
 - **Open:** collector scada30 catch-up bug (23 Oct): `collect_30min_scada` only builds endpoints newer than `MAX(scada30)`, so a scada5 file that lands after a later endpoint has been built leaves that label empty, and `gap_repair` does not rebuild it because no 5-minute row was newly inserted. Hit once after the 23 Oct NEMweb stall; fixed by hand.
 - **Catch-up repair (13 Nov):** `scripts/catchup_repair.py` in aemo-data-updater, cron every 15 min, runs the integrity repair and emails once the collector has caught up after downtime but left holes. See SYSTEM.md "Data integrity". The collector still fetches newest-first; this repairs after it rather than changing it.
 - **Catch-up repair, first live use (17 Nov):** after a ~16 h outage it recovered 1,073 of 1,104 holes and then, by design, did not retry the other 31 inside 24 h; a manual `weekly_integrity.py --no-email` filled them. Open: whether a second attempt after an hour would be better than waiting for 04:17.
-- **Network congestion (24 Nov): Phase 0 done on the Studio, nothing built on .71.** Plan, scope and Phase 0 results at `snakeplay/AEMO_spot/plans/congestion_data_plan.md` (section 11); code in `AEMO_spot/analysis_code/congestion_phase0/`, scratch DB `~/data/congestion_phase0/phase0.duckdb` (Studio), charts in `AEMO_spot/pngs/congestion_phase0/`. Gates G1 and G2 passed. History start decided: 1 Jul 2024, earlier years as a post-build addition. Awaiting David: hotspot grouping rule and page layout (G3), then go-ahead for Phase 1 (backfill into a new `constraints.duckdb`).
+- **Network congestion (24 Nov): Phase 1 done — history is in `~/aemo_production/data/constraints.duckdb` (1 Jul 2024 – 31 Oct 2026, 627 MB), built by `aemo-data-updater/scripts/backfill_constraints.py`.** Nothing writes to it yet and the collector is unchanged; there is no readonly copy, so open it read-only. Plan and results: `snakeplay/AEMO_spot/plans/congestion_data_plan.md` (sections 11–12). Grouping rule decided: by set of units held back. **Next: Phase 2 (live parsers in the collector, outage and definitions jobs, integrity) needs David's go-ahead because it changes the collector.** November 2026 is not loaded. Earlier history is a planned post-build addition (rerun the backfill with an earlier `--start`).
 - **Open:** whether to relabel Batteries-tab Util % as cycles a day (it is discharge ÷ storage per day × 100).
+
+## 2026-11-24 (midday) — Network congestion Phase 1: history backfill into constraints.duckdb
+
+**Asked.** Group hotspots by the set of units held back; proceed.
+
+**Produced.** `aemo-data-updater`: `src/aemo_updater/constraints_store.py` (schema, anti-join loaders, views `unit_binding` and `local_price_computed`), `scripts/backfill_constraints.py`, 27 tests in `tests/test_constraints_store.py` and `tests/test_constraints_backfill.py` (commits 504cac1, 36085ee; coding delegated, verified here). Backfill run in tmux `constraints_bf` (now ended): 142 months, 55 minutes, 0 failures, log `~/aemo_production/logs/backfill_constraints_20261124.log`. New file `~/aemo_production/data/constraints.duckdb`: 5.41 M binding rows, 245,664 intervals (complete), 10.4 M local price rows from Aug 2024, definitions from Jan 2015, outage and DUDETAILSUMMARY snapshots for Oct 2026.
+
+**Checked.** Interval ledger equals the expected count. Broadsound Sep-Oct discharge-limited intervals = 7,180, the Phase 0 figure. prices5 was current at the end of the run; a 20 s pause after each large download was enough to avoid nemweb rate limiting.
+
+**Decided.** Binding rows only; definitions swept from 2015 because the monthly files are incremental; pre-2015 months (whole-month zips) skipped.
+
+**Open.** Phase 2 go-ahead. 2013-08 and 2013-11 definitions (two network constraints: SVML_ZERO, N_X_MBTE_3A). Outage rows are never updated once loaded — fix before live outage collection. 4,586 repeated invocations in `genconsetinvoke`. SYSTEM.md now lists the new database.
 
 ## 2026-11-24 (later) — Network congestion Phase 0: proof on two months of archive data
 

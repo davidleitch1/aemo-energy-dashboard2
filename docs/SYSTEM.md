@@ -48,6 +48,7 @@ AEMO NEMweb → collector (every 4.5 min) → `~/aemo_production/data/aemo_test.
 - **Never write to `aemo_readonly.duckdb`.** The next cycle overwrites it. Edits (including `duid_mapping` and view definitions, which live in the DB) go into `aemo_test.duckdb`, between cycles: the collector holds an exclusive lock during a cycle, so writers retry `duckdb.connect` on `IOException`.
 - No app may open `aemo_test.duckdb`; it contends with the collector's lock.
 - Bids go to a separate `bids.duckdb` with its own `bids_readonly.duckdb` copy.
+- Network constraint history is in a separate `constraints.duckdb` (from 24 Nov 2026): binding constraints and AEMO local price adjustments per 5 minutes from 1 Jul 2024, constraint definitions from 2015, outage snapshots. It was loaded once from the MMSDM monthly archive by `aemo-data-updater/scripts/backfill_constraints.py` (idempotent; rerun with an earlier `--start` for more history). **The collector does not write to it yet** and it has no readonly copy; open it read-only. Schema and views: `aemo-data-updater/src/aemo_updater/constraints_store.py`. Plan: `snakeplay/AEMO_spot/plans/congestion_data_plan.md`.
 
 ## Tables that matter and where their truth comes from
 
