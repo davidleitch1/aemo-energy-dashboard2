@@ -140,12 +140,13 @@ app = FastAPI(title="NEM Today mockup")
 
 try:                       # tests import aemo_dashboard.web.app
     from . import pasa_data, pasa_transmission
-    from . import battery_tod, demand_tod
+    from . import battery_tod, demand_tod, network
 except ImportError:        # uvicorn runs `app:app` from this directory
     import pasa_data
     import pasa_transmission
     import battery_tod
     import demand_tod
+    import network
 
 
 def q(sql: str, params: list | None = None) -> pd.DataFrame:
@@ -203,6 +204,10 @@ TABS = [
                                               ("extended",     "Extended outages"),
                                               ("slippage",     "Return-date changes"),
                                               ("transmission", "Transmission")]),
+    ("network",          "Network",          [("hotspots", "Hotspots"),
+                                              ("causes",   "Causes"),
+                                              ("units",    "Units"),
+                                              ("now",      "Now")]),
     ("gas",              "Gas",              []),
 ]
 TAB_LOOKUP = {slug: (label, subs) for slug, label, subs in TABS}
@@ -682,7 +687,7 @@ def _render_shell(body_html: str) -> str:
   <script src="https://unpkg.com/tabulator-tables@6.3.1/dist/js/tabulator.min.js"></script>
   <style>{SHELL_CSS}</style>
   <style>{PIVOT_TABULATOR_CSS}</style>
-  <style>{battery_tod.CSS}{demand_tod.CSS}</style>
+  <style>{battery_tod.CSS}{demand_tod.CSS}{network.CSS}</style>
   <!-- Privacy-friendly analytics by Plausible -->
   <script async src="https://plausible.io/js/pa-SHRLe35GBBWYcyXSqR7pc.js"></script>
   <script>
@@ -7390,6 +7395,95 @@ def batteries_tod_page(request: Request, region: str = "NEM",
     if _is_htmx(request):
         return HTMLResponse(body)
     return HTMLResponse(_render_shell(body))
+
+
+# ----------------------------------------------------------------------------
+# /network — network congestion (network module; data in network_summary.duckdb)
+# ----------------------------------------------------------------------------
+
+def _network_page(request: Request, active: str, selectors: str,
+                  content: str) -> HTMLResponse:
+    _, subs = TAB_LOOKUP["network"]
+    body = _render_tab_body(_render_subtab_nav("network", subs, active),
+                            selectors + content)
+    if _is_htmx(request):
+        return HTMLResponse(body)
+    return HTMLResponse(_render_shell(body))
+
+
+def _network_region_pills(base: str, region: str, other: dict) -> str:
+    return _render_region_pills(base, region, other,
+                                regions=[r for r, _ in network.REGIONS])
+
+
+@app.get("/network", response_class=HTMLResponse)
+@app.get("/network/hotspots", response_class=HTMLResponse)
+def network_hotspots_page(request: Request, region: str = "NEM",
+                          range: str = "90d") -> HTMLResponse:
+    region, range = network.normalise_region(region), network.normalise_range(range)
+    base = "/network/hotspots"
+    selectors = _render_selector_strip(
+        _network_region_pills(base, region, {"range": range}),
+        _render_choice_pills("Period", network.RANGES, range, base,
+                             {"region": region}, "range"))
+    return _network_page(request, "hotspots", selectors,
+                         network.hotspots_html(region, range))
+
+
+@app.get("/network/area", response_class=HTMLResponse)
+def network_area_page(request: Request, id: str = "",
+                      range: str = "90d") -> HTMLResponse:
+    range = network.normalise_range(range)
+    selectors = _render_selector_strip(
+        _render_choice_pills("Period", network.RANGES, range, "/network/area",
+                             {"id": id}, "range"))
+    return _network_page(request, "hotspots", selectors,
+                         network.area_html(id, range))
+
+
+@app.get("/network/causes", response_class=HTMLResponse)
+def network_causes_page(request: Request, region: str = "NEM",
+                        range: str = "90d") -> HTMLResponse:
+    region, range = network.normalise_region(region), network.normalise_range(range)
+    base = "/network/causes"
+    selectors = _render_selector_strip(
+        _network_region_pills(base, region, {"range": range}),
+        _render_choice_pills("Period", network.RANGES, range, base,
+                             {"region": region}, "range"))
+    return _network_page(request, "causes", selectors,
+                         network.causes_html(region, range))
+
+
+@app.get("/network/units", response_class=HTMLResponse)
+def network_units_page(request: Request, region: str = "NEM", fuel: str = "all",
+                       range: str = "90d") -> HTMLResponse:
+    region, range = network.normalise_region(region), network.normalise_range(range)
+    fuel = network.normalise_fuel(fuel)
+    base = "/network/units"
+    selectors = _render_selector_strip(
+        _network_region_pills(base, region, {"fuel": fuel, "range": range}),
+        _render_choice_pills("Fuel", network.FUELS, fuel, base,
+                             {"region": region, "range": range}, "fuel"),
+        _render_choice_pills("Period", network.RANGES, range, base,
+                             {"region": region, "fuel": fuel}, "range"))
+    return _network_page(request, "units", selectors,
+                         network.units_html(region, fuel, range))
+
+
+@app.get("/network/unit", response_class=HTMLResponse)
+def network_unit_page(request: Request, duid: str = "",
+                      range: str = "90d") -> HTMLResponse:
+    range = network.normalise_range(range)
+    selectors = _render_selector_strip(
+        _render_choice_pills("Period", network.RANGES, range, "/network/unit",
+                             {"duid": duid}, "range"))
+    return _network_page(request, "units", selectors,
+                         network.unit_html(duid, range))
+
+
+@app.get("/network/now", response_class=HTMLResponse)
+def network_now_page(request: Request) -> HTMLResponse:
+    return _network_page(request, "now", "", network.now_html())
 
 
 # ----------------------------------------------------------------------------
