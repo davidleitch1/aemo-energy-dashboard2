@@ -1062,6 +1062,22 @@ def _reading(r) -> str:
             else f"Each extra MW takes {fw(-f, 2)} off the left side")
 
 
+def _ic_name(desc, spd_id) -> str:
+    """'MW flow west on the Murraylink DC Interconnector' -> 'Murraylink DC Interconnector, flow west'."""
+    import re as _re
+    if _isnan(desc) or not str(desc).strip():
+        return str(spd_id)
+    m = _re.match(r"\s*MW flow (\w+) on the (.+?)\s*$", str(desc))
+    return f"{m.group(2)}, flow {m.group(1)}" if m else str(desc)
+
+
+def _ic_reading(f) -> str:
+    if _isnan(f):
+        return "–"
+    return (f"Each MW in that direction adds {fw(f, 2)} to the left side" if f > 0
+            else f"Each MW in that direction takes {fw(-f, 2)} off the left side")
+
+
 def _hour_bars(constraintid: str) -> str:
     h = q("SELECT hour, n_intervals FROM constraint_hour WHERE constraintid = ?",
           [constraintid])
@@ -1161,8 +1177,8 @@ def equation_html(area_id: str, p: Period, constraint: str | None, show_all: boo
             "–" if _isnan(gwh) or gwh < 0.05 else fgwh(gwh)])
     for _, r in ics.iterrows():
         lhs_rows_html.append([
-            esc(r["aemo_description"] if not _isnan(r["aemo_description"]) else r["spd_id"]),
-            "interconnector", "", fw(r["factor"], 3), _reading(r), ""])
+            esc(_ic_name(r["aemo_description"], r["spd_id"])),
+            "interconnector", "", fw(r["factor"], 3), _ic_reading(r["factor"]), ""])
     counts = (f"{n_pos} units add to the left side and {n_neg} reduce it. "
               + (f"All {len(units)} are shown." if show_all or len(units) <= LHS_SHOWN else
                  f"The {LHS_SHOWN} largest weights are shown, of {len(units)}.")
