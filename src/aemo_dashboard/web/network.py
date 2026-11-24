@@ -51,6 +51,10 @@ FUELS = [("all", "All"), ("wind", "Wind"), ("solar", "Solar"),
          ("battery", "Battery"), ("other", "Other")]
 DEFAULT_RANGE = "90d"
 MIN_UNIT_MW = 5.0
+AREA_CONSTRAINT_CAP = 25
+UNIT_CONSTRAINT_CAP = 15
+OUTAGE_NOW_CAP = 25
+VIOLATION_PENALTY_MV = 100_000
 PASA_TRANSMISSION_URL = "/pasa/transmission"
 
 # Flexoki Light
@@ -58,6 +62,20 @@ INK, MUTED, BORDER = "#403E3C", "#878580", "#E6E4D9"
 CAUSES = ["System normal", "Outage", "Unit-specific limit"]
 CAUSE_COLORS = {"System normal": "#205EA6", "Outage": "#BC5215",
                 "Unit-specific limit": "#5E409D"}
+CAUSE_DISPLAY = {"System normal": "Network as built", "Outage": "Equipment outage",
+                 "Unit-specific limit": "Limit on a single plant"}
+CAUSE_TILE = {"System normal": "Network as built share",
+              "Outage": "Equipment outage share",
+              "Unit-specific limit": "Single-plant limit share"}
+CAUSE_KEY = [
+    ("Network as built", "the limit binds with every line and transformer in service. "
+     "AEMO marks these “Out = Nil”."),
+    ("Equipment outage", "the limit applies only while a named line or transformer is "
+     "out of service."),
+    ("Limit on a single plant", "AEMO caps one wind or solar farm. Most are system "
+     "strength limits, which depend on how many coal, gas or hydro units and "
+     "synchronous condensers are running nearby."),
+]
 FUEL_COLORS = {"Wind": "#66800B", "Solar": "#AD8301", "Battery": "#5E409D"}
 SERIES_COLORS = ["#AF3029", "#BC5215", "#AD8301", "#66800B",
                  "#24837B", "#205EA6", "#5E409D", "#A02F6F"]
@@ -86,6 +104,13 @@ CSS = """
 .netw tbody tr:first-child td { border-top:none; }
 .netw th.r, .netw td.r { text-align:right; font-variant-numeric:tabular-nums; }
 .netw td.nw { white-space:nowrap; }
+.netw td.wrap360 { max-width:360px; min-width:200px; white-space:normal; overflow-wrap:anywhere; }
+.netw td.wrap260 { max-width:260px; min-width:160px; white-space:normal; overflow-wrap:anywhere; }
+.netw .muted { color:#878580; }
+.netw .mono { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; color:#878580; font-size:12px; }
+.netw .key { margin:10px 0 0; padding:0; list-style:none; font-size:12px; color:#403E3C; line-height:1.5; }
+.netw .key li { margin:2px 0; }
+.netw .key i { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:6px; }
 .netw .cbar { display:flex; height:8px; width:90px; border-radius:2px;
               overflow:hidden; margin-top:4px; }
 .netw .cbar span { display:block; height:100%; }
@@ -240,6 +265,28 @@ def fnum(v, nd: int = 0) -> str:
     return "–" if _isnan(v) else f"{v:,.{nd}f}"
 
 
+def fhours(v) -> str:
+    return "–" if _isnan(v) else f"{v:,.0f}"
+
+
+def fgwh(v) -> str:
+    """GWh: one decimal below 100, none from 100 up."""
+    if _isnan(v):
+        return "–"
+    return f"{v:,.1f}" if abs(v) < 100 else f"{v:,.0f}"
+
+
+def fpct(v) -> str:
+    """Percent: one decimal below 10, none from 10 up."""
+    if _isnan(v):
+        return "–"
+    return f"{v:.1f}%" if abs(v) < 10 else f"{v:.0f}%"
+
+
+def cdisp(cause) -> str:
+    return CAUSE_DISPLAY.get(cause, "–" if _isnan(cause) else str(cause))
+
+
 def fmoney_m(v) -> str:
     return "–" if _isnan(v) else f"${v:,.1f}m"
 
@@ -291,25 +338,42 @@ def tiles_html(tiles: list[tuple[str, str]]) -> str:
     return f'<div class="strip">{inner}</div>'
 
 
-def table_html(headers: list[tuple[str, bool]], rows: list[list[str]],
+class Span(str):
+    """A cell that spans several columns."""
+    def __new__(cls, text: str, span: int = 2):
+        o = super().__new__(cls, text)
+        o.span = span
+        return o
+
+
+def table_html(headers: list[tuple], rows: list[list[str]],
                empty: str = "No rows in this period.") -> str:
-    """headers: (label, right_aligned). Cells are pre-rendered HTML."""
+    """headers: (label, right_aligned[, css class for the column's cells]).
+    Cells are pre-rendered HTML; a Span cell covers several columns."""
     if not rows:
         return f'<div class="sub">{esc(empty)}</div>'
-    head = "".join(f'<th class="{"r" if r else ""}">{esc(h)}</th>' for h, r in headers)
-    body = "".join(
-        "<tr>" + "".join(
-            f'<td class="{"r" if headers[i][1] else ""}">{c}</td>'
-            for i, c in enumerate(row)) + "</tr>" for row in rows)
+    head = "".join(f'<th class="{"r" if h[1] else ""}">{esc(h[0])}</th>' for h in headers)
+    body = []
+    for row in rows:
+        tds, col = [], 0
+        for c in row:
+            span = getattr(c, "span", 1)
+            right = headers[col][1]
+            extra = headers[col][2] if len(headers[col]) > 2 else ""
+            cls = " ".join(x for x in (("r" if right else ""), extra) if x)
+            colspan = f' colspan="{span}"' if span > 1 else ""
+            tds.append(f'<td class="{cls}"{colspan}>{c}</td>')
+            col += span
+        body.append("<tr>" + "".join(tds) + "</tr>")
     return (f'<div class="tbl-wrap"><table><thead><tr>{head}</tr></thead>'
-            f'<tbody>{body}</tbody></table></div>')
+            f'<tbody>{"".join(body)}</tbody></table></div>')
 
 
 def cause_bar(sn: float, ou: float, us: float) -> str:
     shares = cause_shares(sn, ou, us)
     if not sum(shares):
         return "–"
-    title = " · ".join(f"{c} {s:.0f}%" for c, s in zip(CAUSES, shares))
+    title = " · ".join(f"{CAUSE_DISPLAY[c]} {s:.0f}%" for c, s in zip(CAUSES, shares))
     segs = "".join(f'<span style="width:{s:.2f}%;background:{CAUSE_COLORS[c]}"></span>'
                    for c, s in zip(CAUSES, shares))
     return f'<div class="cbar" title="{esc(title)}">{segs}</div>'
@@ -317,8 +381,14 @@ def cause_bar(sn: float, ou: float, us: float) -> str:
 
 def cause_legend() -> str:
     return '<div class="legend">' + "".join(
-        f'<span><i style="background:{CAUSE_COLORS[c]}"></i>{c}</span>'
+        f'<span><i style="background:{CAUSE_COLORS[c]}"></i>{CAUSE_DISPLAY[c]}</span>'
         for c in CAUSES) + "</div>"
+
+
+def cause_key() -> str:
+    return '<ul class="key">' + "".join(
+        f'<li><i style="background:{CAUSE_COLORS[c]}"></i><b>{esc(n)}:</b> {esc(t)}</li>'
+        for c, (n, t) in zip(CAUSES, CAUSE_KEY)) + "</ul>"
 
 
 def placeholder(msg: str) -> str:
@@ -390,8 +460,9 @@ def stacked_monthly(p: Period, series: dict[str, pd.Series], colors: dict[str, s
     for name, s in series.items():
         s = s.reindex(months).fillna(0.0)
         fig.add_trace(go.Bar(
-            x=labels, y=s.values, name=name, marker_color=colors[name],
-            hovertemplate=f"{esc(name)}<br>%{{x}}: %{{y:,.1f}}<extra></extra>"))
+            x=labels, y=s.values, name=CAUSE_DISPLAY.get(name, name),
+            marker_color=colors[name],
+            hovertemplate=f"{esc(CAUSE_DISPLAY.get(name, name))}<br>%{{x}}: %{{y:,.0f}}<extra></extra>"))
     _layout(fig, height, barmode="stack", bargap=0.2)
     fig.update_yaxes(title=dict(text=ytitle, font=dict(size=11, color=MUTED)),
                      tickformat=",.0f")
@@ -431,6 +502,7 @@ def hotspot_areas(p: Period, region: str) -> pd.DataFrame:
     ar = area_region(region)
     if ar:
         reg_sql, params = "WHERE a.region = ?", params + [ar]
+    ic = "a.interconnectors" if "interconnectors" in cols else "NULL"
     df = q(f"""
         WITH ad AS (
             SELECT area_id, SUM(n_intervals) AS n, SUM(n_sysnormal) AS sn,
@@ -439,7 +511,7 @@ def hotspot_areas(p: Period, region: str) -> pd.DataFrame:
               FROM area_daily WHERE day BETWEEN ? AND ?
              GROUP BY area_id HAVING SUM(n_intervals) > 0)
         SELECT ad.*, COALESCE(a.name, ad.area_id) AS name, a.region, a.limittype,
-               a.n_units, {mw} AS units_mw
+               a.n_units, {mw} AS units_mw, {ic} AS interconnectors
           FROM ad JOIN area a USING (area_id) {reg_sql}
          ORDER BY ad.n DESC, ad.area_id""", params)
     df["hours"] = df["n"] / 12
@@ -482,27 +554,34 @@ def hotspots_html(region: str, range_slug: str) -> str:
         sn, ou, us = _sum_cause(df)
         sh = cause_shares(sn, ou, us)
         tiles = tiles_html([
-            ("Hours in period", fnum(p.hours)),
             ("Areas that bound", fnum(len(df))),
-            ("System normal share", f"{sh[0]:.0f}%"),
-            ("Outage share", f"{sh[1]:.0f}%"),
-            ("Unit-specific share", f"{sh[2]:.0f}%"),
-            ("Curtailed while constrained", f"{df['mwh'].sum() / 1000:,.1f} GWh"),
+            (CAUSE_TILE["System normal"], fpct(sh[0])),
+            (CAUSE_TILE["Outage"], fpct(sh[1])),
+            (CAUSE_TILE["Unit-specific limit"], fpct(sh[2])),
+            ("Curtailed while constrained", f"{fgwh(df['mwh'].sum() / 1000)} GWh"),
             ("Value of that curtailment", fmoney_m(df["val"].sum() / 1e6)),
         ])
+        has_ic = "interconnectors" in df.columns
         rows = []
         for _, r in df.head(25).iterrows():
+            if not r["n_units"]:
+                ic = r["interconnectors"] if has_ic and not _isnan(r["interconnectors"]) \
+                    and str(r["interconnectors"]).strip() else "interconnector"
+                units_cells = [Span(f'<span class="muted">{esc(ic)}</span>', 2)]
+            else:
+                units_cells = [fnum(r["n_units"]), fnum(r["units_mw"])]
             rows.append([
                 link(area_url(r["area_id"], p.slug), r["name"]),
                 esc(r["region"] or "–"),
-                fnum(r["hours"], 1), f"{r['pct_period']:.1f}%",
+                fhours(r["hours"]), fpct(r["pct_period"]),
                 cause_bar(r["sn"], r["ou"], r["us"]),
-                fnum(r["n_units"]), fnum(r["units_mw"]),
+                *units_cells,
                 esc(r["limittype"] or "–"),
-                fnum(r["mwh"] / 1000, 1), fnum(r["val"] / 1e6, 1)])
+                fgwh(r["mwh"] / 1000), fnum(r["val"] / 1e6, 1)])
         table = table_html(
-            [("Area", False), ("Region", False), ("Hours", True), ("% of period", True),
-             ("Cause split", False), ("Units", True), ("MW behind", True),
+            [("Area", False, "wrap360"), ("Region", False), ("Hours", True),
+             ("% of period", True), ("Cause split", False),
+             ("Units in constraints", True), ("MW in constraints", True),
              ("Limit type", False), ("GWh curtailed", True), ("$m", True)], rows)
         top = list(df.head(8)["area_id"])
         m = _area_monthly(top, p)
@@ -519,7 +598,7 @@ def hotspots_html(region: str, range_slug: str) -> str:
         chart = stacked_monthly(p, series, colors, "binding hours per month", 380)
         return wrap(
             _period_sub(p, f"{_region_text(region)} network congestion")
-            + tiles
+            + tiles + cause_key()
             + '<h3>Top 25 congestion areas by binding hours</h3>' + cause_legend()
             + table
             + '<h3>Monthly binding hours, top 8 areas of the period</h3>' + chart
@@ -567,7 +646,7 @@ def outage_rows(df: pd.DataFrame, with_area: bool = False) -> list[list[str]]:
             row.append(r["area_html"])
         row += [esc(r["substation"] or "–"), esc(r["equipment"]),
                 fdt(r["starttime"]), fdt(r["endtime"]), esc(r["status"]),
-                esc(r["reason"] or "–"), fnum(r["n"] / 12, 1)]
+                esc(r["reason"] or "–"), fhours(r["n"] / 12)]
         rows.append(row)
     return rows
 
@@ -608,15 +687,15 @@ def area_html(area_id: str, range_slug: str) -> str:
                               LIMIT 1""", [area_id])
             desc = known.iloc[0]["description"] if len(known) else None
         tiles = tiles_html([
-            ("Binding hours", fnum(n / 12, 1)),
-            ("% of period", f"{n / p.n_intervals * 100:.1f}%"),
-            ("System normal share", f"{sh[0]:.0f}%"),
-            ("Outage share", f"{sh[1]:.0f}%"),
-            ("Unit-specific share", f"{sh[2]:.0f}%"),
-            ("Units behind it", fnum(a["n_units"])),
-            ("MW behind it", fnum(a["units_mw"])),
+            ("Binding hours", fhours(n / 12)),
+            ("% of period", fpct(n / p.n_intervals * 100)),
+            (CAUSE_TILE["System normal"], fpct(sh[0])),
+            (CAUSE_TILE["Outage"], fpct(sh[1])),
+            (CAUSE_TILE["Unit-specific limit"], fpct(sh[2])),
+            ("Units in constraints", fnum(a["n_units"])),
+            ("MW in constraints", fnum(a["units_mw"])),
             ("Curtailed while constrained",
-             "–" if _isnan(ad["mwh"]) else f"{ad['mwh'] / 1000:,.1f} GWh"),
+             "–" if _isnan(ad["mwh"]) else f"{fgwh(ad['mwh'] / 1000)} GWh"),
             ("Value of that curtailment",
              fmoney_m(None if _isnan(ad["val"]) else ad["val"] / 1e6)),
         ])
@@ -624,12 +703,15 @@ def area_html(area_id: str, range_slug: str) -> str:
         series = {c: (m.set_index("month")[k] / 12) for c, k in
                   zip(CAUSES, ("sn", "ou", "us"))}
         chart = stacked_monthly(p, series, CAUSE_COLORS, "constraint-hours per month", 320)
-        crows = [[esc(r["constraintid"]), fnum(r["n"] / 12, 1), esc(r["cause"] or "–"),
+        crows = [[esc(r["constraintid"]), fhours(r["n"] / 12), esc(cdisp(r["cause"])),
                   esc(r["limittype"] or "–"), describe(r["description"], r["definition_rule"])]
-                 for _, r in cons.iterrows()]
+                 for _, r in cons.head(AREA_CONSTRAINT_CAP).iterrows()]
         ctable = table_html([("Constraint", False), ("Hours", True), ("Cause", False),
                              ("Limit type", False), ("AEMO description", False)], crows,
                             "No constraint of this area bound in the period.")
+        if len(cons) > AREA_CONSTRAINT_CAP:
+            ctable += (f'<div class="sub">Showing the {AREA_CONSTRAINT_CAP} constraints with '
+                       f'the most hours; {len(cons) - AREA_CONSTRAINT_CAP} others also bound.</div>')
         units = q("SELECT * FROM area_units WHERE area_id = ?", [area_id])
         wcol = "max_rel_weight" if "max_rel_weight" in units.columns else "max_factor"
         units = units.sort_values("capacity_mw", ascending=False, na_position="last")
@@ -647,11 +729,12 @@ def area_html(area_id: str, range_slug: str) -> str:
             outage_rows(out), "No associated outage overlapped this period.")
         head = (f'<h2>{esc(a["name"])}</h2>'
                 f'<div class="sub">{esc(a["region"] or "–")} · {esc(a["limittype"] or "–")}'
-                f' · {esc(area_id)}</div>'
-                + (f'<div class="sub">AEMO description: {esc(desc)}</div>' if desc else
-                   '<div class="sub">AEMO description: pending</div>')
+                f' · <span class="mono">{esc(area_id)}</span></div>'
+                + (f'<div class="sub">Most frequent constraint: {esc(desc)}</div>' if desc else
+                   '<div class="sub">Most frequent constraint: description pending</div>')
                 + _period_sub(p))
         return wrap(head + tiles
+                    + cause_key()
                     + '<h3>Constraint-hours by cause, per month</h3>' + cause_legend() + chart
                     + '<h3>Constraints that bound in the period</h3>' + ctable
                     + '<h3>Units behind it</h3>' + utable
@@ -717,7 +800,7 @@ def causes_html(region: str, range_slug: str) -> str:
                                f"for the {p.label}.")
         lt = t["by_limittype"]
         c1 = hbar(list(lt.index), list((lt / 12).round(1)), "#205EA6", 300)
-        c2 = hbar(CAUSES, [t["by_cause"][c] / 12 for c in CAUSES],
+        c2 = hbar([CAUSE_DISPLAY[c] for c in CAUSES], [t["by_cause"][c] / 12 for c in CAUSES],
                   [CAUSE_COLORS[c] for c in CAUSES], 300)
         rc = t["by_region_cause"]
         regs = [r for r in ("NSW", "QLD", "VIC", "SA", "TAS", "Other")
@@ -725,9 +808,9 @@ def causes_html(region: str, range_slug: str) -> str:
         fig = go.Figure()
         for c in CAUSES:
             fig.add_trace(go.Bar(
-                y=regs, x=[rc.get((r, c), 0) / 12 for r in regs], name=c,
+                y=regs, x=[rc.get((r, c), 0) / 12 for r in regs], name=CAUSE_DISPLAY[c],
                 orientation="h", marker_color=CAUSE_COLORS[c],
-                hovertemplate=f"{c}<br>%{{y}}: %{{x:,.0f}} h<extra></extra>"))
+                hovertemplate=f"{CAUSE_DISPLAY[c]}<br>%{{y}}: %{{x:,.0f}} h<extra></extra>"))
         _layout(fig, 300, barmode="stack", showlegend=False)
         fig.update_layout(margin=dict(l=8, r=12, t=8, b=36))
         fig.update_yaxes(autorange="reversed", automargin=True)
@@ -749,7 +832,7 @@ def causes_html(region: str, range_slug: str) -> str:
             "No outage with binding constraints overlapped this period.")
         return wrap(
             _period_sub(p, f"{_region_text(region)} constraint causes")
-            + cause_legend()
+            + cause_key() + cause_legend()
             + '<div class="row3">'
               '<div><h3>By limit type</h3>' + c1 + '</div>'
               '<div><h3>By cause</h3>' + c2 + '</div>'
@@ -866,10 +949,10 @@ def units_html(region: str, fuel: str, range_slug: str) -> str:
             row = [link(unit_url(r["duid"], p.slug), r["site"] if not _isnan(r["site"]) else r["duid"]),
                    esc((r["region"] or "–")[:-1] if not _isnan(r["region"]) else "–"),
                    esc(fuel_label(r["fuel"])), fnum(r["capacity_mw"]),
-                   f"{r['pct_dis']:.1f}%"]
+                   fpct(r["pct_dis"])]
             if battery:
-                row.append(f"{r['pct_chg']:.1f}%")
-            row += [fnum(r["gwh_con"], 1), fnum(r["gwh_other"], 1), fnum(r["value_m"], 1),
+                row.append(fpct(r["pct_chg"]))
+            row += [fgwh(r["gwh_con"]), fgwh(r["gwh_other"]), fnum(r["value_m"], 1),
                     fsigned(adj) if not _isnan(adj) and adj < 0 else "–",
                     link(area_url(a[0], p.slug), a[1]) if a else "–"]
             rows.append(row)
@@ -932,11 +1015,11 @@ def unit_html(duid: str, range_slug: str) -> str:
         adj = weighted_median(ud["adj"], ud["nlp"]) if len(ud) else float("nan")
         tiles = [("Capacity", f"{fnum(cap)} MW"),
                  ("Intervals discharge-limited" if is_batt else "Intervals limited",
-                  f"{dis / p.n_intervals * 100:.1f}%")]
+                  fpct(dis / p.n_intervals * 100))]
         if is_batt:
-            tiles.append(("Intervals charge-limited", f"{chg / p.n_intervals * 100:.1f}%"))
-        tiles += [("Curtailed while constrained", f"{ud['mwh'].sum() / 1000:,.1f} GWh"),
-                  ("Other curtailment", f"{ud['other'].sum() / 1000:,.1f} GWh"),
+            tiles.append(("Intervals charge-limited", fpct(chg / p.n_intervals * 100)))
+        tiles += [("Curtailed while constrained", f"{fgwh(ud['mwh'].sum() / 1000)} GWh"),
+                  ("Other curtailment", f"{fgwh(ud['other'].sum() / 1000)} GWh"),
                   ("Value of constrained curtailment", fmoney_m(ud["val"].sum() / 1e6)),
                   ("Median local price adj.",
                    f"{fsigned(adj)} $/MWh" if not _isnan(adj) and adj < 0 else "–")]
@@ -988,17 +1071,23 @@ def unit_html(duid: str, range_slug: str) -> str:
                       LEFT JOIN constraint_meta m USING (constraintid)
                       LEFT JOIN area a ON a.area_id = m.area_id
                      WHERE d.duid = ? AND d.day BETWEEN ? AND ?
-                     GROUP BY ALL ORDER BY n DESC, d.constraintid LIMIT 30""",
+                     GROUP BY ALL ORDER BY n DESC, d.constraintid""",
                  [duid, p.start, p.end])
+        n_cons = len(cons)
         crows = [[esc(r["constraintid"]),
                   link(area_url(r["area_id"], p.slug), r["area_name"])
                   if not _isnan(r["area_id"]) else "–",
-                  fnum(r["n"] / 12, 1), esc(r["direction"]),
+                  fhours(r["n"] / 12), esc(r["direction"]),
                   describe(r["description"], r["definition_rule"])]
-                 for _, r in cons.iterrows()]
-        ctable = table_html([("Constraint", False), ("Area", False), ("Hours", True),
-                             ("Direction", False), ("AEMO description", False)], crows,
+                 for _, r in cons.head(UNIT_CONSTRAINT_CAP).iterrows()]
+        ctable = table_html([("Constraint", False), ("Area", False, "wrap260"),
+                             ("Hours", True), ("Direction", False),
+                             ("AEMO description", False)], crows,
                             "No network constraint included this unit in the period.")
+        if n_cons > UNIT_CONSTRAINT_CAP:
+            ctable += (f'<div class="sub">Showing the {UNIT_CONSTRAINT_CAP} constraints with '
+                       f'the most hours; {n_cons - UNIT_CONSTRAINT_CAP} others also included '
+                       f'this unit.</div>')
         sub = (f'{esc(fuel)} · {esc((reg or "–")[:-1] if reg else "–")} · {esc(duid)}')
         return wrap(f'<h2>{esc(site)}</h2><div class="sub">{sub}</div>'
                     + _period_sub(p)
@@ -1025,21 +1114,43 @@ def unit_html(duid: str, range_slug: str) -> str:
 OUTAGE_EXCLUDED = ("WDRAWN", "WD REQ", "COMPLETE", "RESUBMIT", "UTP")
 
 
-def outages_in_progress(now: pd.Timestamp, limit: int = 40) -> pd.DataFrame:
+def outages_in_progress(now: pd.Timestamp, limit: int = OUTAGE_NOW_CAP) -> pd.DataFrame:
+    """Outages in progress, those that have invoked a constraint set first, then
+    most recently started. df.attrs['total'] = count before the cap."""
     ph = ",".join("?" * len(OUTAGE_EXCLUDED))
-    return q(f"""
-        SELECT outageid,
-               string_agg(DISTINCT CASE WHEN substationid IN ('N/A', '') THEN NULL
-                                        ELSE substationid END, ', ') AS substation,
-               string_agg(DISTINCT equipmenttype || ' ' || equipmentid, ', ') AS equipment,
-               MIN(starttime) AS starttime, MAX(endtime) AS endtime,
-               ANY_VALUE(outagestatuscode) AS status, ANY_VALUE(reason) AS reason
-          FROM network_outagedetail
-         WHERE starttime <= ? AND endtime >= ?
-           AND outagestatuscode NOT IN ({ph})
-           AND (actual_endtime IS NULL OR actual_endtime > ?)
-         GROUP BY outageid ORDER BY starttime DESC, outageid DESC LIMIT {int(limit)}""",
-             [now, now, *OUTAGE_EXCLUDED, now], db="constraints")
+    df = q(f"""
+        WITH o AS (
+            SELECT outageid,
+                   string_agg(DISTINCT CASE WHEN substationid IN ('N/A', '') THEN NULL
+                                            ELSE substationid END, ', ') AS substation,
+                   string_agg(DISTINCT equipmenttype || ' ' || equipmentid, ', ') AS equipment,
+                   MIN(starttime) AS starttime, MAX(endtime) AS endtime,
+                   ANY_VALUE(outagestatuscode) AS status, ANY_VALUE(reason) AS reason
+              FROM network_outagedetail
+             WHERE starttime <= ? AND endtime >= ?
+               AND outagestatuscode NOT IN ({ph})
+               AND (actual_endtime IS NULL OR actual_endtime > ?)
+               AND COALESCE(NULLIF(TRIM(equipmentid), ''), 'N/A') <> 'N/A'
+             GROUP BY outageid),
+        cs AS (
+            SELECT outageid, string_agg(DISTINCT genconsetid, ', ') AS constraint_set
+              FROM network_outageconstraintset
+             WHERE startinterval <= ? AND endinterval >= ? GROUP BY outageid)
+        SELECT o.*, cs.constraint_set FROM o LEFT JOIN cs USING (outageid)
+         ORDER BY (cs.constraint_set IS NULL), o.starttime DESC, o.outageid DESC""",
+             [now, now, *OUTAGE_EXCLUDED, now, now, now], db="constraints")
+    total = len(df)
+    df = df.head(int(limit)).reset_index(drop=True)
+    df.attrs["total"] = total
+    return df
+
+
+def mv_cell(v) -> str:
+    if _isnan(v):
+        return "–"
+    if abs(v) >= VIOLATION_PENALTY_MV:
+        return '<span class="muted">at violation penalty</span>'
+    return fsigned(v, 1)
 
 
 def binding_now() -> tuple[pd.Timestamp, pd.DataFrame]:
@@ -1074,10 +1185,10 @@ def now_html() -> str:
                 esc(r["constraintid"]),
                 link(area_url(r["area_id"], rng), r["area_name"])
                 if not _isnan(r["area_id"]) else "–",
-                esc(r["cause"] if not _isnan(r["cause"]) else "–"),
+                esc(cdisp(r["cause"])),
                 esc(r["limittype"] if not _isnan(r["limittype"]) else "–"),
                 describe(r["description"], r["definition_rule"]),
-                fsigned(r["marginalvalue"], 1)])
+                mv_cell(r["marginalvalue"])])
         btable = table_html([("Constraint", False), ("Area", False), ("Cause", False),
                              ("Limit type", False), ("AEMO description", False),
                              ("Marginal value $/MWh", True)], brows,
@@ -1101,11 +1212,14 @@ def now_html() -> str:
                              ("MW", True), ("Local price adj. $/MWh", True)], urows,
                             "No local price adjustment in the latest interval.")
         out = outages_in_progress(now)
+        n_out = out.attrs.get("total", len(out))
         orows = [[esc(r["substation"] or "–"), esc(r["equipment"]), fdt(r["starttime"]),
-                  fdt(r["endtime"]), esc(r["status"]), esc(r["reason"] or "–")]
+                  fdt(r["endtime"]), esc(r["status"]), esc(r["reason"] or "–"),
+                  esc(r["constraint_set"]) if not _isnan(r["constraint_set"]) else "–"]
                  for _, r in out.iterrows()]
         otable = table_html([("Substation", False), ("Equipment", False), ("Start", False),
-                             ("End", False), ("Status", False), ("Reason", False)], orows,
+                             ("End", False), ("Status", False), ("Reason", False),
+                             ("Constraint set", False)], orows,
                             "No transmission outage is in progress.")
         lp_note = (f" (local price adjustments: interval ending {fdt(lp_ts)})"
                    if lp_ts is not None and lp_ts != ts else "")
@@ -1115,13 +1229,19 @@ def now_html() -> str:
             + tiles_html([("Binding network constraints", fnum(len(b))),
                           ("Interval age", f"{age} min"),
                           ("Units with an adjustment", fnum(len(lp))),
-                          ("Outages in progress", fnum(len(out)))])
+                          ("Outages in progress", fnum(n_out))])
             + '<h3>Binding network constraints</h3>' + btable
             + '<h3>Units with the largest local price adjustment</h3>' + utable
-            + '<h3>Transmission outages in progress</h3>' + otable
+            + '<h3>Transmission outages in progress</h3>'
+            + f'<div class="sub">{fnum(n_out)} in progress; showing '
+              f'{fnum(len(out))}, those that have invoked a constraint set first, then '
+              'the most recently started.</div>' + otable
             + '<div class="sub">Outages counted: start time before now, end time after now, '
               'status not WDRAWN, WD REQ, COMPLETE, RESUBMIT or UTP, and no actual end '
-              'time before now. Start and end are as submitted. See also '
+              'time before now. Outages with no equipment id are left out. Start and '
+              'end are as submitted. Marginal values reflect the bids of constrained '
+              'generators, often at the −$1,000 market floor, and are not a measure of '
+              'economic cost. See also '
               f'<a href="{PASA_TRANSMISSION_URL}" hx-get="{PASA_TRANSMISSION_URL}" '
               'hx-target="#tab-body" hx-push-url="true">PASA transmission outages</a>.</div>'
             + note_html())

@@ -152,3 +152,19 @@ def test_no_banned_words_on_pages(client):
     for url in ("/network", "/network/causes", "/network/units", "/network/now"):
         text = re.sub(r"<script>.*?</script>", "", client.get(url).text, flags=re.S)
         assert not banned.search(re.sub(r"<[^>]+>", " ", text.split('id="tab-body"')[1])), url
+
+
+def test_every_table_is_in_a_scrolling_container(client):
+    for url in ("/network", "/network/causes", "/network/units", "/network/now",
+                "/network/units?fuel=battery"):
+        t = client.get(url).text
+        assert t.count("<table>") >= 1
+        assert t.count("<table>") == t.count('<div class="tbl-wrap"><table>'), url
+    assert "overflow-x:auto" in client.get("/network").text
+
+
+def test_cause_key_on_hotspots_and_causes(client):
+    for url in ("/network", "/network/causes"):
+        t = client.get(url).text
+        assert "Network as built:" in t and "Limit on a single plant:" in t
+        assert "Unit-specific limit" not in t.split('id="tab-body"')[1]

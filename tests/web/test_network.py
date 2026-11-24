@@ -137,7 +137,8 @@ def make_constraints(path, ts=datetime(2026, 11, 24, 14, 35)):
     for r in [(ts, "C1", 0, 1.0, 55.0, 0.0, 1.0), (ts, "F_X", 0, 1.0, 5.0, 0.0, 1.0),
               (ts, "#Q", 0, 1.0, 5.0, 0.0, 1.0), (ts, "$U", 0, 1.0, 5.0, 0.0, 1.0),
               (ts, "C2", 1, 1.0, 5.0, 0.0, 1.0), (ts, "C1B", 0, 1.0, 0.0, 0.0, 1.0),
-              (ts, "NEWC", 0, 1.0, -12.0, 0.0, 1.0)]:
+              (ts, "NEWC", 0, 1.0, -12.0, 0.0, 1.0),
+              (ts, "BIGMV", 0, 1.0, -26912000.0, 0.0, 1.0)]:
         c.execute("INSERT INTO constraint_binding5 VALUES (?,?,?,?,?,?,?)", list(r))
     c.execute("CREATE TABLE local_price5(settlementdate TIMESTAMP, duid VARCHAR, "
               "local_price_adjustment DOUBLE, locally_constrained BIGINT)")
@@ -153,8 +154,16 @@ def make_constraints(path, ts=datetime(2026, 11, 24, 14, 35)):
               (11, "SUBC", "LINE", "LC", "2026-11-23 07:00", "2026-11-25 17:00", "WDRAWN", "x", None, None),
               (12, "SUBD", "LINE", "LD", "2026-11-23 07:00", "2026-11-25 17:00", "COMPLETE", "x", None, None),
               (13, "SUBE", "LINE", "LE", "2026-12-23 07:00", "2026-12-25 17:00", "PTP", "future", None, None),
-              (14, "SUBF", "LINE", "LF", "2026-11-20 07:00", "2026-11-26 17:00", "PTP", "older", None, None)]:
+              (14, "SUBF", "LINE", "LF", "2026-11-20 07:00", "2026-11-26 17:00", "PTP", "older", None, None),
+              (15, "SUBG", "N/A", "N/A", "2026-11-24 09:00", "2026-11-24 17:00", "PTP", "blank equipment", None, None),
+              (16, "SUBH", "LINE", "", "2026-11-24 10:00", "2026-11-24 17:00", "PTP", "blank id", None, None)]:
         c.execute("INSERT INTO network_outagedetail VALUES (?,?,?,?,?,?,?,?,?,?)", list(r))
+    c.execute("CREATE TABLE network_outageconstraintset(outageid BIGINT, genconsetid VARCHAR, "
+              "startinterval TIMESTAMP, endinterval TIMESTAMP)")
+    for r in [(14, "N-SET_A", "2026-11-20 07:00", "2026-11-26 17:00"),
+              (14, "N-SET_B", "2026-11-20 07:00", "2026-11-26 17:00"),
+              (10, "N-OLD", "2026-01-01 00:00", "2026-01-02 00:00")]:   # not current
+        c.execute("INSERT INTO network_outageconstraintset VALUES (?,?,?,?)", list(r))
     c.close()
 
 
@@ -253,7 +262,7 @@ def test_hotspots_html_renders(dbs):
     assert '<div class="netw">' in h
     assert "Alpha to Beta (1)" in h and "/network/area?id=A1" in h
     assert "Plotly.newPlot" in h
-    assert "3.0" in h                                     # hours of A1
+    assert '<td class="r">3</td>' in h                    # hours of A1, no decimals
 
 
 def test_hotspots_region_with_no_areas_gives_placeholder(dbs):
@@ -380,8 +389,102 @@ def test_now_page(dbs):
 
 def test_now_outage_rule(dbs):
     df = network.outages_in_progress(pd.Timestamp("2026-11-24 14:40"))
-    assert set(df["outageid"]) == {10, 14}                  # not withdrawn/complete/future
-    assert list(df["outageid"]) == [10, 14] or list(df["outageid"]) == [14, 10]
+    # not withdrawn / complete / future / blank equipment (15, 16)
+    assert set(df["outageid"]) == {10, 14}
+    # the outage that invoked a constraint set comes first, though it started earlier
+    assert list(df["outageid"]) == [14, 10]
+    assert df.attrs["total"] == 2
     row = df[df["outageid"] == 10].iloc[0]
     assert "SUBA" in row["substation"] and "SUBB" in row["substation"]
-    assert list(df["outageid"])[0] == 10                    # most recently started first
+    assert df.iloc[0]["constraint_set"] == "N-SET_A, N-SET_B"
+    assert pd.isna(row["constraint_set"])                  # N-OLD is not current
+
+
+def test_now_outage_cap_and_total(dbs):
+    df = network.outages_in_progress(pd.Timestamp("2026-11-24 14:40"), limit=1)
+    assert len(df) == 1 and df.attrs["total"] == 2
+
+
+def test_now_violation_penalty_and_floor_sentence(dbs):
+    h = network.now_html()
+    assert "at violation penalty" in h and "26,912,000" not in h
+    assert "−$1,000 market floor" in h and "not a measure of economic cost" in h
+    assert "N-SET_A, N-SET_B" in h and "Constraint set" in h
+    assert "blank equipment" not in h and "2 in progress" in h
+
+
+# ---- display labels, key and number formats -------------------------------------
+
+def test_number_formats():
+    assert network.fhours(809.6) == "810" and network.fhours(1438.7) == "1,439"
+    assert network.fgwh(448.2) == "448" and network.fgwh(16.43) == "16.4"
+    assert network.fgwh(99.96) == "100.0" or network.fgwh(99.96) == "100"
+    assert network.fpct(9.87) == "9.9%" and network.fpct(37.5) == "38%"
+    assert network.fnum(11954.4) == "11,954"
+
+
+def test_cause_labels_displayed_not_stored_names(dbs):
+    for h in (network.hotspots_html("NEM", "30d"), network.causes_html("NEM", "30d"),
+              network.area_html("A1", "30d")):
+        assert "Network as built" in h and "Equipment outage" in h
+        assert "Limit on a single plant" in h
+        assert "Unit-specific" not in h and "System normal" not in h
+        assert "Single-plant limit share" in h or "causes" in h
+
+
+def test_cause_key_text(dbs):
+    for h in (network.hotspots_html("NEM", "30d"), network.causes_html("NEM", "30d")):
+        assert ("Network as built:</b> the limit binds with every line and transformer in "
+                "service. AEMO marks these “Out = Nil”.") in h
+        assert ("Equipment outage:</b> the limit applies only while a named line or "
+                "transformer is out of service.") in h
+        assert ("Limit on a single plant:</b> AEMO caps one wind or solar farm. Most are "
+                "system strength limits, which depend on how many coal, gas or hydro units "
+                "and synchronous condensers are running nearby.") in h
+    h = network.hotspots_html("NEM", "30d")
+    assert "Network as built share" in h and "Equipment outage share" in h
+    assert "Hours in period" not in h
+
+
+def _extra(tmp_path, sql):
+    c = duckdb.connect(str(tmp_path / "s.duckdb"))
+    c.execute(sql)
+    c.close()
+
+
+def test_hotspots_no_unit_terms_show_interconnector(dbs):
+    _extra(dbs, "INSERT INTO area VALUES ('A3','Link area','SA','Thermal',1,0,0,0)")
+    _extra(dbs, "INSERT INTO area_daily VALUES (DATE '2026-11-03','A3',48,48,0,0,0,0)")
+    h = network.hotspots_html("NEM", "30d")
+    assert 'colspan="2"' in h and ">interconnector<" in h
+    assert "MW in constraints" in h and "Units in constraints" in h
+
+
+def test_hotspots_uses_interconnectors_column(tmp_path, monkeypatch):
+    make_summary(tmp_path / "s.duckdb", optional=True)
+    monkeypatch.setattr(network, "SUMMARY_DB", str(tmp_path / "s.duckdb"))
+    _extra(tmp_path, "ALTER TABLE area ADD COLUMN interconnectors VARCHAR")
+    _extra(tmp_path, "INSERT INTO area VALUES ('A3','Link area','SA','Thermal',1,0,0,0,0,"
+                     "'C3',NULL,'Heywood')")
+    _extra(tmp_path, "INSERT INTO area_daily VALUES (DATE '2026-11-03','A3',48,48,0,0,0,0)")
+    assert ">Heywood<" in network.hotspots_html("NEM", "30d")
+
+
+def test_unit_constraints_capped_at_15(dbs):
+    for i in range(20):
+        _extra(dbs, f"INSERT INTO unit_constraint_daily VALUES (DATE '2026-11-03','BT1',"
+                    f"'X{i:02d}','discharge',{10 + i})")
+    h = network.unit_html("BT1", "30d")
+    assert h.count(">X") == 13                 # 15 shown, two of them are C1 and C1B
+    assert "7 others also included this unit" in h
+    assert 'class="wrap260"' in h
+
+
+def test_area_constraints_capped_at_25(dbs):
+    for i in range(30):
+        _extra(dbs, f"INSERT INTO constraint_meta VALUES ('Y{i:02d}','network','NSW','d','Thermal',"
+                    f"'x','<=','Outage','e','A1','exact')")
+        _extra(dbs, f"INSERT INTO constraint_daily VALUES (DATE '2026-11-03','Y{i:02d}',{12 + i},1.0)")
+    h = network.area_html("A1", "30d")
+    assert "7 others also bound" in h and h.count(">Y") == 24
+    assert "Most frequent constraint:" in h and 'class="mono"' in h
