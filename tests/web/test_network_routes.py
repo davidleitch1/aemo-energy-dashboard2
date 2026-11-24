@@ -166,5 +166,6 @@ def test_every_table_is_in_a_scrolling_container(client):
 def test_cause_key_on_hotspots_and_causes(client):
     for url in ("/network", "/network/causes"):
         t = client.get(url).text
-        assert "Network as built:" in t and "Limit on a single plant:" in t
+        # live data carries five causes since 25 Nov 2026; legacy three-cause data shows the single-plant label
+        assert "Network as built:" in t and ("Stability limit on a plant:" in t or "Limit on a single plant:" in t)
         assert "Unit-specific limit" not in t.split('id="tab-body"')[1]
