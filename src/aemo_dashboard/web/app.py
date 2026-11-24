@@ -205,6 +205,7 @@ TABS = [
                                               ("slippage",     "Return-date changes"),
                                               ("transmission", "Transmission")]),
     ("network",          "Network",          [("hotspots", "Hotspots"),
+                                              ("map",      "Map"),
                                               ("causes",   "Causes"),
                                               ("units",    "Units"),
                                               ("now",      "Now")]),
@@ -7439,6 +7440,26 @@ def network_area_page(request: Request, id: str = "",
                              {"id": id}, "range"))
     return _network_page(request, "hotspots", selectors,
                          network.area_html(id, range))
+
+
+@app.get("/network/map", response_class=HTMLResponse)
+def network_map_page(request: Request, region: str = "NEM", range: str = "90d",
+                     measure: str = "pct", area: str = "") -> HTMLResponse:
+    region = network.normalise_region(region)
+    range = network.normalise_map_range(range)
+    measure = network.normalise_measure(measure)
+    base = "/network/map"
+    carry = {"area": area} if area else {}
+    pills = [
+        _network_region_pills(base, region, dict(carry, range=range, measure=measure)),
+        _render_choice_pills("Period", network.MAP_RANGES, range, base,
+                             dict(carry, region=region, measure=measure), "range")]
+    if range != "now":
+        pills.append(_render_choice_pills("Measure", network.MEASURES, measure, base,
+                                          dict(carry, region=region, range=range),
+                                          "measure"))
+    return _network_page(request, "map", _render_selector_strip(*pills),
+                         network.map_html(region, range, measure, area))
 
 
 @app.get("/network/causes", response_class=HTMLResponse)

@@ -26,6 +26,8 @@ from __future__ import annotations
 import html as _html
 import itertools
 import json
+import math
+import os
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from urllib.parse import quote
@@ -120,6 +122,22 @@ CSS = """
                   border-radius:2px; margin-right:5px; }
 .netw .row3 { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }
 .netw .row3 h3 { margin-top:10px; }
+.netw .selbar { margin:8px 0; padding:8px 10px; border:1px solid #e6e4d9;
+                border-radius:6px; font-size:13px; }
+.netw .mapwrap { display:grid; grid-template-columns:minmax(0,1fr) 300px; gap:14px;
+                 align-items:start; margin-top:8px; }
+.netw .mapbox { height:640px; border:1px solid #e6e4d9; border-radius:6px; overflow:hidden; }
+.netw .side h3 { margin-top:0; }
+.netw .side ul { list-style:none; margin:0; padding:0; font-size:13px; }
+.netw .side li { padding:6px 0; border-top:1px solid #e6e4d9; }
+.netw .side li:first-child { border-top:none; }
+.netw .side-meta { display:block; color:#878580; font-size:12px; margin-top:2px; }
+.netw .tag { display:inline-block; border:1px solid #e6e4d9; border-radius:3px;
+             padding:0 5px; font-size:11px; color:#403E3C; margin-right:6px; }
+@media (max-width: 800px) {
+  .netw .mapwrap { grid-template-columns:1fr; }
+  .netw .mapbox { height:480px; }
+}
 @media (max-width: 800px) {
   .netw { padding:8px 12px 20px; }
   .netw .row3 { grid-template-columns:1fr; }
@@ -1249,3 +1267,454 @@ def now_html() -> str:
         return placeholder(str(e))
     except Exception:
         return placeholder("Live constraint data is not available.")
+
+
+# ---------------------------------------------------------------------------
+# Map
+# ---------------------------------------------------------------------------
+
+GEO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "network_geo.json")
+_geo_cache: dict = {}
+
+MAP_RANGES = RANGES + [("now", "Now")]
+MEASURES = [("pct", "% of intervals held back"),
+            ("gwh", "GWh curtailed while constrained")]
+MAP_BASE_VIEWS = {"NEM": (146.0, -32.0, 3.3), "NSW1": (147.5, -32.8, 5.0),
+                  "QLD1": (146.0, -22.5, 4.2), "VIC1": (144.8, -37.0, 6.0),
+                  "SA1": (135.0, -32.5, 4.5), "TAS1": (146.6, -42.0, 6.3)}
+MAP_RAMP = ["#ECCB60", "#DA702C", "#AF3029", "#6C201C"]
+UNIT_SCALE = [[0, "#E6E4D9"], [0.25, "#ECCB60"], [0.5, "#DA702C"],
+              [0.75, "#AF3029"], [1, "#6C201C"]]
+BACKBONE_COLOR = "#9C8F7D"
+BACKBONE_WIDTH = {"220": 1.0, "275": 1.0, "330": 1.2, "500": 1.8}
+HALO_COLOR = "#5E409D"
+REFERENCE_LINE_COLOR = "#205EA6"
+NOW_COLOR = "#AF3029"
+MAP_TOP_LINES = 10
+MAP_TOP_HALOS = 15
+MAP_SIDE_LIST = 15
+LOCAL_PRICE_CAP = 1000
+MAP_SENTENCE = ("A dot shows where generation is held back; a coloured line shows the "
+                "limit AEMO names. They can be far apart.")
+
+
+def normalise_map_range(range_slug: str) -> str:
+    return range_slug if range_slug in dict(MAP_RANGES) else DEFAULT_RANGE
+
+
+def normalise_measure(measure: str) -> str:
+    return measure if measure in dict(MEASURES) else "pct"
+
+
+def load_geo() -> dict | None:
+    """The reference geometry, cached per process and re-read when the file's
+    mtime changes. None when the file is missing or unreadable."""
+    try:
+        mtime = os.stat(GEO_PATH).st_mtime
+        if _geo_cache.get("path") == GEO_PATH and _geo_cache.get("mtime") == mtime:
+            return _geo_cache["data"]
+        with open(GEO_PATH, encoding="utf-8") as fh:
+            data = json.load(fh)
+        if not isinstance(data, dict) or "units" not in data:
+            return None
+    except (OSError, ValueError):
+        return None
+    _geo_cache.update(path=GEO_PATH, mtime=mtime, data=data)
+    return data
+
+
+def _hex_rgb(c: str) -> tuple[int, int, int]:
+    return int(c[1:3], 16), int(c[3:5], 16), int(c[5:7], 16)
+
+
+def _luminance(c: str) -> float:
+    r, g, b = _hex_rgb(c)
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def ramp_colors(values: list[float]) -> list[str]:
+    """Colour per value on the four-stop ramp, lightest = fewest hours,
+    darkest = most (min-max over the values given)."""
+    if not len(values):
+        return []
+    lo, hi = min(values), max(values)
+    out = []
+    for v in values:
+        t = 1.0 if hi == lo else (v - lo) / (hi - lo)
+        x = t * (len(MAP_RAMP) - 1)
+        i = min(int(x), len(MAP_RAMP) - 2)
+        f = x - i
+        a, b = _hex_rgb(MAP_RAMP[i]), _hex_rgb(MAP_RAMP[i + 1])
+        out.append("#%02X%02X%02X" % tuple(round(a[k] + (b[k] - a[k]) * f) for k in range(3)))
+    return out
+
+
+def bbox_view(points: list[tuple[float, float]], width_px: int = 900,
+              height_px: int = 600, pad: float = 1.35) -> tuple[float, float, float]:
+    """(lon, lat, zoom) that fits the points (MapLibre: 512 px world at zoom 0)."""
+    if not points:
+        lon, lat, z = MAP_BASE_VIEWS["NEM"]
+        return lon, lat, z
+    lons, lats = [p[0] for p in points], [p[1] for p in points]
+    lon_c, lat_c = (min(lons) + max(lons)) / 2, (min(lats) + max(lats)) / 2
+    lon_span = (max(lons) - min(lons)) * pad
+    lat_span = (max(lats) - min(lats)) * pad / max(math.cos(math.radians(lat_c)), 0.2)
+    cands = [math.log2(px * 360 / (512 * span))
+             for px, span in ((width_px, lon_span), (height_px, lat_span)) if span > 1e-6]
+    z = min(cands) if cands else 9.0
+    return lon_c, lat_c, float(min(max(z, 3.0), 11.0))
+
+
+def _feature_points(features: list[dict]) -> list[tuple[float, float]]:
+    pts = []
+    for f in features:
+        if f.get("kind") == "substation" and f.get("point"):
+            pts.append(tuple(f["point"][:2]))
+        for part in f.get("parts") or []:
+            pts += [tuple(c[:2]) for c in part]
+    return pts
+
+
+def _drawable(geo: dict, area_id: str) -> list[dict]:
+    return [f for f in geo.get("area_lines", {}).get(area_id, [])
+            if f.get("role") in ("protected", "interconnector")]
+
+
+def top_line_areas(df: pd.DataFrame, geo: dict, n: int = MAP_TOP_LINES) -> pd.DataFrame:
+    """The areas of `df` (already ranked by hours) that have a protected or
+    interconnector feature, at most n."""
+    keep = [a for a in df["area_id"] if _drawable(geo, a)]
+    return df[df["area_id"].isin(keep)].head(n)
+
+
+def area_tag(geo: dict, area_id: str) -> str:
+    st = geo.get("area_status", {}).get(area_id)
+    if st is None:
+        return "not mapped"
+    if st == "single plant":
+        return "single plant"
+    if st.startswith("no line"):
+        return "no line"
+    feats = geo.get("area_lines", {}).get(area_id, [])
+    return "interconnector" if any(f.get("role") == "interconnector" for f in feats) \
+        else "line"
+
+
+def status_words(geo: dict, area_id: str) -> str:
+    st = geo.get("area_status", {}).get(area_id)
+    if st is None:
+        return "Not mapped"
+    if st == "single plant":
+        return "A limit on a single plant"
+    if st.startswith("no line"):
+        reason = st.split(":", 1)[1].strip() if ":" in st else ""
+        return f"No line is drawn: {reason}" if reason else "No line is drawn"
+    names = []
+    for f in geo.get("area_lines", {}).get(area_id, []):
+        if f.get("role") in ("protected", "interconnector"):
+            label = f.get("name") or "unnamed"
+            label = f"{label} {f['kv']} kV" if f.get("kv") else label
+            if label not in names:
+                names.append(label)
+    return ("Lines drawn: " + ", ".join(names)) if names else "Mapped"
+
+
+def unit_frame(geo: dict, values: dict[str, float]) -> tuple[pd.DataFrame, int]:
+    """Units to draw (geo coordinates LEFT JOINed to duid_mapping, 5 MW and over;
+    unknown capacity stays) with their value, and the count of mapped units of
+    5 MW and over that have no coordinates."""
+    m = load_mapping().drop_duplicates("duid")
+    coords = geo.get("units", {})
+    df = pd.DataFrame([(d, c[0], c[1]) for d, c in coords.items()],
+                      columns=["duid", "lon", "lat"])
+    df = df.merge(m, on="duid", how="left")
+    df = df[~(df["capacity_mw"] < MIN_UNIT_MW)]
+    df["value"] = df["duid"].map(values).fillna(0.0)
+    missing = m[(m["capacity_mw"] >= MIN_UNIT_MW) & ~m["duid"].isin(list(coords))]
+    return df.reset_index(drop=True), int(len(missing))
+
+
+def map_url(region: str, range_slug: str, measure: str, area: str | None = None) -> str:
+    u = f"/network/map?region={region}&range={range_slug}&measure={measure}"
+    return u + (f"&area={quote(area, safe='')}" if area else "")
+
+
+def _line_lonlat(features: list[dict]) -> tuple[list, list]:
+    lon, lat = [], []
+    for f in features:
+        if f.get("kind") == "line":
+            for part in f.get("parts") or []:
+                lon += [c[0] for c in part] + [None]
+                lat += [c[1] for c in part] + [None]
+    return lon, lat
+
+
+def _add_area_features(fig, features: list[dict], color: str, width: int, name: str,
+                       hover: str, aid: str | None, legend: bool = True) -> None:
+    lon, lat = _line_lonlat([f for f in features if f.get("kind") == "line"])
+    cd = [f"a:{aid}"] * len(lon) if aid else None
+    if lon:
+        fig.add_trace(go.Scattermap(
+            lon=lon, lat=lat, mode="lines+markers" if aid else "lines", name=name,
+            line=dict(color=color, width=width),
+            marker=dict(size=7, color=color) if aid else None,
+            hoverinfo="text" if aid else "skip", text=hover if aid else None,
+            customdata=cd, showlegend=legend, legendgroup=f"area-{aid or name}"))
+    subs = [f for f in features if f.get("kind") == "substation" and f.get("point")]
+    if subs:
+        fig.add_trace(go.Scattermap(
+            lon=[f["point"][0] for f in subs], lat=[f["point"][1] for f in subs],
+            mode="markers", name=name, marker=dict(size=16, color=color),
+            hoverinfo="text" if aid else "skip", text=hover if aid else None,
+            customdata=[f"a:{aid}"] * len(subs) if aid else None,
+            showlegend=not lon and legend, legendgroup=f"area-{aid or name}"))
+
+
+def _area_meta(area_id: str) -> pd.Series | None:
+    a = q("SELECT area_id, name, region FROM area WHERE area_id = ?", [area_id])
+    return None if a.empty else a.iloc[0]
+
+
+def _now_state() -> dict:
+    """Binding areas and local price adjustments of the latest interval."""
+    ts, b = binding_now()
+    areas = b.dropna(subset=["area_id"]).groupby("area_id").size().to_dict()
+    try:
+        lp = q("""SELECT duid, local_price_adjustment AS adj FROM local_price5
+                   WHERE settlementdate = (SELECT MAX(settlementdate) FROM local_price5)
+                     AND local_price_adjustment IS NOT NULL""", db="constraints")
+    except Exception:
+        lp = pd.DataFrame(columns=["duid", "adj"])
+    adj = {r["duid"]: float(r["adj"]) for _, r in lp.iterrows()}
+    return {"ts": ts, "areas": areas, "adj": adj}
+
+
+def build_map(region: str, range_slug: str, measure: str, area_id: str | None) -> dict:
+    """Everything the map page shows, as a dict (the figure plus the side list,
+    selection and counts). Raises NoData for a missing geo file or period."""
+    geo = load_geo()
+    if geo is None:
+        raise NoData("The map reference file is not available.")
+    now_mode = range_slug == "now"
+    p = get_period(DEFAULT_RANGE if now_mode else range_slug)
+    ar = area_region(region)
+    sel_meta = _area_meta(area_id) if area_id else None
+    sel = None
+    fig = go.Figure()
+
+    # -- area ranking for the period, or the binding set for Now
+    now = _now_state() if now_mode else None
+    if now_mode:
+        regs = q("SELECT area_id, name, region FROM area")
+        regs = regs[regs["area_id"].isin(list(now["areas"]))]
+        if ar:
+            regs = regs[regs["region"] == ar]
+        df = regs.assign(n=regs["area_id"].map(now["areas"])).sort_values(
+            ["n", "area_id"], ascending=[False, True]).reset_index(drop=True)
+        df["hours"] = np.nan
+    else:
+        df = hotspot_areas(p, region)
+    names = dict(zip(df["area_id"], df["name"]))
+
+    # -- 1. reference network (off until the reader turns it on)
+    first = True
+    for kv in ("220", "275", "330", "500"):
+        polylines = geo.get("backbone", {}).get(kv) or []
+        lon, lat = [], []
+        for pl in polylines:
+            lon += [c[0] for c in pl] + [None]
+            lat += [c[1] for c in pl] + [None]
+        if not lon:
+            continue
+        fig.add_trace(go.Scattermap(
+            lon=lon, lat=lat, mode="lines", name=f"{kv} kV", visible="legendonly",
+            line=dict(color=BACKBONE_COLOR, width=BACKBONE_WIDTH[kv]), hoverinfo="skip",
+            legendgroup="backbone",
+            legendgrouptitle=dict(text="Network, 220 kV and above") if first else None))
+        first = False
+
+    # -- 2. area lines
+    if sel_meta is not None:
+        aid = sel_meta["area_id"]
+        feats = geo.get("area_lines", {}).get(aid, [])
+        hours = None
+        if not now_mode:
+            hours = float(q("SELECT COALESCE(SUM(n_intervals), 0) AS n FROM area_daily "
+                            "WHERE area_id = ? AND day BETWEEN ? AND ?",
+                            [aid, p.start, p.end]).iloc[0]["n"]) / 12
+        sel = {"area_id": aid, "name": sel_meta["name"], "hours": hours,
+               "status": status_words(geo, aid),
+               "binding_now": bool(now and aid in now["areas"])}
+        hover = f"{sel_meta['name']}" + (f" · {hours:,.0f} h" if hours is not None else "")
+        main = [f for f in feats if f.get("role") in ("protected", "interconnector")]
+        ref = [f for f in feats if f.get("role") == "reference"]
+        _add_area_features(fig, main, NOW_COLOR, 5, str(sel_meta["name"]), hover, aid)
+        _add_area_features(fig, ref, REFERENCE_LINE_COLOR, 3, "Reference lines", "", None)
+    elif now_mode:
+        for aid in df["area_id"]:
+            feats = _drawable(geo, aid)
+            if feats:
+                _add_area_features(fig, feats, NOW_COLOR, 5, str(names[aid]),
+                                   f"{names[aid]} · binding now", aid)
+    else:
+        top = top_line_areas(df, geo)
+        cols = ramp_colors(list(top["hours"]))
+        for (_, r), col in zip(top.iterrows(), cols):
+            hover = f"{r['name']} · {r['hours']:,.0f} h · {fpct(r['pct_period'])}"
+            _add_area_features(fig, _drawable(geo, r["area_id"]), col, 5,
+                               str(r["name"]), hover, r["area_id"])
+
+    # -- 3. single-plant halos
+    halo_areas = [(a, names[a]) for a in df["area_id"]
+                  if geo.get("area_status", {}).get(a) == "single plant"][:MAP_TOP_HALOS]
+    if sel_meta is not None:
+        halo_areas = [(sel_meta["area_id"], sel_meta["name"])] \
+            if geo.get("area_status", {}).get(sel_meta["area_id"]) == "single plant" else []
+    hours_of = dict(zip(df["area_id"], df["hours"]))
+    if halo_areas:
+        ph = ",".join("?" * len(halo_areas))
+        au = q(f"SELECT area_id, duid FROM area_units WHERE area_id IN ({ph})",
+               [a for a, _ in halo_areas])
+        hl_lon, hl_lat, hl_txt, hl_cd = [], [], [], []
+        nm = dict(halo_areas)
+        for _, r in au.iterrows():
+            c = geo["units"].get(r["duid"])
+            if c:
+                h = hours_of.get(r["area_id"])
+                hl_lon.append(c[0]); hl_lat.append(c[1]); hl_cd.append(f"a:{r['area_id']}")
+                hl_txt.append(f"{nm[r['area_id']]} · "
+                              + (f"{h:,.0f} h" if h is not None and not pd.isna(h)
+                                 else "binding now"))
+        if hl_lon:
+            fig.add_trace(go.Scattermap(
+                lon=hl_lon, lat=hl_lat, mode="markers", name="Single-plant limits",
+                marker=dict(size=34, color=HALO_COLOR, opacity=0.25),
+                hoverinfo="text", text=hl_txt, customdata=hl_cd))
+
+    # -- 4. units
+    if now_mode:
+        values = {d: min(-a, LOCAL_PRICE_CAP) for d, a in now["adj"].items() if a < 0}
+        cmax, ctitle = LOCAL_PRICE_CAP, "Local price adjustment, $/MWh below regional price"
+    else:
+        tot = unit_totals(p)
+        if measure == "gwh":
+            values = dict(zip(tot["duid"], tot["gwh_con"].fillna(0.0)))
+            cmax = max(1, math.ceil(max(values.values(), default=0)))
+            ctitle = "GWh curtailed while constrained"
+        else:
+            values = dict(zip(tot["duid"], tot["pct_dis"].fillna(0.0)))
+            cmax, ctitle = 50, "% of intervals held back"
+    udf, n_missing = unit_frame(geo, values)
+    area_of = top_area_names(list(udf["duid"]), p) if len(udf) else {}
+    capmax = max(float(udf["capacity_mw"].max()) if udf["capacity_mw"].notna().any() else 1.0, 1.0)
+    cap = udf["capacity_mw"].fillna(MIN_UNIT_MW)
+    udf["size"] = 6 + 16 * np.sqrt(cap / capmax)
+    udf = udf.sort_values("value", kind="stable").reset_index(drop=True)
+    sel_duids = set()
+    if sel_meta is not None:
+        sel_duids = set(q("SELECT duid FROM area_units WHERE area_id = ?",
+                          [sel_meta["area_id"]])["duid"])
+    texts = []
+    for _, r in udf.iterrows():
+        site = r["site"] if not _isnan(r["site"]) else r["duid"]
+        if now_mode:
+            adj = now["adj"].get(r["duid"])
+            val = (f"Local price adjustment −${abs(adj):,.0f}/MWh" if adj is not None and adj < 0
+                   else "No local price adjustment")
+            who = "Most often held back by (90 days)"
+        elif measure == "gwh":
+            val, who = f"{fgwh(r['value'])} GWh curtailed while constrained", "Most often held back by"
+        else:
+            val, who = f"{fpct(r['value'])} of intervals held back", "Most often held back by"
+        a = area_of.get(r["duid"])
+        texts.append(f"<b>{esc(site)}</b><br>{esc(fuel_label(r['fuel']))} · "
+                     f"{fnum(r['capacity_mw'])} MW<br>{val}"
+                     + (f"<br>{who}: {esc(a[1])}" if a else ""))
+    marker = dict(size=list(udf["size"]), color=list(udf["value"]), colorscale=UNIT_SCALE,
+                  cmin=0, cmax=cmax,
+                  colorbar=dict(title=dict(text=ctitle, side="right", font=dict(size=11)),
+                                thickness=12, len=0.6, x=1.0, xanchor="right", y=0.5,
+                                bgcolor="rgba(255,252,240,0.7)", tickfont=dict(size=10)))
+    if sel_meta is not None:
+        marker["opacity"] = [1.0 if d in sel_duids else 0.25 for d in udf["duid"]]
+    else:
+        marker["opacity"] = 0.9
+    fig.add_trace(go.Scattermap(
+        lon=list(udf["lon"]), lat=list(udf["lat"]), mode="markers", name="Units",
+        marker=marker, hoverinfo="text", text=texts,
+        customdata=[f"u:{d}" for d in udf["duid"]], showlegend=False))
+
+    # -- view
+    if sel is not None:
+        pts = _feature_points(geo.get("area_lines", {}).get(sel["area_id"], []))
+        pts += [(r["lon"], r["lat"]) for _, r in udf.iterrows() if r["duid"] in sel_duids]
+        lon, lat, zoom = bbox_view(pts) if pts else MAP_BASE_VIEWS.get(region, MAP_BASE_VIEWS["NEM"])
+    else:
+        lon, lat, zoom = MAP_BASE_VIEWS[region]
+    fig.update_layout(
+        map=dict(style="carto-positron", center=dict(lon=lon, lat=lat), zoom=zoom),
+        margin=dict(l=0, r=0, t=0, b=0), paper_bgcolor="rgba(0,0,0,0)",
+        font=dict(family="Inter, -apple-system, sans-serif", size=12, color=INK),
+        legend=dict(x=0.01, y=0.99, xanchor="left", yanchor="top",
+                    bgcolor="rgba(255,252,240,0.85)", font=dict(size=11)))
+
+    side = []
+    for _, r in df.head(MAP_SIDE_LIST).iterrows():
+        side.append({"area_id": r["area_id"], "name": r["name"],
+                     "hours": None if pd.isna(r["hours"]) else float(r["hours"]),
+                     "tag": area_tag(geo, r["area_id"])})
+    return {"fig": fig, "side": side, "selected": sel, "n_missing": n_missing,
+            "center": (lon, lat), "zoom": zoom, "period": p, "geo": geo,
+            "now_ts": now["ts"] if now else None, "range": range_slug}
+
+
+def map_html(region: str, range_slug: str, measure: str, area_id: str | None) -> str:
+    try:
+        m = build_map(region, range_slug, measure, area_id or None)
+    except NoData as e:
+        return placeholder(str(e))
+    except Exception:
+        return placeholder("The map could not be built from the current data.")
+    p, geo, sel = m["period"], m["geo"], m["selected"]
+    now_mode = range_slug == "now"
+    link_range = DEFAULT_RANGE if now_mode else p.slug
+    div_id = f"netw-map-{int(datetime.now().timestamp() * 1000)}-{next(_plot_counter)}"
+    cfg = json.dumps({"displaylogo": False, "responsive": True, "scrollZoom": True})
+    script = (
+        f'<script>(function(){{var id="{div_id}",f={m["fig"].to_json()};'
+        'function go(u){if(window.htmx){htmx.ajax("GET",u,{target:"#tab-body",'
+        'swap:"innerHTML"});history.pushState({},"",u);}else{window.location.href=u;}}'
+        f'Plotly.newPlot(id,f.data,f.layout,{cfg}).then(function(gd){{'
+        'gd.on("plotly_click",function(e){var pt=e.points&&e.points[0];'
+        'if(!pt||pt.customdata==null)return;var c=String(pt.customdata);'
+        'var k=c.slice(0,2),v=encodeURIComponent(c.slice(2));'
+        f'if(k==="u:")go("/network/unit?duid="+v+"&range={link_range}");'
+        f'else if(k==="a:")go("/network/area?id="+v+"&range={link_range}");}});}});}})();</script>')
+    if now_mode:
+        sub = (f'<div class="sub">Latest dispatch interval, ending {fdt(m["now_ts"])} NEM '
+               f'time. Lines are the network constraints binding now; dots are coloured by '
+               f'each unit’s local price adjustment.</div>')
+    else:
+        sub = _period_sub(p, f"{_region_text(region)} map")
+    sel_html = ""
+    if sel:
+        hrs = ("binding now" if sel["binding_now"] else "not binding now") if now_mode \
+            else f'{fhours(sel["hours"])} hours in the period'
+        sel_html = (f'<div class="selbar"><b>{esc(sel["name"])}</b> · {hrs} · '
+                    f'{esc(sel["status"])} · '
+                    + link(map_url(region, range_slug, measure), "Clear selection") + ' · '
+                    + link(area_url(sel["area_id"], link_range), "Area page") + '</div>')
+    items = []
+    for r in m["side"]:
+        h = "now" if r["hours"] is None else f'{fhours(r["hours"])} h'
+        items.append(f'<li>{link(map_url(region, range_slug, measure, r["area_id"]), r["name"])}'
+                     f'<span class="side-meta"><span class="tag">{esc(r["tag"])}</span> {h}</span></li>')
+    side = (f'<div class="side"><h3>Areas with the most '
+            f'{"constraints binding now" if now_mode else "binding hours"}</h3>'
+            f'<ul>{"".join(items) or "<li>None in this selection.</li>"}</ul></div>')
+    note = (f'<div class="note">{esc(MAP_SENTENCE)} {fnum(m["n_missing"])} units of 5 MW '
+            f'and over are not drawn for lack of coordinates. {esc(geo.get("attribution", ""))}'
+            '</div>')
+    return wrap(sub + sel_html
+                + f'<div class="mapwrap"><div><div id="{div_id}" class="mapbox"></div>'
+                  f'{script}</div>{side}</div>' + note + note_html())
