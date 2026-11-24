@@ -7497,18 +7497,21 @@ def network_causes_page(request: Request, region: str = "NEM",
 
 @app.get("/network/units", response_class=HTMLResponse)
 def network_units_page(request: Request, region: str = "NEM", fuel: str = "all",
-                       range: str = "90d") -> HTMLResponse:
+                       range: str = "90d", sort: str = "pct") -> HTMLResponse:
     region, range = network.normalise_region(region), network.normalise_range(range)
     fuel = network.normalise_fuel(fuel)
+    sort = network.normalise_unit_sort(sort)
     base = "/network/units"
     selectors = _render_selector_strip(
-        _network_region_pills(base, region, {"fuel": fuel, "range": range}),
+        _network_region_pills(base, region, {"fuel": fuel, "range": range, "sort": sort}),
         _render_choice_pills("Fuel", network.FUELS, fuel, base,
-                             {"region": region, "range": range}, "fuel"),
+                             {"region": region, "range": range, "sort": sort}, "fuel"),
         _render_choice_pills("Period", network.RANGES, range, base,
-                             {"region": region, "fuel": fuel}, "range"))
+                             {"region": region, "fuel": fuel, "sort": sort}, "range"),
+        _render_choice_pills("Rank by", network.UNIT_SORTS, sort, base,
+                             {"region": region, "fuel": fuel, "range": range}, "sort"))
     return _network_page(request, "units", selectors,
-                         network.units_html(region, fuel, range))
+                         network.units_html(region, fuel, range, sort))
 
 
 @app.get("/network/unit", response_class=HTMLResponse)
