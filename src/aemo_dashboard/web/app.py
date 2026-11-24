@@ -7412,6 +7412,12 @@ def _network_page(request: Request, active: str, selectors: str,
     return HTMLResponse(_render_shell(body))
 
 
+def _netw_strip(*pill_bars: str) -> str:
+    """Selector strip whose pill groups wrap at phone width."""
+    return _render_selector_strip(*pill_bars).replace(
+        'class="selector-strip"', 'class="selector-strip netw-strip"', 1)
+
+
 def _network_region_pills(base: str, region: str, other: dict) -> str:
     return _render_region_pills(base, region, other,
                                 regions=[r for r, _ in network.REGIONS])
@@ -7420,48 +7426,66 @@ def _network_region_pills(base: str, region: str, other: dict) -> str:
 @app.get("/network", response_class=HTMLResponse)
 @app.get("/network/hotspots", response_class=HTMLResponse)
 def network_hotspots_page(request: Request, region: str = "NEM",
-                          range: str = "90d") -> HTMLResponse:
+                          range: str = "90d", sort: str = "hours") -> HTMLResponse:
     region, range = network.normalise_region(region), network.normalise_range(range)
+    sort = network.normalise_sort(sort, "hours")
     base = "/network/hotspots"
-    selectors = _render_selector_strip(
-        _network_region_pills(base, region, {"range": range}),
+    selectors = _netw_strip(
+        _network_region_pills(base, region, {"range": range, "sort": sort}),
         _render_choice_pills("Period", network.RANGES, range, base,
-                             {"region": region}, "range"))
+                             {"region": region, "sort": sort}, "range"),
+        _render_choice_pills("Rank by", network.SORTS, sort, base,
+                             {"region": region, "range": range}, "sort"))
     return _network_page(request, "hotspots", selectors,
-                         network.hotspots_html(region, range))
+                         network.hotspots_html(region, range, sort))
 
 
 @app.get("/network/area", response_class=HTMLResponse)
-def network_area_page(request: Request, id: str = "",
-                      range: str = "90d") -> HTMLResponse:
+def network_area_page(request: Request, id: str = "", range: str = "90d",
+                      view: str = "overview", constraint: str = "",
+                      all: str = "") -> HTMLResponse:
     range = network.normalise_range(range)
+    view = network.normalise_view(view)
+    carry = {"id": id}
+    if view != "overview":
+        carry["view"] = view
+    if constraint and view == "equation":
+        carry["constraint"] = constraint
     selectors = _render_selector_strip(
         _render_choice_pills("Period", network.RANGES, range, "/network/area",
-                             {"id": id}, "range"))
+                             carry, "range"))
     return _network_page(request, "hotspots", selectors,
-                         network.area_html(id, range))
+                         network.area_html(id, range, view, constraint or None,
+                                           all == "1"))
 
 
 @app.get("/network/map", response_class=HTMLResponse)
 def network_map_page(request: Request, region: str = "NEM", range: str = "90d",
-                     measure: str = "pct", area: str = "") -> HTMLResponse:
+                     measure: str = "pct", area: str = "",
+                     sort: str = "energy") -> HTMLResponse:
     region = network.normalise_region(region)
     range = network.normalise_map_range(range)
     measure = network.normalise_measure(measure)
+    sort = network.normalise_sort(sort, "energy")
     base = "/network/map"
     carry = {"area": area} if area else {}
     pills = [
-        _network_region_pills(base, region, dict(carry, range=range, measure=measure)),
+        _network_region_pills(base, region, dict(carry, range=range, measure=measure,
+                                                 sort=sort)),
         _render_choice_pills("Period", network.MAP_RANGES, range, base,
-                             dict(carry, region=region, measure=measure), "range")]
+                             dict(carry, region=region, measure=measure, sort=sort),
+                             "range")]
     if range != "now":
         pills.append(_render_choice_pills("Measure", network.MEASURES, measure, base,
-                                          dict(carry, region=region, range=range),
-                                          "measure"))
+                                          dict(carry, region=region, range=range,
+                                               sort=sort), "measure"))
+        pills.append(_render_choice_pills("Rank by", network.SORTS, sort, base,
+                                          dict(carry, region=region, range=range,
+                                               measure=measure), "sort"))
     strip = _render_selector_strip(*pills).replace(
         'class="selector-strip"', 'class="selector-strip netw-strip"', 1)
     return _network_page(request, "map", strip,
-                         network.map_html(region, range, measure, area))
+                         network.map_html(region, range, measure, area, sort))
 
 
 @app.get("/network/causes", response_class=HTMLResponse)
@@ -7479,18 +7503,21 @@ def network_causes_page(request: Request, region: str = "NEM",
 
 @app.get("/network/units", response_class=HTMLResponse)
 def network_units_page(request: Request, region: str = "NEM", fuel: str = "all",
-                       range: str = "90d") -> HTMLResponse:
+                       range: str = "90d", sort: str = "pct") -> HTMLResponse:
     region, range = network.normalise_region(region), network.normalise_range(range)
     fuel = network.normalise_fuel(fuel)
+    sort = network.normalise_unit_sort(sort)
     base = "/network/units"
-    selectors = _render_selector_strip(
-        _network_region_pills(base, region, {"fuel": fuel, "range": range}),
+    selectors = _netw_strip(
+        _network_region_pills(base, region, {"fuel": fuel, "range": range, "sort": sort}),
         _render_choice_pills("Fuel", network.FUELS, fuel, base,
-                             {"region": region, "range": range}, "fuel"),
+                             {"region": region, "range": range, "sort": sort}, "fuel"),
         _render_choice_pills("Period", network.RANGES, range, base,
-                             {"region": region, "fuel": fuel}, "range"))
+                             {"region": region, "fuel": fuel, "sort": sort}, "range"),
+        _render_choice_pills("Rank by", network.UNIT_SORTS, sort, base,
+                             {"region": region, "fuel": fuel, "range": range}, "sort"))
     return _network_page(request, "units", selectors,
-                         network.units_html(region, fuel, range))
+                         network.units_html(region, fuel, range, sort))
 
 
 @app.get("/network/unit", response_class=HTMLResponse)

@@ -28,6 +28,7 @@ import itertools
 import json
 import math
 import os
+import re
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from urllib.parse import quote
@@ -38,7 +39,7 @@ import pandas as pd
 import plotly.graph_objects as go
 
 DATA_DIR = "/Users/davidleitch/aemo_production/data"
-SUMMARY_DB = f"{DATA_DIR}/network_summary.duckdb"
+SUMMARY_DB = os.environ.get("NETWORK_SUMMARY_DB", f"{DATA_DIR}/network_summary.duckdb")
 CONSTRAINTS_DB = f"{DATA_DIR}/constraints_readonly.duckdb"
 AEMO_DB = f"{DATA_DIR}/aemo_readonly.duckdb"
 _DBS = {"summary": "SUMMARY_DB", "constraints": "CONSTRAINTS_DB", "aemo": "AEMO_DB"}
@@ -61,23 +62,42 @@ PASA_TRANSMISSION_URL = "/pasa/transmission"
 
 # Flexoki Light
 INK, MUTED, BORDER = "#403E3C", "#878580", "#E6E4D9"
-CAUSES = ["System normal", "Outage", "Unit-specific limit"]
+LEGACY_CAUSES = ["System normal", "Outage", "Unit-specific limit"]
+FIVE_CAUSES = ["System normal", "Outage", "Plant stability limit", "Commissioning",
+               "Other plant cap"]
+CAUSES = LEGACY_CAUSES          # the stored three-cause set (legacy data)
+NEW_CAUSE_VALUES = {"Plant stability limit", "Commissioning", "Other plant cap"}
 CAUSE_COLORS = {"System normal": "#205EA6", "Outage": "#BC5215",
-                "Unit-specific limit": "#5E409D"}
+                "Plant stability limit": "#5E409D", "Commissioning": "#24837B",
+                "Other plant cap": "#A02F6F", "Unit-specific limit": "#5E409D"}
 CAUSE_DISPLAY = {"System normal": "Network as built", "Outage": "Equipment outage",
+                 "Plant stability limit": "Stability limit on a plant",
+                 "Commissioning": "Commissioning", "Other plant cap": "Other cap on a plant",
                  "Unit-specific limit": "Limit on a single plant"}
+CAUSE_COL = {"System normal": "sn", "Outage": "ou", "Unit-specific limit": "us",
+             "Plant stability limit": "ps", "Commissioning": "co", "Other plant cap": "oc"}
 CAUSE_TILE = {"System normal": "Network as built share",
               "Outage": "Equipment outage share",
               "Unit-specific limit": "Single-plant limit share"}
-CAUSE_KEY = [
-    ("Network as built", "the limit binds with every line and transformer in service. "
-     "AEMO marks these “Out = Nil”."),
-    ("Equipment outage", "the limit applies only while a named line or transformer is "
-     "out of service."),
-    ("Limit on a single plant", "AEMO caps one wind or solar farm. Most are system "
-     "strength limits, which depend on how many coal, gas or hydro units and "
-     "synchronous condensers are running nearby."),
-]
+CAUSE_KEY = {
+    "System normal": ("Network as built", "the limit binds with every line and transformer "
+                      "in service. AEMO marks these “Out = Nil”."),
+    "Outage": ("Equipment outage", "the limit applies only while a named line or "
+               "transformer is out of service."),
+    "Unit-specific limit": ("Limit on a single plant", "AEMO caps one wind or solar farm. "
+                            "Most are system strength limits, which depend on how many "
+                            "coal, gas or hydro units and synchronous condensers are "
+                            "running nearby."),
+    "Plant stability limit": ("Stability limit on a plant", "AEMO caps one wind or solar "
+                              "farm to keep the local grid stable. Most are system strength "
+                              "limits, which depend on how many coal, gas or hydro units and "
+                              "synchronous condensers are running nearby; some guard against "
+                              "the plant being cut off from the grid."),
+    "Commissioning": ("Commissioning", "a new plant held back while it is tested. This is "
+                      "not congestion."),
+    "Other plant cap": ("Other cap on a plant", "a cap AEMO applies to one plant for another "
+                        "reason, such as a discretionary limit or a unit held at zero."),
+}
 FUEL_COLORS = {"Wind": "#66800B", "Solar": "#AD8301", "Battery": "#5E409D"}
 SERIES_COLORS = ["#AF3029", "#BC5215", "#AD8301", "#66800B",
                  "#24837B", "#205EA6", "#5E409D", "#A02F6F"]
@@ -106,6 +126,7 @@ CSS = """
 .netw tbody tr:first-child td { border-top:none; }
 .netw th.r, .netw td.r { text-align:right; font-variant-numeric:tabular-nums; }
 .netw td.nw { white-space:nowrap; }
+.netw th.sorted { color:#100f0f; }
 .netw td.wrap360 { max-width:360px; min-width:200px; white-space:normal; overflow-wrap:anywhere; }
 .netw td.wrap260 { max-width:260px; min-width:160px; white-space:normal; overflow-wrap:anywhere; }
 .netw .muted { color:#878580; }
@@ -124,6 +145,33 @@ CSS = """
 .netw .row3 h3 { margin-top:10px; }
 .netw-strip .pill-bar { flex-wrap:wrap; }
 .netw-strip .pill-group { flex-wrap:wrap; border-radius:12px; }
+.netw .vswitch { display:inline-flex; border:1px solid #e6e4d9; border-radius:14px;
+                 overflow:hidden; margin:8px 0 2px; }
+.netw .vsw { padding:4px 14px; font-size:13px; color:#403E3C; border-right:1px solid #e6e4d9; }
+.netw .vsw:last-child { border-right:none; }
+.netw .vsw.active { background:#24837B; color:#fffcf0; }
+.netw .vsw:hover { text-decoration:none; }
+.netw .cpick { display:flex; flex-wrap:wrap; gap:6px; margin:6px 0; }
+.netw .cpick a { border:1px solid #e6e4d9; border-radius:4px; padding:3px 8px; font-size:12px; color:#403E3C; }
+.netw .cpick a.on { background:#f2f0e5; border-color:#b7b5ac; font-weight:600; }
+.netw .lead { background:#f2f0e5; border-radius:4px; padding:10px 12px; font-size:13px; margin:8px 0; }
+.netw .lead .idm { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:13px; }
+.netw .eq { display:grid; grid-template-columns:1fr auto 1fr; gap:14px; align-items:center;
+            border-top:1px solid #b7b5ac; border-bottom:1px solid #b7b5ac; padding:14px 0;
+            font-size:14px; color:#100f0f; }
+.netw .eq > div:first-child { border-left:4px solid #205EA6; padding-left:10px; }
+.netw .eq > div:last-child { border-left:4px solid #AF3029; padding-left:10px; }
+.netw .eq .lab { display:block; font-size:11px; letter-spacing:0.08em; text-transform:uppercase;
+                 color:#6f6e69; font-weight:700; margin-bottom:2px; }
+.netw .eq .rel { font-size:24px; font-weight:600; border:none; padding:0; }
+.netw .note-eq { max-width:70ch; font-size:15px; color:#100f0f; margin:0; }
+.netw .stale { color:#878580; font-size:12px; margin:0 0 6px; }
+.netw .hbars { display:flex; align-items:flex-end; gap:3px; height:48px; max-width:520px; }
+.netw .hbars span { flex:1; background:#AF3029; border-radius:1px; min-width:4px; }
+.netw .haxis { display:flex; justify-content:space-between; max-width:520px; font-size:11px;
+               color:#878580; }
+.netw td.mono { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px;
+                white-space:nowrap; color:#403E3C; }
 .netw .selbar { margin:8px 0; padding:8px 10px; border:1px solid #e6e4d9;
                 border-radius:6px; font-size:13px; }
 .netw .mapwrap { display:grid; grid-template-columns:minmax(0,1fr) 300px; gap:14px;
@@ -166,6 +214,35 @@ def q(sql: str, params: list | None = None, db: str = "summary") -> pd.DataFrame
 
 def _columns(table: str) -> set[str]:
     return set(q(f"DESCRIBE {table}")["column_name"])
+
+
+def _tables() -> set[str]:
+    try:
+        return set(q("SELECT table_name FROM information_schema.tables")["table_name"])
+    except Exception:
+        return set()
+
+
+SORTS = [("hours", "Binding hours"), ("energy", "Energy held back")]
+
+
+def normalise_sort(sort: str, default: str = "hours") -> str:
+    return sort if sort in dict(SORTS) else default
+
+
+def normalise_view(view: str) -> str:
+    return view if view in ("overview", "equation") else "overview"
+
+
+def fw(v, d: int = 3) -> str:
+    """Thousands separators, up to d decimals, trailing decimal zeros dropped.
+    Zeros of whole numbers are never dropped (350 stays 350)."""
+    if _isnan(v):
+        return "–"
+    t = f"{abs(v):,.{d}f}"
+    if "." in t:
+        t = t.rstrip("0").rstrip(".")
+    return ("−" if v < 0 and float(t.replace(",", "") or 0) != 0 else "") + t
 
 
 def _nem_now() -> pd.Timestamp:
@@ -344,8 +421,16 @@ def link(url: str, text: str) -> str:
             f'hx-push-url="true">{esc(text)}</a>')
 
 
-def area_url(area_id: str, rng: str) -> str:
-    return f"/network/area?id={quote(str(area_id), safe='')}&range={rng}"
+def area_url(area_id: str, rng: str, view: str | None = None,
+             constraint: str | None = None, all_terms: bool = False) -> str:
+    u = f"/network/area?id={quote(str(area_id), safe='')}&range={rng}"
+    if view and view != "overview":
+        u += f"&view={view}"
+    if constraint:
+        u += f"&constraint={quote(str(constraint), safe='')}"
+    if all_terms:
+        u += "&all=1"
+    return u
 
 
 def unit_url(duid: str, rng: str) -> str:
@@ -372,7 +457,9 @@ def table_html(headers: list[tuple], rows: list[list[str]],
     Cells are pre-rendered HTML; a Span cell covers several columns."""
     if not rows:
         return f'<div class="sub">{esc(empty)}</div>'
-    head = "".join(f'<th class="{"r" if h[1] else ""}">{esc(h[0])}</th>' for h in headers)
+    head = "".join(
+        f'<th class="{" ".join(x for x in (("r" if h[1] else ""), ("sorted" if h[0].endswith(" ▼") else "")) if x)}">'
+        f'{esc(h[0])}</th>' for h in headers)
     body = []
     for row in rows:
         tds, col = [], 0
@@ -389,26 +476,72 @@ def table_html(headers: list[tuple], rows: list[list[str]],
             f'<tbody>{"".join(body)}</tbody></table></div>')
 
 
-def cause_bar(sn: float, ou: float, us: float) -> str:
-    shares = cause_shares(sn, ou, us)
-    if not sum(shares):
+def shares(values: list[float]) -> list[float]:
+    """Percent shares of the values; they sum to 100 (all zero when empty)."""
+    tot = sum(values)
+    return [v / tot * 100 for v in values] if tot else [0.0] * len(values)
+
+
+def tile_shares_five(sn: float, ou: float, ps: float, co: float, oc: float) -> list[float]:
+    """Four tile shares for five causes: the last two causes are combined."""
+    sh = shares([sn, ou, ps, co + oc])
+    return sh
+
+
+def cause_values(row, causes: list[str]) -> list[float]:
+    return [0.0 if _isnan(row[CAUSE_COL[c]]) else float(row[CAUSE_COL[c]]) for c in causes]
+
+
+def cause_tiles(vals: list[float], causes: list[str]) -> list[tuple[str, str]]:
+    """Share tiles: three for legacy data, four for five causes."""
+    if causes == FIVE_CAUSES:
+        sn, ou, ps, co, oc = vals
+        t = tile_shares_five(sn, ou, ps, co, oc)
+        labels = ["Network as built share", "Equipment outage share",
+                  "Stability limits on plants", "Commissioning and other caps"]
+        return [(l, fpct(v)) for l, v in zip(labels, t)]
+    sh = shares(vals)
+    return [(CAUSE_TILE[c], fpct(v)) for c, v in zip(causes, sh)]
+
+
+def five_area_daily() -> bool:
+    return {"n_plant_stability", "n_commissioning", "n_other_cap"} <= _columns("area_daily")
+
+
+def area_causes() -> list[str]:
+    return FIVE_CAUSES if five_area_daily() else LEGACY_CAUSES
+
+
+def cause_sums_sql() -> str:
+    """SQL fragment of per-cause sums over area_daily, by column presence."""
+    base = ("SUM(n_sysnormal) AS sn, SUM(n_outage) AS ou, SUM(n_unit_specific) AS us")
+    if five_area_daily():
+        return base + (", SUM(n_plant_stability) AS ps, SUM(n_commissioning) AS co, "
+                       "SUM(n_other_cap) AS oc")
+    return base + ", 0 AS ps, 0 AS co, 0 AS oc"
+
+
+def cause_bar(vals: list[float], causes: list[str] | None = None) -> str:
+    causes = causes or LEGACY_CAUSES
+    sh = shares(vals)
+    if not sum(sh):
         return "–"
-    title = " · ".join(f"{CAUSE_DISPLAY[c]} {s:.0f}%" for c, s in zip(CAUSES, shares))
+    title = " · ".join(f"{CAUSE_DISPLAY[c]} {s:.0f}%" for c, s in zip(causes, sh))
     segs = "".join(f'<span style="width:{s:.2f}%;background:{CAUSE_COLORS[c]}"></span>'
-                   for c, s in zip(CAUSES, shares))
+                   for c, s in zip(causes, sh))
     return f'<div class="cbar" title="{esc(title)}">{segs}</div>'
 
 
-def cause_legend() -> str:
+def cause_legend(causes: list[str] | None = None) -> str:
     return '<div class="legend">' + "".join(
         f'<span><i style="background:{CAUSE_COLORS[c]}"></i>{CAUSE_DISPLAY[c]}</span>'
-        for c in CAUSES) + "</div>"
+        for c in (causes or LEGACY_CAUSES)) + "</div>"
 
 
-def cause_key() -> str:
+def cause_key(causes: list[str] | None = None) -> str:
     return '<ul class="key">' + "".join(
-        f'<li><i style="background:{CAUSE_COLORS[c]}"></i><b>{esc(n)}:</b> {esc(t)}</li>'
-        for c, (n, t) in zip(CAUSES, CAUSE_KEY)) + "</ul>"
+        f'<li><i style="background:{CAUSE_COLORS[c]}"></i><b>{esc(CAUSE_KEY[c][0])}:</b> '
+        f'{esc(CAUSE_KEY[c][1])}</li>' for c in (causes or LEGACY_CAUSES)) + "</ul>"
 
 
 def placeholder(msg: str) -> str:
@@ -514,8 +647,9 @@ def _monthly(df: pd.DataFrame, day_col: str, val_col: str) -> pd.Series:
 # Hotspots
 # ---------------------------------------------------------------------------
 
-def hotspot_areas(p: Period, region: str) -> pd.DataFrame:
-    """One row per area that bound in the period, most binding hours first."""
+def hotspot_areas(p: Period, region: str, sort: str = "hours") -> pd.DataFrame:
+    """One row per area that bound in the period, ranked by binding hours or by
+    energy held back (ties fall back to the other measure)."""
     cols = _columns("area")
     mw = "a.units_mw" if "units_mw" in cols else "a.weighted_mw"
     reg_sql, params = "", [p.start, p.end]
@@ -523,31 +657,89 @@ def hotspot_areas(p: Period, region: str) -> pd.DataFrame:
     if ar:
         reg_sql, params = "WHERE a.region = ?", params + [ar]
     ic = "a.interconnectors" if "interconnectors" in cols else "NULL"
+    order = ("COALESCE(ad.mwh, 0) DESC, ad.n DESC" if sort == "energy" else
+             "ad.n DESC, COALESCE(ad.mwh, 0) DESC")
     df = q(f"""
         WITH ad AS (
-            SELECT area_id, SUM(n_intervals) AS n, SUM(n_sysnormal) AS sn,
-                   SUM(n_outage) AS ou, SUM(n_unit_specific) AS us,
+            SELECT area_id, SUM(n_intervals) AS n, {cause_sums_sql()},
                    SUM(constrained_mwh) AS mwh, SUM(constrained_value) AS val
               FROM area_daily WHERE day BETWEEN ? AND ?
              GROUP BY area_id HAVING SUM(n_intervals) > 0)
         SELECT ad.*, COALESCE(a.name, ad.area_id) AS name, a.region, a.limittype,
                a.n_units, {mw} AS units_mw, {ic} AS interconnectors
           FROM ad JOIN area a USING (area_id) {reg_sql}
-         ORDER BY ad.n DESC, ad.area_id""", params)
+         ORDER BY {order}, ad.area_id""", params)
     df["hours"] = df["n"] / 12
     df["pct_period"] = df["n"] / p.n_intervals * 100
     return df
 
 
-def _sum_cause(df: pd.DataFrame) -> tuple[float, float, float]:
-    return float(df["sn"].sum()), float(df["ou"].sum()), float(df["us"].sum())
+def load_ranks() -> dict | None:
+    """{window: DataFrame indexed by area_id} from area_rank, or None when the
+    table is absent."""
+    if "area_rank" not in _tables():
+        return None
+    try:
+        df = q('SELECT "window" AS win, area_id, gwh, hours, rank_energy, rank_hours '
+               "FROM area_rank")
+    except Exception:
+        return None
+    return {w: g.set_index("area_id") for w, g in df.groupby("win")}
+
+
+def rank_movement(rank, prev) -> str:
+    """Movement of a rank against the earlier window: ▲n up, ▼n down, – no
+    change, new when the area was not ranked before."""
+    if _isnan(rank):
+        return "–"
+    if _isnan(prev):
+        return "new"
+    d = int(prev) - int(rank)
+    return f"▲{d}" if d > 0 else f"▼{-d}" if d < 0 else "–"
+
+
+def _rank_of(ranks: dict, window: str, area_id: str, col: str):
+    df = ranks.get(window)
+    if df is None or area_id not in df.index:
+        return None
+    v = df.loc[area_id, col]
+    return None if _isnan(v) else int(v)
+
+
+def rising_areas(ranks: dict | None, top: int = 5) -> set[str]:
+    """Areas in the 90-day top five by energy that are not in the 12-month top five."""
+    if not ranks or "90d" not in ranks:
+        return set()
+    out = set()
+    for aid, r in ranks["90d"]["rank_energy"].items():
+        if _isnan(r) or int(r) > top:
+            continue
+        r12 = _rank_of(ranks, "12m", aid, "rank_energy")
+        if r12 is None or r12 > top:
+            out.add(aid)
+    return out
+
+
+def rank_cell(ranks: dict, area_id: str, sort: str) -> str:
+    col = "rank_energy" if sort == "energy" else "rank_hours"
+    r = _rank_of(ranks, "12m", area_id, col)
+    if r is None:
+        return "–"
+    mv = rank_movement(r, _rank_of(ranks, "12m_prev", area_id, col))
+    return f'{r} <span class="muted">{mv}</span>'
+
+
+RISING_TAG = '<span class="tag">rising</span>'
+
+
+def _sum_cause(df: pd.DataFrame, causes: list[str] | None = None) -> list[float]:
+    return [float(df[CAUSE_COL[c]].sum()) for c in (causes or LEGACY_CAUSES)]
 
 
 def _area_monthly(area_ids: list[str], p: Period, col: str = "n") -> pd.DataFrame:
     ph = ",".join("?" * len(area_ids))
     df = q(f"""SELECT date_trunc('month', day) AS month, area_id,
-                      SUM(n_intervals) AS n, SUM(n_sysnormal) AS sn,
-                      SUM(n_outage) AS ou, SUM(n_unit_specific) AS us
+                      SUM(n_intervals) AS n, {cause_sums_sql()}
                  FROM area_daily WHERE day BETWEEN ? AND ? AND area_id IN ({ph})
                 GROUP BY 1, 2""", [p.start, p.end] + area_ids)
     df["month"] = pd.to_datetime(df["month"])
@@ -564,20 +756,20 @@ def _region_text(region: str) -> str:
     return "NEM" if region == "NEM" else dict(REGIONS)[region]
 
 
-def hotspots_html(region: str, range_slug: str) -> str:
+def hotspots_html(region: str, range_slug: str, sort: str = "hours") -> str:
     try:
+        sort = normalise_sort(sort)
         p = get_period(range_slug)
-        df = hotspot_areas(p, region)
+        df = hotspot_areas(p, region, sort)
+        ranks = load_ranks()
+        rising = rising_areas(ranks)
         if df.empty:
             return placeholder(f"No constraint bound in {_region_text(region)} "
                                f"for the {p.label}.")
-        sn, ou, us = _sum_cause(df)
-        sh = cause_shares(sn, ou, us)
+        causes = area_causes()
         tiles = tiles_html([
             ("Areas that bound", fnum(len(df))),
-            (CAUSE_TILE["System normal"], fpct(sh[0])),
-            (CAUSE_TILE["Outage"], fpct(sh[1])),
-            (CAUSE_TILE["Unit-specific limit"], fpct(sh[2])),
+            *cause_tiles(_sum_cause(df, causes), causes),
             ("Curtailed while constrained", f"{fgwh(df['mwh'].sum() / 1000)} GWh"),
             ("Value of that curtailment", fmoney_m(df["val"].sum() / 1e6)),
         ])
@@ -590,19 +782,30 @@ def hotspots_html(region: str, range_slug: str) -> str:
                 units_cells = [Span(f'<span class="muted">{esc(ic)}</span>', 2)]
             else:
                 units_cells = [fnum(r["n_units"]), fnum(r["units_mw"])]
-            rows.append([
-                link(area_url(r["area_id"], p.slug), r["name"]),
+            name_cell = link(area_url(r["area_id"], p.slug), r["name"]) \
+                + (" " + RISING_TAG if r["area_id"] in rising else "")
+            rows.append(([rank_cell(ranks, r["area_id"], sort)] if ranks else []) + [
+                name_cell,
                 esc(r["region"] or "–"),
                 fhours(r["hours"]), fpct(r["pct_period"]),
-                cause_bar(r["sn"], r["ou"], r["us"]),
+                cause_bar(cause_values(r, causes), causes),
                 *units_cells,
                 esc(r["limittype"] or "–"),
                 fgwh(r["mwh"] / 1000), fnum(r["val"] / 1e6, 1)])
-        table = table_html(
-            [("Area", False, "wrap360"), ("Region", False), ("Hours", True),
-             ("% of period", True), ("Cause split", False),
-             ("Units in constraints", True), ("MW in constraints", True),
-             ("Limit type", False), ("GWh curtailed", True), ("$m", True)], rows)
+        heads = ([("12-month rank", True)] if ranks else []) + [
+            ("Area", False, "wrap360"), ("Region", False), ("Hours", True),
+            ("% of period", True), ("Cause split", False),
+            ("Units in constraints", True), ("MW in constraints", True),
+            ("Limit type", False), ("GWh curtailed", True), ("$m", True)]
+        table = table_html(heads, rows)
+        if ranks:
+            measure_txt = "energy held back" if sort == "energy" else "binding hours"
+            table += ('<div class="sub">12-month rank is the area’s position over the last '
+                      f'12 months by {measure_txt}, whatever period is selected. The mark beside it '
+                      'shows movement against the 12 months before: ▲ moved up, ▼ moved down, '
+                      '– no change, new = not ranked then. “rising” marks an area in the top five '
+                      'by energy held back over the last 90 days that is outside the 12-month top '
+                      'five.</div>')
         top = list(df.head(8)["area_id"])
         m = _area_monthly(top, p)
         names = dict(zip(df["area_id"], df["name"]))
@@ -618,8 +821,8 @@ def hotspots_html(region: str, range_slug: str) -> str:
         chart = stacked_monthly(p, series, colors, "binding hours per month", 380)
         return wrap(
             _period_sub(p, f"{_region_text(region)} network congestion")
-            + tiles + cause_key()
-            + '<h3>Top 25 congestion areas by binding hours</h3>' + cause_legend()
+            + tiles + cause_key(causes)
+            + f'<h3>Top 25 congestion areas by {"energy held back" if sort == "energy" else "binding hours"}</h3>' + cause_legend(causes)
             + table
             + '<h3>Monthly binding hours, top 8 areas of the period</h3>' + chart
             + note_html())
@@ -671,7 +874,8 @@ def outage_rows(df: pd.DataFrame, with_area: bool = False) -> list[list[str]]:
     return rows
 
 
-def area_html(area_id: str, range_slug: str) -> str:
+def area_html(area_id: str, range_slug: str, view: str = "overview",
+              constraint: str | None = None, show_all: bool = False) -> str:
     try:
         p = get_period(range_slug)
         cols = _columns("area")
@@ -689,13 +893,12 @@ def area_html(area_id: str, range_slug: str) -> str:
                      WHERE m.area_id = ? AND d.day BETWEEN ? AND ?
                      GROUP BY ALL ORDER BY n DESC, d.constraintid""",
                  [area_id, p.start, p.end])
-        ad = q("""SELECT SUM(n_intervals) AS n, SUM(n_sysnormal) AS sn, SUM(n_outage) AS ou,
-                         SUM(n_unit_specific) AS us, SUM(constrained_mwh) AS mwh,
+        causes = area_causes()
+        ad = q(f"""SELECT SUM(n_intervals) AS n, {cause_sums_sql()}, SUM(constrained_mwh) AS mwh,
                          SUM(constrained_value) AS val
                     FROM area_daily WHERE area_id = ? AND day BETWEEN ? AND ?""",
                [area_id, p.start, p.end]).iloc[0]
         n = 0.0 if _isnan(ad["n"]) else float(ad["n"])
-        sh = cause_shares(*[0.0 if _isnan(ad[k]) else float(ad[k]) for k in ("sn", "ou", "us")])
         desc = a["description"]
         if _isnan(desc) or not str(desc).strip():       # fall back to the top constraint
             known = cons[(cons["definition_rule"] != "none")
@@ -709,9 +912,7 @@ def area_html(area_id: str, range_slug: str) -> str:
         tiles = tiles_html([
             ("Binding hours", fhours(n / 12)),
             ("% of period", fpct(n / p.n_intervals * 100)),
-            (CAUSE_TILE["System normal"], fpct(sh[0])),
-            (CAUSE_TILE["Outage"], fpct(sh[1])),
-            (CAUSE_TILE["Unit-specific limit"], fpct(sh[2])),
+            *cause_tiles(cause_values(ad, causes), causes),
             ("Units in constraints", fnum(a["n_units"])),
             ("MW in constraints", fnum(a["units_mw"])),
             ("Curtailed while constrained",
@@ -720,8 +921,7 @@ def area_html(area_id: str, range_slug: str) -> str:
              fmoney_m(None if _isnan(ad["val"]) else ad["val"] / 1e6)),
         ])
         m = _area_monthly([area_id], p)
-        series = {c: (m.set_index("month")[k] / 12) for c, k in
-                  zip(CAUSES, ("sn", "ou", "us"))}
+        series = {c: (m.set_index("month")[CAUSE_COL[c]] / 12) for c in causes}
         chart = stacked_monthly(p, series, CAUSE_COLORS, "constraint-hours per month", 320)
         crows = [[esc(r["constraintid"]), fhours(r["n"] / 12), esc(cdisp(r["cause"])),
                   esc(r["limittype"] or "–"), describe(r["description"], r["definition_rule"])]
@@ -753,14 +953,271 @@ def area_html(area_id: str, range_slug: str) -> str:
                 + (f'<div class="sub">Most frequent constraint: {esc(desc)}</div>' if desc else
                    '<div class="sub">Most frequent constraint: description pending</div>')
                 + _period_sub(p))
-        return wrap(head + tiles
-                    + cause_key()
-                    + '<h3>Constraint-hours by cause, per month</h3>' + cause_legend() + chart
+        view = normalise_view(view)
+        switch = ('<div class="vswitch">' + "".join(
+            f'<a class="vsw{" active" if v == view else ""}" href="{esc(area_url(area_id, p.slug, v))}" '
+            f'hx-get="{esc(area_url(area_id, p.slug, v))}" hx-target="#tab-body" '
+            f'hx-push-url="true">{lab}</a>' for v, lab in
+            (("overview", "Overview"), ("equation", "Equation"))) + "</div>")
+        if view == "equation":
+            return wrap(head + switch
+                        + equation_html(area_id, p, constraint, show_all) + note_html())
+        return wrap(head + switch + tiles
+                    + cause_key(causes)
+                    + '<h3>Constraint-hours by cause, per month</h3>' + cause_legend(causes) + chart
                     + '<h3>Constraints that bound in the period</h3>' + ctable
                     + '<h3>Units behind it</h3>' + utable
                     + '<h3>Associated outages</h3>' + otable + note_html())
     except NoData as e:
         return placeholder(str(e))
+
+
+# ---------------------------------------------------------------------------
+# Equation view (area page)
+# ---------------------------------------------------------------------------
+
+EQUATION_NOT_BUILT = "The equation data has not been built yet."
+LHS_SHOWN = 12
+
+
+def equation_available() -> bool:
+    t = _tables()
+    return "constraint_equation" in t and "constraint_equation_meta" in t
+
+
+def constraint_picker(area_id: str, p: Period) -> pd.DataFrame:
+    """The area's constraints that bound in the period, most energy held back
+    first, then most hours."""
+    e = "SUM(d.constrained_mwh)" if "constrained_mwh" in _columns("constraint_daily") else "NULL"
+    df = q(f"""SELECT d.constraintid, SUM(d.n_intervals) AS n, {e} AS mwh
+                 FROM constraint_daily d JOIN constraint_meta m USING (constraintid)
+                WHERE m.area_id = ? AND d.day BETWEEN ? AND ?
+                GROUP BY d.constraintid
+                ORDER BY mwh DESC NULLS LAST, n DESC, d.constraintid""",
+           [area_id, p.start, p.end])
+    df["hours"] = df["n"] / 12
+    df["gwh"] = df["mwh"] / 1000
+    return df
+
+
+def _lead_constraint(area_id: str) -> str | None:
+    if "lead_constraintid" not in _columns("area"):
+        return None
+    r = q("SELECT lead_constraintid FROM area WHERE area_id = ?", [area_id])
+    if r.empty or _isnan(r.iloc[0]["lead_constraintid"]):
+        return None
+    return str(r.iloc[0]["lead_constraintid"])
+
+
+def _belongs(area_id: str, constraintid: str) -> bool:
+    return not q("SELECT 1 FROM constraint_meta WHERE constraintid = ? AND area_id = ?",
+                 [constraintid, area_id]).empty
+
+
+def equation_block(meta: dict) -> str:
+    """The two-column left <= right block, worded from the meta row."""
+    rel = {"<=": "≤", ">=": "≥"}.get(str(meta.get("constrainttype")), "=")
+    n_u = int(meta.get("n_lhs_units") or 0)
+    n_i = int(meta.get("n_lhs_interconnectors") or 0)
+    n_fb = int(meta.get("n_feedback") or 0)
+    scale = meta.get("scale")
+    scale = 1.0 if _isnan(scale) else float(scale)
+    left = f"weighted output of {n_u} generators and batteries"
+    if n_i:
+        left += f" + weighted flow on {n_i} interconnector{'s' if n_i != 1 else ''}"
+    right = (f"{fw(scale, 3)} × " if abs(scale - 1) > 1e-9 else "") \
+        + "( the limit − measured flows − margin )"
+    if n_fb:
+        right += f" + the same weighted sum at current output ({n_fb} terms)"
+    return (f'<div class="eq"><div><span class="lab">Left side</span>{esc(left)}</div>'
+            f'<div class="rel">{rel}</div>'
+            f'<div><span class="lab">Right side</span>{esc(right)}</div></div>')
+
+
+def lhs_rows(constraintid: str, p: Period) -> pd.DataFrame:
+    """Left-side terms: units by largest absolute weight, then interconnectors.
+    Adds absf and gwh (energy held back in the period across all limits)."""
+    df = q("""SELECT * FROM constraint_equation
+               WHERE constraintid = ? AND side = 'lhs' AND kind IN ('unit', 'interconnector')
+               ORDER BY ord""", [constraintid])
+    if df.empty:
+        return df.assign(absf=[], gwh=[])
+    ud = q("""SELECT duid, SUM(constrained_mwh) / 1000 AS gwh FROM unit_daily
+               WHERE day BETWEEN ? AND ? GROUP BY duid""", [p.start, p.end])
+    df["gwh"] = df["duid"].map(dict(zip(ud["duid"], ud["gwh"])))
+    df["absf"] = df["factor"].abs()
+    df["_ic"] = (df["kind"] == "interconnector").astype(int)
+    df = df.sort_values(["_ic", "absf", "ord"], ascending=[True, False, True],
+                        kind="stable").drop(columns="_ic")
+    return df.reset_index(drop=True)
+
+
+def _reading(r) -> str:
+    if "reading" in r.index and not _isnan(r["reading"]) and str(r["reading"]).strip():
+        return esc(r["reading"])
+    f = r["factor"]
+    if _isnan(f):
+        return "–"
+    return (f"Each extra MW adds {fw(f, 2)} to the left side" if f > 0
+            else f"Each extra MW takes {fw(-f, 2)} off the left side")
+
+
+def _ic_name(desc, spd_id) -> str:
+    """'MW flow west on the Murraylink DC Interconnector' -> 'Murraylink DC Interconnector, flow west'."""
+    import re as _re
+    if _isnan(desc) or not str(desc).strip():
+        return str(spd_id)
+    m = _re.match(r"\s*MW flow (\w+) on the (.+?)\s*$", str(desc))
+    return f"{m.group(2)}, flow {m.group(1)}" if m else str(desc)
+
+
+def _ic_reading(f) -> str:
+    if _isnan(f):
+        return "–"
+    return (f"Each MW in that direction adds {fw(f, 2)} to the left side" if f > 0
+            else f"Each MW in that direction takes {fw(-f, 2)} off the left side")
+
+
+def _hour_bars(constraintid: str) -> str:
+    h = q("SELECT hour, n_intervals FROM constraint_hour WHERE constraintid = ?",
+          [constraintid])
+    s = h.set_index("hour")["n_intervals"].reindex(range(24)).fillna(0)
+    mx = max(float(s.max()), 1.0)
+    bars = "".join(f'<span title="{i:02d}:00  {fnum(x / 12)} h" '
+                   f'style="height:{max(2, 46 * x / mx):.0f}px"></span>' for i, x in s.items())
+    return (f'<div class="hbars">{bars}</div><div class="haxis"><span>00</span><span>06</span>'
+            '<span>12</span><span>18</span><span>23</span></div>')
+
+
+def equation_html(area_id: str, p: Period, constraint: str | None, show_all: bool) -> str:
+    if not equation_available():
+        return f'<div class="placeholder">{EQUATION_NOT_BUILT}</div>'
+    pk = constraint_picker(area_id, p)
+    chosen = None
+    if constraint and _belongs(area_id, constraint):
+        chosen = constraint
+    if chosen is None:
+        lead = _lead_constraint(area_id)
+        chosen = lead if lead and _belongs(area_id, lead) else (
+            pk.iloc[0]["constraintid"] if len(pk) else None)
+    if chosen is None:
+        return '<div class="sub">No constraint of this area bound in the period.</div>'
+    picks = "".join(
+        f'<a class="{"on" if r["constraintid"] == chosen else ""}" '
+        f'href="{esc(area_url(area_id, p.slug, "equation", r["constraintid"]))}" '
+        f'hx-get="{esc(area_url(area_id, p.slug, "equation", r["constraintid"]))}" '
+        f'hx-target="#tab-body" hx-push-url="true">{esc(r["constraintid"])} · '
+        f'{"–" if _isnan(r["gwh"]) else fgwh(r["gwh"])} GWh · {fhours(r["hours"])} h</a>'
+        for _, r in pk.head(20).iterrows())
+    picker = '<h3>Constraint</h3><div class="cpick">' + picks + "</div>"
+    mcols = _columns("constraint_equation_meta")
+    order = " ORDER BY effectivedate DESC" if "effectivedate" in mcols else ""
+    meta = q(f"SELECT * FROM constraint_equation_meta WHERE constraintid = ?{order} LIMIT 1",
+             [chosen])
+    if meta.empty:
+        return picker + '<div class="sub">No equation is stored for this constraint.</div>'
+    meta = meta.iloc[0].to_dict()
+    cm = q("SELECT limittype, cause, description, definition_rule FROM constraint_meta "
+           "WHERE constraintid = ?", [chosen])
+    cm = cm.iloc[0] if len(cm) else None
+    hrs = pk.loc[pk["constraintid"] == chosen, "hours"]
+    lead = (f'<div class="lead"><span class="lab">Constraint</span> '
+            f'<span class="idm">{esc(chosen)}</span>'
+            + (f' · bound for {fhours(float(hrs.iloc[0]))} hours' if len(hrs) else "")
+            + (f' · {esc(cm["limittype"] or "–")} · {esc(cdisp(cm["cause"]))}' if cm is not None else "")
+            + ('<br><span class="muted">AEMO: “' + esc(re.sub(r"\s+", " ", str(cm["description"]))) + '”</span>'
+               if cm is not None and not _isnan(cm["description"])
+               and cm["definition_rule"] != "none" else "") + "</div>")
+    # plain English
+    note_html_ = ""
+    if "area_note" in _tables():
+        nt = q("SELECT * FROM area_note WHERE area_id = ? AND constraintid = ?",
+               [area_id, chosen])
+        if len(nt) and not _isnan(nt.iloc[0]["note"]) and str(nt.iloc[0]["note"]).strip():
+            n0 = nt.iloc[0]
+            stale = "is_stale" in nt.columns and bool(n0["is_stale"]) \
+                and not _isnan(n0["is_stale"])
+            banner = ""
+            if stale:
+                d = "" if _isnan(n0.get("written_effectivedate")) \
+                    else pd.Timestamp(n0["written_effectivedate"]).strftime("%Y-%m-%d")
+                banner = (f'<p class="stale">Written for the version effective {d}. AEMO has '
+                          "since changed this equation's structure; the paragraph is awaiting "
+                          "review.</p>")
+            note_html_ = (f'<h3>In plain English</h3>{banner}'
+                          f'<p class="note-eq">{esc(n0["note"])}</p>')
+    # equation and its sentence
+    med, p10, p90 = meta.get("rhs_med"), meta.get("rhs_p10"), meta.get("rhs_p90")
+    sent = "When the constraint binds, the two sides are equal."
+    if not _isnan(med):
+        sent += f" Over the year the right side sat at {fw(med, 0)} (middle value)"
+        if not _isnan(p10) and not _isnan(p90):
+            sent += f", between {fw(p10, 0)} and {fw(p90, 0)} for 80% of binding intervals"
+        sent += "."
+    if meta.get("has_operations") is not None and not _isnan(meta.get("has_operations")) \
+            and bool(meta["has_operations"]):
+        sent += (" The right side chooses between alternatives with a short sequence of "
+                 "operations; the rows marked as calculation steps show it.")
+    eq = (f'<h3>The equation</h3>{equation_block(meta)}<p class="sub">{esc(sent)}</p>')
+    # left side
+    rows = lhs_rows(chosen, p)
+    units = rows[rows["kind"] == "unit"]
+    ics = rows[rows["kind"] == "interconnector"]
+    n_pos, n_neg = int((units["factor"] > 0).sum()), int((units["factor"] < 0).sum())
+    shown = units if show_all else units.head(LHS_SHOWN)
+    more = len(units) - len(shown)
+    lhs_rows_html = []
+    for _, r in shown.iterrows():
+        gwh = r["gwh"]
+        lhs_rows_html.append([
+            esc(r["site"] if not _isnan(r["site"]) else r["duid"] if not _isnan(r["duid"]) else r["spd_id"]),
+            esc(fuel_label(r["fuel"])),
+            "–" if _isnan(r["capacity_mw"]) else fw(r["capacity_mw"], 0),
+            fw(r["factor"], 3), _reading(r),
+            "–" if _isnan(gwh) or gwh < 0.05 else fgwh(gwh)])
+    for _, r in ics.iterrows():
+        lhs_rows_html.append([
+            esc(_ic_name(r["aemo_description"], r["spd_id"])),
+            "interconnector", "", fw(r["factor"], 3), _ic_reading(r["factor"]), ""])
+    counts = (f"{n_pos} units add to the left side and {n_neg} reduce it. "
+              + (f"All {len(units)} are shown." if show_all or len(units) <= LHS_SHOWN else
+                 f"The {LHS_SHOWN} largest weights are shown, of {len(units)}.")
+              + " A weight near 1 means the unit’s output flows almost entirely through the "
+                "limited equipment.")
+    left = (f'<h3>Left side: what AEMO can change</h3><p class="sub">{esc(counts)}</p>'
+            + table_html([("Unit", False), ("Fuel", False), ("MW", True), ("Weight", True),
+                          ("Reading", False), ("GWh held back, all limits", True)], lhs_rows_html,
+                         "No left-side terms are stored."))
+    if more > 0:
+        left += (f'<div class="sub">{more} more unit{"s" if more != 1 else ""} not shown. '
+                 + link(area_url(area_id, p.slug, "equation", chosen, True), "Show all")
+                 + "</div>")
+    # right side
+    rcols = _columns("constraint_equation")
+    fb_clause = " AND NOT COALESCE(is_feedback, false)" if "is_feedback" in rcols else ""
+    rhs = q(f"SELECT * FROM constraint_equation WHERE constraintid = ? AND side = 'rhs'"
+            f"{fb_clause} ORDER BY ord", [chosen])
+    rrows = [[f'<span class="mono">{esc(r["spd_id"])}</span>' if False else esc(r["spd_id"]),
+              fw(r["factor"], 3), _reading(r)] for _, r in rhs.iterrows()]
+    rtable = table_html([("AEMO’s term", False, "mono"), ("Weight", True),
+                         ("What it is", False)], rrows, "No right-side terms are stored.")
+    n_fb = int(meta.get("n_feedback") or 0)
+    right = ("<h3>Right side: the limit</h3>" + rtable
+             + (f'<p class="sub">The right side also repeats {n_fb} of the left-side terms with '
+                "the same weights, measured at their current output. This is what AEMO calls a "
+                "feedback constraint: the limit each five minutes is what the units are producing "
+                "now plus the room left on the equipment.</p>" if n_fb else ""))
+    hours = "<h3>When it binds, by hour of day</h3>" + _hour_bars(chosen)
+    ed = meta.get("effectivedate")
+    ed_txt = "" if _isnan(ed) else pd.Timestamp(ed).strftime("%Y-%m-%d")
+    vn = meta.get("versionno")
+    rule = ("the exact version" if meta.get("version_rule") == "exact" else
+            "an earlier version; AEMO's archive does not yet hold the current one")
+    foot = (f'<p class="sub">Constraint version effective {ed_txt}'
+            + ("" if _isnan(vn) else f" (version {int(vn)})")
+            + f". This is {rule}. Right-side terms from AEMO's GENERICCONSTRAINTRHS table, "
+              "dispatch scope; descriptions from AEMO's EMSMASTER table.</p>")
+    return picker + lead + note_html_ + eq + left + right + hours + foot
 
 
 # ---------------------------------------------------------------------------
@@ -778,10 +1235,11 @@ def cause_totals(p: Period, region: str) -> dict:
                  FROM cause_daily WHERE day BETWEEN ? AND ? {reg_sql}
                 GROUP BY ALL""", params)
     df["month"] = pd.to_datetime(df["month"])
-    by_cause = {c: int(df.loc[df["cause"] == c, "n"].sum()) for c in CAUSES}
+    causes = FIVE_CAUSES if NEW_CAUSE_VALUES & set(df["cause"]) else LEGACY_CAUSES
+    by_cause = {c: int(df.loc[df["cause"] == c, "n"].sum()) for c in causes}
     by_lt = df.groupby("limittype")["n"].sum().sort_values(ascending=False)
     by_rc = df.groupby(["region", "cause"])["n"].sum()
-    return {"by_cause": by_cause, "by_limittype": by_lt, "by_region_cause": by_rc,
+    return {"causes": causes, "by_cause": by_cause, "by_limittype": by_lt, "by_region_cause": by_rc,
             "monthly": df}
 
 
@@ -820,13 +1278,14 @@ def causes_html(region: str, range_slug: str) -> str:
                                f"for the {p.label}.")
         lt = t["by_limittype"]
         c1 = hbar(list(lt.index), list((lt / 12).round(1)), "#205EA6", 300)
-        c2 = hbar([CAUSE_DISPLAY[c] for c in CAUSES], [t["by_cause"][c] / 12 for c in CAUSES],
-                  [CAUSE_COLORS[c] for c in CAUSES], 300)
+        causes = t["causes"]
+        c2 = hbar([CAUSE_DISPLAY[c] for c in causes], [t["by_cause"][c] / 12 for c in causes],
+                  [CAUSE_COLORS[c] for c in causes], 300)
         rc = t["by_region_cause"]
         regs = [r for r in ("NSW", "QLD", "VIC", "SA", "TAS", "Other")
                 if r in rc.index.get_level_values(0)]
         fig = go.Figure()
-        for c in CAUSES:
+        for c in causes:
             fig.add_trace(go.Bar(
                 y=regs, x=[rc.get((r, c), 0) / 12 for r in regs], name=CAUSE_DISPLAY[c],
                 orientation="h", marker_color=CAUSE_COLORS[c],
@@ -838,7 +1297,7 @@ def causes_html(region: str, range_slug: str) -> str:
                                     font=dict(size=11, color=MUTED)), tickformat=",.0f")
         c3 = plot_html(fig, 300)
         mo = t["monthly"]
-        series = {c: _monthly(mo[mo["cause"] == c], "month", "n") / 12 for c in CAUSES}
+        series = {c: _monthly(mo[mo["cause"] == c], "month", "n") / 12 for c in causes}
         monthly = stacked_monthly(p, series, CAUSE_COLORS, "constraint-hours per month", 320)
         out = top_outages(p, region)
         if not out.empty:
@@ -852,7 +1311,7 @@ def causes_html(region: str, range_slug: str) -> str:
             "No outage with binding constraints overlapped this period.")
         return wrap(
             _period_sub(p, f"{_region_text(region)} constraint causes")
-            + cause_key() + cause_legend()
+            + cause_key(causes) + cause_legend(causes)
             + '<div class="row3">'
               '<div><h3>By limit type</h3>' + c1 + '</div>'
               '<div><h3>By cause</h3>' + c2 + '</div>'
@@ -913,7 +1372,20 @@ def unit_totals(p: Period) -> pd.DataFrame:
     return out
 
 
-def unit_league(p: Period, region: str, fuel: str, limit: int = 40) -> pd.DataFrame:
+UNIT_SORT_HEADING = {"pct": "share of intervals limited",
+                    "gwh": "GWh curtailed while constrained",
+                    "value": "value of curtailment"}
+UNIT_SORTS = [("pct", "% of intervals held back"), ("gwh", "GWh curtailed while constrained"),
+              ("value", "Value, $m")]
+_UNIT_SORT_COL = {"pct": "pct_dis", "gwh": "gwh_con", "value": "value_m"}
+
+
+def normalise_unit_sort(sort: str) -> str:
+    return sort if sort in dict(UNIT_SORTS) else "pct"
+
+
+def unit_league(p: Period, region: str, fuel: str, limit: int = 40,
+                sort: str = "pct") -> pd.DataFrame:
     tot = unit_totals(p)
     m = load_mapping()
     df = tot.merge(m, on="duid", how="left")
@@ -924,7 +1396,9 @@ def unit_league(p: Period, region: str, fuel: str, limit: int = 40) -> pd.DataFr
         df = df[df["fuel_group"] == fuel]
     df = df[~(df["capacity_mw"] < MIN_UNIT_MW)]            # unknown capacity stays
     df = df[df["dis"].fillna(0) + df["chg"].fillna(0) > 0]
-    df = df.sort_values(["pct_dis", "duid"], ascending=[False, True]).head(limit)
+    col = _UNIT_SORT_COL[normalise_unit_sort(sort)]
+    df = df.sort_values([col, "pct_dis", "duid"], ascending=[False, False, True],
+                        na_position="last").head(limit)
     return df.reset_index(drop=True)
 
 
@@ -946,21 +1420,25 @@ def top_area_names(duids: list[str], p: Period) -> dict[str, str]:
     return {row["duid"]: (row["area_id"], row["name"]) for _, row in df.iterrows()}
 
 
-def units_html(region: str, fuel: str, range_slug: str) -> str:
+def units_html(region: str, fuel: str, range_slug: str, sort: str = "pct") -> str:
     try:
+        sort = normalise_unit_sort(sort)
         p = get_period(range_slug)
-        df = unit_league(p, region, fuel)
+        df = unit_league(p, region, fuel, sort=sort)
         if df.empty:
             return placeholder("No unit of this kind was limited by a network constraint "
                                f"in {_region_text(region)} for the {p.label}.")
         battery = fuel == "battery"
         areas = top_area_names(list(df["duid"]), p)
+        mark = lambda key, label: label + (" ▼" if sort == key else "")
         heads = [("Unit", False), ("Region", False), ("Fuel", False), ("MW", True),
-                 ("% intervals discharge-limited" if battery else "% intervals limited", True)]
+                 (mark("pct", "% intervals discharge-limited" if battery
+                       else "% intervals limited"), True)]
         if battery:
             heads.append(("% intervals charge-limited", True))
-        heads += [("GWh curtailed while constrained", True), ("GWh other curtailment", True),
-                  ("$m", True), ("Median local price adj. $/MWh", True),
+        heads += [(mark("gwh", "GWh curtailed while constrained"), True),
+                  ("GWh other curtailment", True),
+                  (mark("value", "$m"), True), ("Median local price adj. $/MWh", True),
                   ("Most frequent constraint area", False)]
         rows = []
         for _, r in df.iterrows():
@@ -979,7 +1457,7 @@ def units_html(region: str, fuel: str, range_slug: str) -> str:
         table = table_html(heads, rows)
         return wrap(
             _period_sub(p, f"{_region_text(region)} {dict(FUELS)[fuel].lower()} units")
-            + '<h3>Top 40 units by share of intervals limited</h3>' + table
+            + f'<h3>Top 40 units by {UNIT_SORT_HEADING[sort]}</h3>' + table
             + f'<div class="sub">Units under {MIN_UNIT_MW:.0f} MW are left out. Curtailment '
               'columns cover the period from 28 Feb 2025, when curtailment data begins. '
               'The local price adjustment is AEMO’s published figure; only negative '
@@ -1436,8 +1914,11 @@ def unit_frame(geo: dict, values: dict[str, float]) -> tuple[pd.DataFrame, int]:
     return df.reset_index(drop=True), int(len(missing))
 
 
-def map_url(region: str, range_slug: str, measure: str, area: str | None = None) -> str:
+def map_url(region: str, range_slug: str, measure: str, area: str | None = None,
+            sort: str | None = None) -> str:
     u = f"/network/map?region={region}&range={range_slug}&measure={measure}"
+    if sort:
+        u += f"&sort={sort}"
     return u + (f"&area={quote(area, safe='')}" if area else "")
 
 
@@ -1491,12 +1972,14 @@ def _now_state() -> dict:
     return {"ts": ts, "areas": areas, "adj": adj}
 
 
-def build_map(region: str, range_slug: str, measure: str, area_id: str | None) -> dict:
+def build_map(region: str, range_slug: str, measure: str, area_id: str | None,
+              sort: str = "energy") -> dict:
     """Everything the map page shows, as a dict (the figure plus the side list,
     selection and counts). Raises NoData for a missing geo file or period."""
     geo = load_geo()
     if geo is None:
         raise NoData("The map reference file is not available.")
+    sort = normalise_sort(sort, "energy")
     now_mode = range_slug == "now"
     p = get_period(DEFAULT_RANGE if now_mode else range_slug)
     ar = area_region(region)
@@ -1515,7 +1998,7 @@ def build_map(region: str, range_slug: str, measure: str, area_id: str | None) -
             ["n", "area_id"], ascending=[False, True]).reset_index(drop=True)
         df["hours"] = np.nan
     else:
-        df = hotspot_areas(p, region)
+        df = hotspot_areas(p, region, sort)
     names = dict(zip(df["area_id"], df["name"]))
 
     # -- 1. reference network (off until the reader turns it on)
@@ -1560,9 +2043,10 @@ def build_map(region: str, range_slug: str, measure: str, area_id: str | None) -
                                    f"{names[aid]} · binding now", aid)
     else:
         top = top_line_areas(df, geo)
-        cols = ramp_colors(list(top["hours"]))
+        cols = ramp_colors(list(top["mwh"].fillna(0) if sort == "energy" else top["hours"]))
         for (_, r), col in zip(top.iterrows(), cols):
-            hover = f"{r['name']} · {r['hours']:,.0f} h · {fpct(r['pct_period'])}"
+            hover = (f"{r['name']} · {r['hours']:,.0f} h · {fpct(r['pct_period'])}"
+                     + ("" if _isnan(r["mwh"]) else f" · {fgwh(r['mwh'] / 1000)} GWh"))
             _add_area_features(fig, _drawable(geo, r["area_id"]), col, 5,
                                str(r["name"]), hover, r["area_id"])
 
@@ -1663,16 +2147,19 @@ def build_map(region: str, range_slug: str, measure: str, area_id: str | None) -
     side = []
     for _, r in df.head(MAP_SIDE_LIST).iterrows():
         side.append({"area_id": r["area_id"], "name": r["name"],
+                     "gwh": None if "mwh" not in df.columns or _isnan(r["mwh"]) else float(r["mwh"]) / 1000,
                      "hours": None if pd.isna(r["hours"]) else float(r["hours"]),
                      "tag": area_tag(geo, r["area_id"])})
-    return {"fig": fig, "side": side, "selected": sel, "n_missing": n_missing,
+    return {"fig": fig, "side": side, "selected": sel, "sort": sort,
+            "rising": rising_areas(load_ranks()), "n_missing": n_missing,
             "center": (lon, lat), "zoom": zoom, "period": p, "geo": geo,
             "now_ts": now["ts"] if now else None, "range": range_slug}
 
 
-def map_html(region: str, range_slug: str, measure: str, area_id: str | None) -> str:
+def map_html(region: str, range_slug: str, measure: str, area_id: str | None,
+             sort: str = "energy") -> str:
     try:
-        m = build_map(region, range_slug, measure, area_id or None)
+        m = build_map(region, range_slug, measure, area_id or None, sort)
     except NoData as e:
         return placeholder(str(e))
     except Exception:
@@ -1704,15 +2191,23 @@ def map_html(region: str, range_slug: str, measure: str, area_id: str | None) ->
             else f'{fhours(sel["hours"])} hours in the period'
         sel_html = (f'<div class="selbar"><b>{esc(sel["name"])}</b> · {hrs} · '
                     f'{esc(sel["status"])} · '
-                    + link(map_url(region, range_slug, measure), "Clear selection") + ' · '
+                    + link(map_url(region, range_slug, measure, None, m["sort"]), "Clear selection") + ' · '
                     + link(area_url(sel["area_id"], link_range), "Area page") + '</div>')
     items = []
     for r in m["side"]:
-        h = "now" if r["hours"] is None else f'{fhours(r["hours"])} h'
-        items.append(f'<li>{link(map_url(region, range_slug, measure, r["area_id"]), r["name"])}'
-                     f'<span class="side-meta"><span class="tag">{esc(r["tag"])}</span> {h}</span></li>')
-    side = (f'<div class="side"><h3>Areas with the most '
-            f'{"constraints binding now" if now_mode else "binding hours"}</h3>'
+        if r["hours"] is None:
+            h = "binding now"
+        else:
+            h = (f'{fgwh(r["gwh"])} GWh · ' if r["gwh"] is not None else "") + f'{fhours(r["hours"])} h'
+        rise = (" " + RISING_TAG) if r["area_id"] in m["rising"] else ""
+        eq = link(area_url(r["area_id"], link_range, "equation"), "equation")
+        items.append(
+            f'<li>{link(map_url(region, range_slug, measure, r["area_id"], m["sort"]), r["name"])}'
+            f'{rise}<span class="side-meta"><span class="tag">{esc(r["tag"])}</span> {h}'
+            f' · {eq}</span></li>')
+    heading = ("constraints binding now" if now_mode else
+               "energy held back" if m["sort"] == "energy" else "binding hours")
+    side = (f'<div class="side"><h3>Top areas by {heading}</h3>'
             f'<ul>{"".join(items) or "<li>None in this selection.</li>"}</ul></div>')
     note = (f'<div class="note">{esc(MAP_SENTENCE)} {fnum(m["n_missing"])} units of 5 MW '
             f'and over are not drawn for lack of coordinates. {esc(geo.get("attribution", ""))}'
