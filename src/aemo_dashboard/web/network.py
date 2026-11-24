@@ -1281,7 +1281,7 @@ _geo_cache: dict = {}
 MAP_RANGES = RANGES + [("now", "Now")]
 MEASURES = [("pct", "% of intervals held back"),
             ("gwh", "GWh curtailed while constrained")]
-MAP_BASE_VIEWS = {"NEM": (146.0, -27.5, 3.5), "NSW1": (147.5, -32.8, 5.0),
+MAP_BASE_VIEWS = {"NEM": (146.0, -30.5, 4.0), "NSW1": (147.5, -32.8, 5.0),
                   "QLD1": (146.0, -22.5, 4.2), "VIC1": (144.8, -37.0, 6.0),
                   "SA1": (135.0, -32.5, 4.5), "TAS1": (146.6, -42.0, 6.3)}
 MAP_RAMP = ["#ECCB60", "#DA702C", "#AF3029", "#6C201C"]
