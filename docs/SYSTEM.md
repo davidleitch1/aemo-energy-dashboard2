@@ -43,7 +43,7 @@ Windows 6 (status text) and 8 (karen gallery) are not NEM services.
 
 ## Data flow
 
-AEMO NEMweb → collector (every 4.5 min) → `~/aemo_production/data/aemo_test.duckdb` → at the end of each cycle the collector copies the whole file to `aemo_readonly.duckdb` (copy + atomic rename) → every app reads the readonly copy.
+AEMO NEMweb → collector (every 4.5 min) → `~/aemo_production/data/aemo_test.duckdb` → at the end of each cycle the collector refreshes `aemo_readonly.duckdb` by APFS clone + atomic rename (`aemo_updater/replica.py`, since 25 Nov 2026; falls back to a byte copy and logs `(copy)` if cloning fails). A clone shares disk blocks with the primary, so a replica costs almost no space and Time Machine's hourly local snapshots pin only the ~10 MB a cycle changes, where full copies pinned about 190 GB → every app reads the readonly copy.
 
 - **Never write to `aemo_readonly.duckdb`.** The next cycle overwrites it. Edits (including `duid_mapping` and view definitions, which live in the DB) go into `aemo_test.duckdb`, between cycles: the collector holds an exclusive lock during a cycle, so writers retry `duckdb.connect` on `IOException`.
 - No app may open `aemo_test.duckdb`; it contends with the collector's lock.
